@@ -45,9 +45,9 @@ export function ServerEditor({ onDone }: { onDone?: () => void }) {
   return (
     <div class="server-edit">
       <input placeholder="Server URL (https://wx.example.com)" value={url} onInput={(e) => setUrl((e.target as HTMLInputElement).value)} />
-      <input placeholder="Token (from start.sh)" value={token} onInput={(e) => setToken((e.target as HTMLInputElement).value)} />
+      <input placeholder="Token (from start.sh · not needed on this computer)" value={token} onInput={(e) => setToken((e.target as HTMLInputElement).value)} />
       <input placeholder="Name (optional)" value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
-      <button class="btn" disabled={!url || !token || busy} onClick={add}>
+      <button class="btn" disabled={!url || busy} onClick={add}>
         <Plus size={14} /> {busy ? "Testing…" : "Add server"}
       </button>
       {msg && <div class={msg.ok ? "ok-text" : "err-text"}>{msg.text}</div>}
@@ -154,7 +154,20 @@ export function SettingsPanel() {
             <option value="km/h">km/h</option>
           </select>
         </div>
+        <div class="row">
+          <span>Temp</span>
+          <select value={s.units.temp} onChange={(e) => update((x) => (x.units.temp = (e.target as HTMLSelectElement).value as any))}>
+            <option value="F">°F</option>
+            <option value="C">°C</option>
+          </select>
+          <span>Precip</span>
+          <select value={s.units.precip} onChange={(e) => update((x) => (x.units.precip = (e.target as HTMLSelectElement).value as any))}>
+            <option value="in">in</option>
+            <option value="mm">mm</option>
+          </select>
+        </div>
         <Toggle label="Show times in UTC" on={s.utc} set={(v) => update((x) => (x.utc = v))} />
+        <Toggle label="FPS counter" on={s.showFps} set={(v) => update((x) => (x.showFps = v))} />
         <Toggle label="Colorblind-friendly tables" on={s.colorblind} set={(v) => update((x) => (x.colorblind = v))} />
       </section>
       <section>

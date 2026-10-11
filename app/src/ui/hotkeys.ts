@@ -1,6 +1,7 @@
 import { useEffect } from "preact/hooks";
 import { tool, crosshair, update, openPanel, selectedAlert } from "../store";
-import { togglePlay, frames, frameIndex, playing, tilts } from "../radar/controller";
+import { tilts, l3Products } from "../radar/controller";
+import { togglePlay, stepFrame } from "../anim";
 import { locate, screenshot } from "./Toolbar";
 import { settings } from "../store";
 
@@ -12,24 +13,33 @@ export function useHotkeys() {
       const t = e.target as HTMLElement;
       if (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA") return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const n = frames.value.length;
       switch (e.key) {
         case " ":
           e.preventDefault();
           togglePlay();
           break;
         case "ArrowLeft":
-          playing.value = false;
-          if (n) frameIndex.value = (frameIndex.value - 1 + n) % n;
+          e.preventDefault();
+          stepFrame(-1);
           break;
         case "ArrowRight":
-          playing.value = false;
-          if (n) frameIndex.value = (frameIndex.value + 1) % n;
+          e.preventDefault();
+          stepFrame(1);
           break;
         case "ArrowUp":
         case "ArrowDown": {
           e.preventDefault();
+          if (settings.value.weather.kind !== "radar") break;
           const r = settings.value.radar;
+          if (r.source === "L3") {
+            // same product family, next/previous tilt
+            const cur = l3Products.value.find((p) => p.id === r.product);
+            if (!cur) break;
+            const fam = l3Products.value.filter((p) => p.code === cur.code && !!p.tdwr === !!cur.tdwr).sort((a, b) => a.tilt - b.tilt);
+            const i = fam.indexOf(cur) + (e.key === "ArrowUp" ? 1 : -1);
+            if (i >= 0 && i < fam.length) update((s) => (s.radar.product = fam[i].id));
+            break;
+          }
           const angles = [...new Set(tilts.value.filter((x) => x.moments.includes(r.product)).map((x) => x.angle))].sort((a, b) => a - b);
           if (!angles.length) break;
           let i = angles.reduce((bi, a, k) => (Math.abs(a - r.tiltAngle) < Math.abs(angles[bi] - r.tiltAngle) ? k : bi), 0);
@@ -61,7 +71,7 @@ export function useHotkeys() {
           openPanel.value = null;
           break;
         default:
-          if (/^[1-6]$/.test(e.key) && settings.value.radar.source === "L2") update((s) => (s.radar.product = PRODUCTS[+e.key - 1]));
+          if (/^[1-6]$/.test(e.key) && settings.value.radar.source === "L2" && settings.value.weather.kind === "radar") update((s) => (s.radar.product = PRODUCTS[+e.key - 1]));
       }
     };
     window.addEventListener("keydown", onKey);

@@ -140,8 +140,10 @@ Synoptic, AirNow, aisstream.io, mPING, Spotter Network, EUMETSAT, KMA, Trafikver
 
 Each phase ends with a working AppImage + server and a test checklist.
 
-## Next step
-Put this plan in the repo as `PLAN.md`, then start **Phase 1**.
+## Status
+- Phase 1: done, user-tested; fixes from testing shipped with Phase 2.
+- Phase 2: done (this build). Test with `docs/PHASE2_CHECKLIST.md`.
+- Next: Phase 3 (overlays).
 
 ---
 

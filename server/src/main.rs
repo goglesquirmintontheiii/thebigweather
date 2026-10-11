@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 mod alerts;
+mod grid;
 mod api;
 mod config;
 mod health;
@@ -31,6 +32,12 @@ struct Cli {
     /// Load alerts from a GeoJSON file instead of only polling NWS (testing)
     #[arg(long)]
     alerts_fixture: Option<PathBuf>,
+    /// Seed METAR observations from a local metars.cache.csv (testing)
+    #[arg(long)]
+    metar_fixture: Option<PathBuf>,
+    /// Folder of local gridded files used as frames ("<layer id with / as _>__<name>")
+    #[arg(long)]
+    grid_dir: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -109,11 +116,19 @@ async fn main() -> anyhow::Result<()> {
     };
     tracing::info!("raw cache cap: {} GB", disk_cap / (1 << 30));
 
+    let grids = grid::service::GridService::new(http.clone(), health.clone(), &data_dir, profile.memory_mb / 2, profile.threads, profile.name == "full");
+    *grids.local_dir.write() = cli.grid_dir.clone();
+    if let Some(f) = &cli.metar_fixture {
+        grids.load_metar_fixture(&std::fs::read(f)?)?;
+    } else {
+        grids.spawn_metar(cfg.server.metar_url.clone());
+    }
+
     let radar = Arc::new(radar::service::RadarService::new(
         http.clone(),
         &cfg.radar,
         &data_dir,
-        profile.memory_mb,
+        profile.memory_mb / 2,
         profile.threads,
         disk_cap,
         health.clone(),
@@ -175,6 +190,7 @@ async fn main() -> anyhow::Result<()> {
         sites: parking_lot::RwLock::new(site_list),
         stats: stats_latest,
         started: std::time::Instant::now(),
+        grids,
     });
 
     {
@@ -202,7 +218,9 @@ async fn main() -> anyhow::Result<()> {
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("listening on http://{bind}");
-    axum::serve(listener, app).with_graceful_shutdown(shutdown()).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
+        .with_graceful_shutdown(shutdown())
+        .await?;
     Ok(())
 }
 

@@ -24,8 +24,10 @@ export interface ColorTable {
 }
 
 const hex = (h: string, a = 255): [number, number, number, number] => {
-  const n = parseInt(h.replace("#", ""), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255, a];
+  const x = h.replace("#", "");
+  const n = parseInt(x.slice(0, 6), 16);
+  const alpha = x.length === 8 ? parseInt(x.slice(6, 8), 16) : a;
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255, alpha];
 };
 const S = (v: number, h: string, a = 255): Stop => ({ v, c: hex(h, a) });
 
@@ -200,6 +202,57 @@ export const BUILTIN: Record<string, ColorTable> = {
 };
 BUILTIN.SRV.stops = BUILTIN.VEL.stops;
 BUILTIN.SRV.rf = BUILTIN.VEL.rf;
+
+// ---------- gridded products (Phase 2) ----------
+const T = (id: string, name: string, units: string, min: number, max: number, stops: Stop[], extra: Partial<ColorTable> = {}): ColorTable => ({ id, name, units, min, max, stops, ...extra });
+const cat = (id: string, name: string, entries: [number, string, string][]): ColorTable => ({
+  id,
+  name,
+  units: "class",
+  min: Math.min(...entries.map((e) => e[0])) - 0.5,
+  max: Math.max(...entries.map((e) => e[0])) + 0.5,
+  stops: entries.map(([v, c]) => ({ v: v - 0.5, c: hex(c), solid: true })).concat([{ v: Math.max(...entries.map((e) => e[0])) + 0.5, c: hex("#000000", 0), solid: true }]),
+  labels: Object.fromEntries(entries.map(([v, , l]) => [v, l])),
+});
+
+Object.assign(BUILTIN, {
+  TEMP: T("TEMP", "Temperature", "°C", -45, 50, [S(-45, "#e8e8ff"), S(-35, "#c9a7f2"), S(-28, "#8b4fd6"), S(-20, "#3b2aa8"), S(-12, "#1f5fd6"), S(-6, "#3fa0f0"), S(0, "#8fd9f5"), S(0.01, "#5fd18a"), S(5, "#2ea84a"), S(10, "#9ccf2b"), S(15, "#f2e30c"), S(20, "#f2a105"), S(25, "#e8650a"), S(30, "#d6150f"), S(35, "#9e0b2a"), S(40, "#ff4fd8"), S(45, "#ffffff"), S(50, "#d0d0d0")]),
+  DEW: T("DEW", "Dewpoint", "°C", -30, 30, [S(-30, "#6b4423"), S(-15, "#a6713d"), S(-5, "#c9a26b"), S(0, "#d9cfa0"), S(5, "#9fd18a"), S(10, "#3fae4f"), S(15, "#1f7a3a"), S(18, "#1f9fbf"), S(21, "#2b5fd6"), S(24, "#7b3fd6"), S(27, "#c03fd6"), S(30, "#ff9df5")]),
+  SPREAD: T("SPREAD", "T/Td Spread", "°C", 0, 25, [S(0, "#1f9f3a"), S(2, "#7fd15a"), S(5, "#f2e30c"), S(10, "#f2a105"), S(15, "#d6150f"), S(25, "#6b0b2a")]),
+  RH: T("RH", "Relative Humidity", "%", 0, 100, [S(0, "#7a4a1f"), S(15, "#b5763d"), S(30, "#d9b26b"), S(45, "#e6dfa8"), S(60, "#9fd18a"), S(75, "#3fae4f"), S(90, "#1f7a8a"), S(100, "#2b5fd6")]),
+  WIND: T("WIND", "Wind Speed", "m/s", 0, 50, [S(0, "#2b3a4a", 120), S(3, "#3f6f9f"), S(6, "#3fa0c0"), S(9, "#3fbf8a"), S(12, "#9ccf2b"), S(15, "#f2e30c"), S(20, "#f2a105"), S(25, "#e8650a"), S(30, "#d6150f"), S(38, "#b02be3"), S(50, "#ffffff")]),
+  JET: T("JET", "Jet Stream Wind", "m/s", 0, 90, [S(0, "#1a1f2a", 0), S(20, "#2b4a6a", 120), S(30, "#3f8fbf"), S(40, "#3fbf8a"), S(50, "#f2e30c"), S(60, "#f2a105"), S(70, "#d6150f"), S(80, "#b02be3"), S(90, "#ffffff")]),
+  MSLP: T("MSLP", "Pressure", "hPa", 960, 1050, [S(960, "#6b0b6b"), S(980, "#b02be3"), S(990, "#2b5fd6"), S(1000, "#3fa0f0"), S(1008, "#8fd9f5"), S(1013, "#e6e6e6"), S(1020, "#f2e30c"), S(1030, "#f2a105"), S(1040, "#d6150f"), S(1050, "#6b0b2a")]),
+  HGT500: T("HGT500", "500 mb Height", "m", 5000, 6000, [S(5000, "#6b0b6b"), S(5300, "#2b5fd6"), S(5500, "#3fa0f0"), S(5640, "#9fd18a"), S(5760, "#f2e30c"), S(5880, "#f2a105"), S(6000, "#d6150f")]),
+  CAPE: T("CAPE", "CAPE", "J/kg", 0, 6000, [S(0, "#000000", 0), S(100, "#3b4d5c", 90), S(250, "#2f6fa8"), S(500, "#2fb6d9"), S(1000, "#16c45a"), S(1500, "#9ccf2b"), S(2000, "#f2e30c"), S(2500, "#f2a105"), S(3000, "#e8650a"), S(4000, "#d6150f"), S(5000, "#ff2ab4"), S(6000, "#ffffff")]),
+  SRH: T("SRH", "Storm-Relative Helicity", "m²/s²", 0, 600, [S(0, "#000000", 0), S(50, "#3b4d5c", 100), S(100, "#2f6fa8"), S(150, "#2fb6d9"), S(200, "#16c45a"), S(250, "#f2e30c"), S(300, "#f2a105"), S(400, "#d6150f"), S(500, "#ff2ab4"), S(600, "#ffffff")]),
+  UH: T("UH", "Updraft Helicity", "m²/s²", 0, 200, [S(0, "#000000", 0), S(10, "#2f6fa8", 140), S(25, "#16c45a"), S(50, "#f2e30c"), S(75, "#f2a105"), S(100, "#d6150f"), S(150, "#ff2ab4"), S(200, "#ffffff")]),
+  PWAT: T("PWAT", "Precipitable Water", "mm", 0, 75, [S(0, "#7a4a1f"), S(10, "#c9a26b"), S(20, "#e6dfa8"), S(30, "#9fd18a"), S(40, "#3fae4f"), S(50, "#1f9fbf"), S(60, "#2b5fd6"), S(75, "#b02be3")]),
+  PRECIPMM: T("PRECIPMM", "Precipitation", "mm", 0, 250, [S(0, "#000000", 0), S(0.25, "#bfe8ff", 140), S(2.5, "#5ac8fa"), S(6, "#1f7ae0"), S(12, "#16c45a"), S(25, "#0a7a2a"), S(38, "#f2e30c"), S(50, "#f07a05"), S(75, "#e41b14"), S(100, "#b50d0d"), S(150, "#ff2ab4"), S(200, "#b02be3"), S(250, "#ffffff")]),
+  PRATE: T("PRATE", "Precip Rate", "mm/h", 0, 100, [S(0, "#000000", 0), S(0.1, "#bfe8ff", 140), S(1, "#5ac8fa"), S(2.5, "#16c45a"), S(5, "#0a7a2a"), S(10, "#f2e30c"), S(20, "#f07a05"), S(40, "#e41b14"), S(60, "#ff2ab4"), S(100, "#ffffff")]),
+  SNOWCM: T("SNOWCM", "Snowfall", "cm", 0, 100, [S(0, "#000000", 0), S(0.5, "#c9e6ff", 150), S(2.5, "#8fc8f2"), S(5, "#5a9fe0"), S(10, "#2b5fd6"), S(15, "#5a3fd6"), S(25, "#9b3fd6"), S(40, "#d63fbf"), S(60, "#ff7ad6"), S(100, "#ffffff")]),
+  VISKM: T("VISKM", "Visibility", "km", 0, 16, [S(0, "#ff2ab4"), S(0.4, "#d6150f"), S(1.6, "#f2a105"), S(5, "#f2e30c"), S(8, "#9ccf2b"), S(12, "#3f6f5f", 120), S(16, "#000000", 0)]),
+  CLOUD: T("CLOUD", "Cloud Cover", "%", 0, 100, [S(0, "#000000", 0), S(10, "#808080", 30), S(50, "#b0b0b0", 140), S(100, "#ffffff", 230)]),
+  PROB: T("PROB", "Probability", "%", 0, 100, [S(0, "#000000", 0), S(5, "#3b4d5c", 120), S(15, "#2f6fa8"), S(30, "#16c45a"), S(45, "#f2e30c"), S(60, "#f2a105"), S(75, "#d6150f"), S(90, "#ff2ab4"), S(100, "#ffffff")]),
+  MESH: T("MESH", "Hail Size", "mm", 0, 100, [S(0, "#000000", 0), S(2, "#2fb6d9", 150), S(10, "#16c45a"), S(19, "#f2e30c"), S(25, "#f2a105"), S(38, "#e41b14"), S(51, "#ff2ab4"), S(64, "#b02be3"), S(100, "#ffffff")]),
+  ROT: T("ROT", "Rotation", "1/s", 0, 0.02, [S(0, "#000000", 0), S(0.002, "#3b4d5c", 100), S(0.004, "#2fb6d9"), S(0.006, "#16c45a"), S(0.008, "#f2e30c"), S(0.01, "#f2a105"), S(0.012, "#e41b14"), S(0.015, "#ff2ab4"), S(0.02, "#ffffff")]),
+  AZSHEAR: T("AZSHEAR", "Azimuthal Shear", "1/s", -0.015, 0.015, [S(-0.015, "#0a1f8a"), S(-0.008, "#1b6cff"), S(-0.003, "#5ac8fa", 160), S(0, "#000000", 0), S(0.003, "#f2e30c", 160), S(0.008, "#f2a105"), S(0.012, "#e41b14"), S(0.015, "#ff2ab4")]),
+  ETKM: T("ETKM", "Echo Tops", "km", 0, 20, [S(0, "#000000", 0), S(2, "#4a6d85"), S(5, "#2fb6d9"), S(8, "#16c45a"), S(11, "#f2e30c"), S(14, "#f07a05"), S(17, "#e41b14"), S(20, "#ffffff")]),
+  PTYPE: cat("PTYPE", "Precip Type", [
+    [0, "#00000000", "None"],
+    [1, "#3fbf5a", "Warm rain"],
+    [3, "#4fa3ff", "Snow"],
+    [6, "#f2a105", "Convective rain"],
+    [7, "#e41b14", "Rain + hail"],
+    [10, "#9fd18a", "Cold rain"],
+    [91, "#2fb6d9", "Tropical stratiform"],
+    [96, "#ff2ab4", "Tropical convective"],
+  ]),
+  IR: T("IR", "Infrared", "K", 170, 320, [S(170, "#ffffff"), S(185, "#000000"), S(195, "#ff2ab4"), S(205, "#e41b14"), S(212, "#f2a105"), S(219, "#f2e30c"), S(226, "#16c45a"), S(233, "#1f5fd6"), S(240, "#7fd4ff"), S(242, "#d8d8d8"), S(320, "#0a0a0a")]),
+  WV: T("WV", "Water Vapor", "K", 180, 280, [S(180, "#ffffff"), S(200, "#b02be3"), S(210, "#2b5fd6"), S(220, "#3fa0f0"), S(228, "#e6e6e6"), S(238, "#7f7f7f"), S(248, "#f2e30c"), S(258, "#e8650a"), S(268, "#6b2a0b"), S(280, "#000000")]),
+  SWIR: T("SWIR", "Shortwave IR", "K", 200, 350, [S(200, "#ffffff"), S(240, "#a0a0a0"), S(280, "#404040"), S(300, "#101010"), S(310, "#f2e30c"), S(325, "#e41b14"), S(350, "#ffffff")]),
+  VISGRAY: T("VISGRAY", "Reflectance", "", 0, 1.1, [S(0, "#000000"), S(0.15, "#3a3a3a"), S(0.4, "#9a9a9a"), S(0.8, "#e6e6e6"), S(1.1, "#ffffff")]),
+});
 
 /** Colorblind-friendly alternatives (blue/orange diverging, cividis-like sequential). */
 export const COLORBLIND: Record<string, ColorTable> = {

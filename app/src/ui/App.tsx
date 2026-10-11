@@ -3,11 +3,11 @@ import { createMap } from "../map/mapview";
 import { settings } from "../store";
 import { startAlerts } from "../alerts";
 import { Rail, SidePanel } from "./Sidebar";
-import { Header } from "./Header";
+import { TopBar } from "./Header";
 import { Toolbar } from "./Toolbar";
 import { Timeline } from "./Timeline";
 import { Legend } from "./Legend";
-import { StatusBar, Crosshair } from "./Readouts";
+import { StatusBar, Crosshair, FpsMeter } from "./Readouts";
 import { StatsPanel } from "./StatsPanel";
 import { AlertDetail } from "./AlertDetail";
 import { Toasts, ContextMenu } from "./Overlays";
@@ -36,7 +36,8 @@ export function App() {
     >
       <div ref={mapEl} class="map" />
       <Crosshair />
-      <Header />
+      <TopBar />
+      <FpsMeter />
       <Rail />
       <SidePanel />
       <Legend />

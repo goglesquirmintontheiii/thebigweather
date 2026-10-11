@@ -1,0 +1,110 @@
+// NASA GIBS imagery layers (GeoColor, RGB composites, Himawari): one raster source per frame so
+// animation just flips opacities and tiles stay cached.
+
+import { signal, effect } from "@preact/signals";
+import type { Map as MLMap } from "maplibre-gl";
+import { settings } from "../store";
+import { frameIndex, frameCount, playing } from "../anim";
+import { GIBS } from "../weather";
+
+export const gibsTimes = signal<number[]>([]);
+let map: MLMap | null = null;
+let shownSig = "";
+let before: () => string | undefined = () => undefined;
+
+const STEP = 10 * 60_000;
+/** GIBS near-real-time imagery usually lands 20–40 minutes after scan time. */
+const LATENCY = 40 * 60_000;
+
+function times(n: number): number[] {
+  const last = Math.floor((Date.now() - LATENCY) / STEP) * STEP;
+  return Array.from({ length: n }, (_, i) => last - (n - 1 - i) * STEP);
+}
+
+function iso(t: number) {
+  return new Date(t).toISOString().slice(0, 19) + "Z";
+}
+
+function clear(m: MLMap) {
+  const style = m.getStyle();
+  if (!style) return;
+  for (const l of style.layers) if (l.id.startsWith("wx-gibs-")) m.removeLayer(l.id);
+  for (const id of Object.keys(style.sources)) if (id.startsWith("gibs-")) m.removeSource(id);
+}
+
+function build() {
+  const m = map;
+  if (!m || !m.getStyle()) return;
+  const w = settings.value.weather;
+  clear(m);
+  shownSig = "";
+  if (w.kind !== "gibs") {
+    gibsTimes.value = [];
+    return;
+  }
+  const g = GIBS.find((x) => x.id === w.id);
+  if (!g) return;
+  const ts = times(Math.min(settings.value.grid.frames, 24));
+  ts.forEach((t, i) => {
+    m.addSource(`gibs-${i}`, {
+      type: "raster",
+      tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${g.layer}/default/${iso(t)}/GoogleMapsCompatible_Level${g.level}/{z}/{y}/{x}.${g.format}`],
+      tileSize: 256,
+      maxzoom: g.level,
+      attribution: "Imagery: NASA EOSDIS GIBS",
+    });
+    m.addLayer({ id: `wx-gibs-${i}`, type: "raster", source: `gibs-${i}`, paint: { "raster-opacity": 0, "raster-fade-duration": 0 } }, before());
+  });
+  gibsTimes.value = ts;
+  frameCount.value = ts.length;
+  frameIndex.value = ts.length - 1;
+  show();
+}
+
+function show() {
+  const m = map;
+  const n = gibsTimes.value.length;
+  if (!m || !n) return;
+  const op = settings.value.grid.opacity;
+  const cur = Math.min(frameIndex.value, n - 1);
+  const sig = `${cur}|${op}`;
+  if (sig === shownSig) return;
+  shownSig = sig;
+  for (let i = 0; i < n; i++) {
+    if (!m.getLayer(`wx-gibs-${i}`)) continue;
+    // keep neighbours at a hair of opacity so their tiles are requested before they're needed
+    const near = (i - cur + n) % n <= 2;
+    m.setPaintProperty(`wx-gibs-${i}`, "raster-opacity", i === cur ? op : near ? 0.01 : 0);
+  }
+}
+
+export function attachGibs(m: MLMap, beforeFn: () => string | undefined) {
+  map = m;
+  before = beforeFn;
+}
+
+/** Call after every style load. */
+export function rebuildGibs() {
+  build();
+}
+
+let lastSig = "";
+effect(() => {
+  const w = settings.value.weather;
+  const sig = w.kind === "gibs" ? `${w.id}|${settings.value.grid.frames}` : "";
+  if (sig === lastSig) return;
+  lastSig = sig;
+  playing.value = false;
+  build();
+});
+
+effect(() => {
+  void frameIndex.value;
+  void settings.value.grid.opacity;
+  if (settings.value.weather.kind === "gibs") show();
+});
+
+// roll the window forward every 10 minutes
+setInterval(() => {
+  if (settings.value.weather.kind === "gibs" && !playing.value) build();
+}, STEP);

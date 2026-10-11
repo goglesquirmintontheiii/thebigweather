@@ -164,7 +164,7 @@ export class RadarLayer implements CustomLayerInterface {
   private cmaps = new Map<ColorTable, WebGLTexture>();
   items: DrawItem[] = [];
   smooth = false;
-  maxCached = 80;
+  maxCached = 48;
 
   constructor(id = "radar") {
     this.id = id;

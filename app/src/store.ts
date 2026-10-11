@@ -19,12 +19,26 @@ export interface SavedPoint {
 }
 
 export type Basemap = "dark" | "light" | "road" | "darkroad" | "terrain" | "satellite" | "google" | "offline";
+
+/** The single visible weather layer. */
+export type WeatherSel =
+  | { kind: "radar" }
+  | { kind: "grid"; id: string; run?: string; storm?: string }
+  | { kind: "gibs"; id: string };
 export type RadarSource = "L2" | "L3";
 
 export interface Settings {
   servers: ServerEntry[];
   activeServer: string;
   basemap: Basemap;
+  /** tile provider for Dark / Light / Road basemaps */
+  basemapProvider: "openfreemap" | "carto";
+  weather: WeatherSel;
+  grid: { frames: number; opacity: number; smooth: boolean; quality: number };
+  /** extra radars shown alongside the main one (ctrl+click) */
+  extraSites: string[];
+  showFps: boolean;
+  version: number;
   overlays: { alerts: boolean; sites: boolean; counties: boolean; states: boolean; points: boolean; rings: boolean; labels: boolean };
   radar: {
     site: string;
@@ -41,7 +55,7 @@ export interface Settings {
   /** custom .pal palettes: id -> pal text */
   customPals: Record<string, string>;
   colorblind: boolean;
-  units: { distance: "km" | "mi" | "nmi"; speed: "m/s" | "kt" | "mph" | "km/h" };
+  units: { distance: "km" | "mi" | "nmi"; speed: "m/s" | "kt" | "mph" | "km/h"; temp: "F" | "C"; precip: "in" | "mm" };
   utc: boolean;
   anim: { fps: number; dwellMs: number };
   audio: { alerts: boolean; sweeps: boolean; volume: number };
@@ -55,12 +69,18 @@ const DEFAULTS: Settings = {
   servers: [],
   activeServer: "",
   basemap: "dark",
+  basemapProvider: "openfreemap",
+  weather: { kind: "radar" },
+  grid: { frames: 12, opacity: 0.85, smooth: true, quality: 1 },
+  extraSites: [],
+  showFps: true,
+  version: 2,
   overlays: { alerts: true, sites: true, counties: true, states: true, points: true, rings: false, labels: true },
-  radar: { site: "KTLX", source: "L2", product: "REF", tiltAngle: 0.5, frames: 12, live: true, smooth: false, opacity: 0.9 },
+  radar: { site: "KTLX", source: "L2", product: "REF", tiltAngle: 0.5, frames: 12, live: false, smooth: false, opacity: 0.9 },
   tables: {},
   customPals: {},
   colorblind: false,
-  units: { distance: "mi", speed: "mph" },
+  units: { distance: "mi", speed: "mph", temp: "F", precip: "in" },
   utc: false,
   anim: { fps: 6, dwellMs: 1500 },
   audio: { alerts: true, sweeps: false, volume: 0.6 },
@@ -82,6 +102,11 @@ function load(): Settings {
     for (const k of Object.keys(v)) {
       if (out[k] && typeof out[k] === "object" && !Array.isArray(out[k]) && typeof v[k] === "object" && !Array.isArray(v[k])) out[k] = { ...out[k], ...v[k] };
       else out[k] = v[k];
+    }
+    // migrations
+    if ((v.version ?? 1) < 2) {
+      out.radar.live = false; // RapidSweep is now opt-in
+      out.version = 2;
     }
     return out;
   } catch {

@@ -300,6 +300,10 @@ impl LiveManager {
                 "tilt": tilts.len().saturating_sub(1),
                 "sweep": last,
                 "radials": v.sweeps.last().map(|s| s.radials.len()).unwrap_or(0),
+                "az": v.sweeps.last().and_then(|s| s.radials.last()).map(|r| r.azimuth).unwrap_or(0.0),
+                "lat": v.lat,
+                "lon": v.lon,
+                "complete": v.sweeps.last().map(|s| s.complete).unwrap_or(false),
                 "elev": v.sweeps.last().map(|s| s.elevation()).unwrap_or(0.0),
                 "time": v.sweeps.last().map(|s| s.end_ms()).unwrap_or(0),
             })

@@ -2,6 +2,7 @@ import { settings, update } from "../../store";
 import { BASEMAPS } from "../../map/basemaps";
 import { showRadar } from "../../radar/controller";
 import { Toggle } from "./RadarPanel";
+import { activeLabel, selectWeather } from "../../weather";
 
 const SWATCH: Record<string, string> = {
   dark: "linear-gradient(135deg,#0b0e13,#1f2630)",
@@ -14,7 +15,7 @@ const SWATCH: Record<string, string> = {
   offline: "linear-gradient(135deg,#0b1016,#151b23)",
 };
 
-const WEATHER_LATER = ["MRMS", "Models", "Satellite", "METAR analysis", "NDFD forecast", "Air quality", "HeatRisk"];
+const WEATHER_LATER = ["Air quality", "HeatRisk", "International radar"];
 const OVERLAYS_LATER = ["SPC outlooks & MDs", "Tropical", "METARs", "Lightning", "Storm reports", "Cameras", "Aviation", "Spotters & chasers"];
 
 export function LayersPanel() {
@@ -31,18 +32,62 @@ export function LayersPanel() {
             </button>
           ))}
         </div>
+        {["dark", "light", "road"].includes(s.basemap) && (
+          <div class="row">
+            <span>Map tiles</span>
+            <div class="seg sm">
+              {(["openfreemap", "carto"] as const).map((p) => (
+                <button key={p} class={s.basemapProvider === p ? "on" : ""} onClick={() => update((x) => (x.basemapProvider = p))}>
+                  {p === "openfreemap" ? "OpenFreeMap" : "CARTO"}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
       <section>
         <label class="lbl">Weather layer</label>
-        <div class="list">
-          <button class="opt on wide">Radar (NEXRAD · TDWR)</button>
-          {WEATHER_LATER.map((w) => (
-            <button key={w} class="opt wide na" disabled title="Coming in phase 2">
-              {w} <span class="sub">soon</span>
+        <div class="row">
+          <b>{activeLabel.value.title}</b>
+          <span class="muted small">{activeLabel.value.group}</span>
+        </div>
+        <p class="muted small">Change it from the layer menu at the top left of the header.</p>
+        {s.weather.kind === "radar" ? (
+          <Toggle label="Show radar" on={showRadar.value} set={(v) => (showRadar.value = v)} />
+        ) : (
+          <>
+            <div class="row">
+              <span>Frames</span>
+              <input type="range" min={2} max={36} value={s.grid.frames} onChange={(e) => update((x) => (x.grid.frames = +(e.target as HTMLInputElement).value))} />
+              <span class="val">{s.grid.frames}</span>
+            </div>
+            <div class="row">
+              <span>Opacity</span>
+              <input type="range" min={10} max={100} value={Math.round(s.grid.opacity * 100)} onInput={(e) => update((x) => (x.grid.opacity = +(e.target as HTMLInputElement).value / 100))} />
+              <span class="val">{Math.round(s.grid.opacity * 100)}%</span>
+            </div>
+            {s.weather.kind === "grid" && (
+              <>
+                <div class="row">
+                  <span>Detail</span>
+                  <input type="range" min={50} max={150} step={25} value={Math.round(s.grid.quality * 100)} onChange={(e) => update((x) => (x.grid.quality = +(e.target as HTMLInputElement).value / 100))} />
+                  <span class="val">{Math.round(s.grid.quality * 100)}%</span>
+                </div>
+                <Toggle label="Smoothing" on={s.grid.smooth} set={(v) => update((x) => (x.grid.smooth = v))} />
+              </>
+            )}
+            <button class="btn sm ghost" onClick={() => selectWeather({ kind: "radar" })}>
+              Back to radar
             </button>
+          </>
+        )}
+        <div class="later">
+          {WEATHER_LATER.map((w) => (
+            <span key={w} class="tag dim" title="Coming in a later phase">
+              {w}
+            </span>
           ))}
         </div>
-        <Toggle label="Show radar" on={showRadar.value} set={(v) => (showRadar.value = v)} />
       </section>
       <section>
         <label class="lbl">Overlays</label>

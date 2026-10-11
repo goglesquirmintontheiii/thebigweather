@@ -17,6 +17,8 @@ nativeTheme.themeSource = "dark";
 app.commandLine.appendSwitch("enable-gpu-rasterization");
 app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.commandLine.appendSwitch("enable-unsafe-swiftshader");
+// keep the renderer heap bounded (radar sweeps are cached explicitly, so a big heap only hides garbage)
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=1536");
 // Wayland when available, X11 otherwise
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 if (process.env.TBW_SOFTWARE_GL) {

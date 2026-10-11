@@ -118,3 +118,36 @@ export function pointInGeometry(lon: number, lat: number, g: any): boolean {
 export function clamp(v: number, a: number, b: number) {
   return Math.max(a, Math.min(b, v));
 }
+
+/** Convert a gridded-layer value from its native units into the user's preferred units. */
+export function convertUnit(v: number, units: string): [number, string] {
+  const u = settings.value.units;
+  switch (units) {
+    case "°C":
+      return u.temp === "F" ? [v * 1.8 + 32, "°F"] : [v, "°C"];
+    case "K":
+      return u.temp === "F" ? [(v - 273.15) * 1.8 + 32, "°F"] : [v - 273.15, "°C"];
+    case "mm":
+      return u.precip === "in" ? [v / 25.4, "in"] : [v, "mm"];
+    case "mm/h":
+      return u.precip === "in" ? [v / 25.4, "in/h"] : [v, "mm/h"];
+    case "cm":
+      return u.precip === "in" ? [v / 2.54, "in"] : [v, "cm"];
+    case "km":
+      return u.distance === "km" ? [v, "km"] : [v / 1.609344, "mi"];
+    case "m/s":
+      return [v * speedFactor(), u.speed];
+    default:
+      return [v, units];
+  }
+}
+
+/** Format a gridded value (with unit conversion and sensible precision). */
+export function fmtGrid(v: number, units: string, labels?: Record<number, string>): string {
+  if (Number.isNaN(v)) return "—";
+  if (labels) return labels[Math.round(v)] ?? "—";
+  const [x, lab] = convertUnit(v, units);
+  const ax = Math.abs(x);
+  const d = units === "1/s" ? 4 : lab === "in" || lab === "in/h" ? 2 : ax < 10 ? 1 : 0;
+  return `${x.toFixed(d)}${lab === "%" || lab.startsWith("°") ? "" : " "}${lab}`;
+}

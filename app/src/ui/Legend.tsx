@@ -1,14 +1,15 @@
 import { useMemo } from "preact/hooks";
-import { activeTable, displaySweep } from "../radar/controller";
 import { rasterize, TEX_SIZE } from "../radar/colormaps";
-import { speedFactor } from "../util";
+import { speedFactor, convertUnit } from "../util";
 import { settings } from "../store";
+import { activeLegend } from "../active";
 
 export function Legend() {
-  const t = activeTable.value;
-  void settings.value.units.speed;
-  const sweep = displaySweep.value;
+  const L = activeLegend.value;
+  void settings.value.units;
+  const t = L?.table;
   const bg = useMemo(() => {
+    if (!t) return "";
     const r = rasterize(t);
     const stops: string[] = [];
     const n = 48;
@@ -19,12 +20,12 @@ export function Legend() {
     }
     return `linear-gradient(90deg, ${stops.join(",")})`;
   }, [t]);
-  if (!sweep) return null;
+  if (!L || !t) return null;
   if (t.labels) {
     return (
       <div class="legend glass cat">
         {Object.entries(t.labels)
-          .filter(([k]) => +k < 15)
+          .filter(([k]) => +k < 15 && +k >= 0)
           .map(([k, name]) => {
             const s = t.stops.find((x) => x.v === +k);
             return (
@@ -37,13 +38,22 @@ export function Legend() {
       </div>
     );
   }
-  const speed = t.units === "m/s";
-  const f = speed ? speedFactor() : 1;
   const ticks = 6;
+  let unitLabel = L.units;
   const labels = Array.from({ length: ticks + 1 }, (_, i) => {
     const v = t.min + (i / ticks) * (t.max - t.min);
-    const x = v * f;
-    return Math.abs(x) >= 10 || x === 0 ? Math.round(x) : x.toFixed(t.units === "" ? 2 : 1);
+    let x = v;
+    if (L.grid) {
+      const [cv, u] = convertUnit(v, L.units);
+      x = cv;
+      unitLabel = u;
+    } else if (t.units === "m/s") {
+      x = v * speedFactor();
+      unitLabel = settings.value.units.speed;
+    }
+    const ax = Math.abs(x);
+    const span = Math.abs(t.max - t.min) * (L.grid ? Math.abs(convertUnit(1, L.units)[0] - convertUnit(0, L.units)[0]) || 1 : 1);
+    return ax >= 10 || x === 0 || span >= 30 ? Math.round(x) : ax < 0.1 ? x.toFixed(3) : x.toFixed(ax < 1 ? 2 : 1);
   });
   return (
     <div class="legend glass">
@@ -53,7 +63,7 @@ export function Legend() {
           <span key={i}>{l}</span>
         ))}
       </div>
-      <div class="lunits">{speed ? settings.value.units.speed : t.units}</div>
+      <div class="lunits">{unitLabel}</div>
     </div>
   );
 }

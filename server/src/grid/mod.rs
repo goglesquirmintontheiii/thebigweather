@@ -1,0 +1,335 @@
+//! Gridded data (MRMS, models, NDFD, METAR analyses, satellite).
+//!
+//! Every source is decoded into a [`Grid`]: values quantized to u16 (0 = no data) in the
+//! source's own projection. Apps ask for a viewport; the server samples the grid onto a
+//! Web Mercator raster of the requested size, so any projection renders the same way and
+//! the app can still read exact values and apply color tables on the GPU.
+
+pub mod decode;
+pub mod goes;
+pub mod metar;
+pub mod service;
+pub mod sources;
+
+use rayon::prelude::*;
+use serde::Serialize;
+
+const R_EARTH: f64 = 6_371_229.0;
+
+#[derive(Debug, Clone)]
+pub enum Proj {
+    /// value(i, j) is at lat = lat0 + j*dlat, lon = lon0 + i*dlon
+    LatLon { lat0: f64, lon0: f64, dlat: f64, dlon: f64, nx: usize, global: bool },
+    /// Lambert conformal conic (spherical earth)
+    Lambert { n: f64, f: f64, r: f64, lov: f64, x0: f64, y0: f64, dx: f64, dy: f64 },
+    /// Polar stereographic (north or south)
+    PolarStereo { r: f64, lov: f64, lad: f64, south: bool, x0: f64, y0: f64, dx: f64, dy: f64 },
+    /// GOES fixed grid: scan angles (radians) x = x0 + i*dx, y = y0 + j*dy
+    Geos { h: f64, r_eq: f64, r_pol: f64, lon0: f64, x0: f64, dx: f64, y0: f64, dy: f64 },
+}
+
+fn wrap180(mut d: f64) -> f64 {
+    while d > 180.0 {
+        d -= 360.0;
+    }
+    while d < -180.0 {
+        d += 360.0;
+    }
+    d
+}
+
+impl Proj {
+    pub fn lambert(lat1: f64, lon1: f64, latin1: f64, latin2: f64, lov: f64, dx: f64, dy: f64, r: f64) -> Proj {
+        let r1 = latin1.to_radians();
+        let r2 = latin2.to_radians();
+        let t = |p: f64| (std::f64::consts::FRAC_PI_4 + p / 2.0).tan();
+        let n = if (latin1 - latin2).abs() < 1e-6 { r1.sin() } else { (r1.cos() / r2.cos()).ln() / (t(r2) / t(r1)).ln() };
+        let f = r1.cos() * t(r1).powf(n) / n;
+        let mut p = Proj::Lambert { n, f, r, lov: lov.to_radians(), x0: 0.0, y0: 0.0, dx, dy };
+        let (x, y) = p.lambert_xy(lat1, lon1);
+        if let Proj::Lambert { x0, y0, .. } = &mut p {
+            *x0 = x;
+            *y0 = y;
+        }
+        p
+    }
+
+    fn lambert_xy(&self, lat: f64, lon: f64) -> (f64, f64) {
+        if let Proj::Lambert { n, f, r, lov, .. } = *self {
+            let rho = r * f / (std::f64::consts::FRAC_PI_4 + lat.to_radians() / 2.0).tan().powf(n);
+            let th = n * wrap180(lon - lov.to_degrees()).to_radians();
+            (rho * th.sin(), -rho * th.cos())
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
+    pub fn polar(lat1: f64, lon1: f64, lov: f64, lad: f64, south: bool, dx: f64, dy: f64, r: f64) -> Proj {
+        let mut p = Proj::PolarStereo { r, lov: lov.to_radians(), lad: lad.to_radians(), south, x0: 0.0, y0: 0.0, dx, dy };
+        let (x, y) = p.polar_xy(lat1, lon1);
+        if let Proj::PolarStereo { x0, y0, .. } = &mut p {
+            *x0 = x;
+            *y0 = y;
+        }
+        p
+    }
+
+    fn polar_xy(&self, lat: f64, lon: f64) -> (f64, f64) {
+        if let Proj::PolarStereo { r, lov, lad, south, .. } = *self {
+            let k = 1.0 + lad.abs().sin();
+            let (phi, dl) = (lat.to_radians(), lon.to_radians() - lov);
+            if south {
+                let rho = r * k * (std::f64::consts::FRAC_PI_4 + phi / 2.0).tan();
+                (rho * dl.sin(), rho * dl.cos())
+            } else {
+                let rho = r * k * (std::f64::consts::FRAC_PI_4 - phi / 2.0).tan();
+                (rho * dl.sin(), -rho * dl.cos())
+            }
+        } else {
+            (0.0, 0.0)
+        }
+    }
+
+    /// Fractional grid index of a lat/lon, or None outside the projection's domain.
+    #[inline]
+    pub fn ij(&self, lat: f64, lon: f64) -> Option<(f64, f64)> {
+        match *self {
+            Proj::LatLon { lat0, lon0, dlat, dlon, nx, global } => {
+                let mut dl = lon - lon0;
+                if dlon > 0.0 {
+                    dl = dl.rem_euclid(360.0);
+                    if !global && dl > dlon * nx as f64 + 1.0 {
+                        dl -= 360.0;
+                    }
+                } else {
+                    dl = -((-dl).rem_euclid(360.0));
+                }
+                Some((dl / dlon, (lat - lat0) / dlat))
+            }
+            Proj::Lambert { x0, y0, dx, dy, .. } => {
+                let (x, y) = self.lambert_xy(lat, lon);
+                Some(((x - x0) / dx, (y - y0) / dy))
+            }
+            Proj::PolarStereo { x0, y0, dx, dy, .. } => {
+                let (x, y) = self.polar_xy(lat, lon);
+                Some(((x - x0) / dx, (y - y0) / dy))
+            }
+            Proj::Geos { h, r_eq, r_pol, lon0, x0, dx, y0, dy } => {
+                let phi = lat.to_radians();
+                let lam = (lon - lon0).to_radians();
+                let e2 = (r_eq * r_eq - r_pol * r_pol) / (r_eq * r_eq);
+                let phic = ((r_pol * r_pol) / (r_eq * r_eq) * phi.tan()).atan();
+                let rc = r_pol / (1.0 - e2 * phic.cos().powi(2)).sqrt();
+                let sx = h - rc * phic.cos() * lam.cos();
+                let sy = -rc * phic.cos() * lam.sin();
+                let sz = rc * phic.sin();
+                // hidden behind the earth's limb
+                if h * (h - sx) < sy * sy + (r_eq * r_eq) / (r_pol * r_pol) * sz * sz {
+                    return None;
+                }
+                let x = (-sy / (sx * sx + sy * sy + sz * sz).sqrt()).asin();
+                let y = (sz / sx).atan();
+                Some(((x - x0) / dx, (y - y0) / dy))
+            }
+        }
+    }
+}
+
+/// A decoded field, quantized to u16. raw 0 = no data, value = offset + (raw - 1) * scale.
+#[derive(Debug, Clone)]
+pub struct Grid {
+    pub nx: usize,
+    pub ny: usize,
+    pub proj: Proj,
+    pub data: Vec<u16>,
+    pub scale: f32,
+    pub offset: f32,
+    pub valid_ms: i64,
+    pub ref_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GridInfo {
+    pub nx: usize,
+    pub ny: usize,
+    pub valid: i64,
+    pub reference: i64,
+    pub min: f32,
+    pub max: f32,
+}
+
+impl Grid {
+    /// Quantize float values (NaN = missing) in storage order.
+    pub fn from_values(nx: usize, ny: usize, proj: Proj, values: &[f32], valid_ms: i64, ref_ms: i64) -> Grid {
+        let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+        for &v in values {
+            if v.is_finite() {
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+        if !lo.is_finite() {
+            lo = 0.0;
+            hi = 1.0;
+        }
+        let scale = ((hi - lo) / 65533.0).max(1e-9);
+        let data: Vec<u16> = values
+            .par_iter()
+            .map(|&v| if v.is_finite() { 1 + ((v - lo) / scale).round().clamp(0.0, 65533.0) as u16 } else { 0 })
+            .collect();
+        Grid { nx, ny, proj, data, scale, offset: lo, valid_ms, ref_ms }
+    }
+
+    #[inline]
+    pub fn value_raw(&self, raw: u16) -> f32 {
+        self.offset + (raw as f32 - 1.0) * self.scale
+    }
+
+    pub fn info(&self) -> GridInfo {
+        GridInfo {
+            nx: self.nx,
+            ny: self.ny,
+            valid: self.valid_ms,
+            reference: self.ref_ms,
+            min: self.offset,
+            max: self.offset + 65533.0 * self.scale,
+        }
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.data.len() * 2 + 256
+    }
+
+    #[inline]
+    fn at(&self, i: isize, j: isize) -> u16 {
+        if i < 0 || j < 0 || i as usize >= self.nx || j as usize >= self.ny {
+            return 0;
+        }
+        self.data[j as usize * self.nx + i as usize]
+    }
+
+    /// Value at a lat/lon (nearest grid point).
+    pub fn sample(&self, lat: f64, lon: f64) -> Option<f32> {
+        let (fi, fj) = self.proj.ij(lat, lon)?;
+        let r = self.at(fi.round() as isize, fj.round() as isize);
+        if r == 0 {
+            None
+        } else {
+            Some(self.value_raw(r))
+        }
+    }
+
+    /// Sample onto a Web Mercator raster. bbox = (x0, y0, x1, y1) in 0..1 mercator units.
+    /// Output keeps this grid's quantization (raw 0 = no data).
+    pub fn render(&self, bbox: (f64, f64, f64, f64), w: usize, h: usize) -> Vec<u16> {
+        let (x0, y0, x1, y1) = bbox;
+        let lon_of = |px: usize| -> f64 { (x0 + (px as f64 + 0.5) / w as f64 * (x1 - x0)) * 360.0 - 180.0 };
+        let lat_of = |py: usize| -> f64 {
+            let y = y0 + (py as f64 + 0.5) / h as f64 * (y1 - y0);
+            (std::f64::consts::PI * (1.0 - 2.0 * y)).sinh().atan().to_degrees()
+        };
+        let mut out = vec![0u16; w * h];
+        match self.proj {
+            Proj::LatLon { .. } => {
+                // separable: columns depend only on lon, rows only on lat
+                let cols: Vec<isize> = (0..w)
+                    .map(|px| self.proj.ij(0.0, lon_of(px)).map(|(i, _)| i.round() as isize).unwrap_or(-1))
+                    .collect();
+                out.par_chunks_mut(w).enumerate().for_each(|(py, row)| {
+                    let j = self.proj.ij(lat_of(py), 0.0).map(|(_, j)| j.round() as isize).unwrap_or(-1);
+                    for (px, o) in row.iter_mut().enumerate() {
+                        *o = self.at(cols[px], j);
+                    }
+                });
+            }
+            _ => {
+                let lons: Vec<f64> = (0..w).map(lon_of).collect();
+                out.par_chunks_mut(w).enumerate().for_each(|(py, row)| {
+                    let lat = lat_of(py);
+                    for (px, o) in row.iter_mut().enumerate() {
+                        if let Some((fi, fj)) = self.proj.ij(lat, lons[px]) {
+                            *o = self.at(fi.round() as isize, fj.round() as isize);
+                        }
+                    }
+                });
+            }
+        }
+        out
+    }
+
+    /// Reduce resolution by an integer stride (keeps memory in check for huge grids).
+    pub fn decimate(self, stride: usize) -> Grid {
+        if stride <= 1 {
+            return self;
+        }
+        let nx = self.nx / stride;
+        let ny = self.ny / stride;
+        let mut data = vec![0u16; nx * ny];
+        data.par_chunks_mut(nx).enumerate().for_each(|(j, row)| {
+            for (i, o) in row.iter_mut().enumerate() {
+                *o = self.data[(j * stride) * self.nx + i * stride];
+            }
+        });
+        let proj = match self.proj {
+            Proj::LatLon { lat0, lon0, dlat, dlon, global, .. } => Proj::LatLon { lat0, lon0, dlat: dlat * stride as f64, dlon: dlon * stride as f64, nx, global },
+            Proj::Lambert { n, f, r, lov, x0, y0, dx, dy } => Proj::Lambert { n, f, r, lov, x0, y0, dx: dx * stride as f64, dy: dy * stride as f64 },
+            Proj::PolarStereo { r, lov, lad, south, x0, y0, dx, dy } => Proj::PolarStereo { r, lov, lad, south, x0, y0, dx: dx * stride as f64, dy: dy * stride as f64 },
+            Proj::Geos { h, r_eq, r_pol, lon0, x0, dx, y0, dy } => Proj::Geos { h, r_eq, r_pol, lon0, x0, dx: dx * stride as f64, y0, dy: dy * stride as f64 },
+        };
+        Grid { nx, ny, proj, data, ..self }
+    }
+}
+
+/// Binary raster sent to apps ("TBWG"), little-endian:
+/// 0 "TBWG", 4 u16 version, 6 u16 flags, 8 u32 w, 12 u32 h,
+/// 16 f64 x0, 24 f64 y0, 32 f64 x1, 40 f64 y1 (mercator 0..1),
+/// 48 f32 scale, 52 f32 offset, 56 f64 valid ms, 64 f64 reference ms, 72 [u8;8] reserved,
+/// 80 u16[w*h] raw (0 = no data, value = offset + (raw-1)*scale)
+pub fn encode_raster(g: &Grid, bbox: (f64, f64, f64, f64), w: usize, h: usize, data: &[u16]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(80 + data.len() * 2);
+    out.extend_from_slice(b"TBWG");
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(w as u32).to_le_bytes());
+    out.extend_from_slice(&(h as u32).to_le_bytes());
+    for v in [bbox.0, bbox.1, bbox.2, bbox.3] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&g.scale.to_le_bytes());
+    out.extend_from_slice(&g.offset.to_le_bytes());
+    out.extend_from_slice(&(g.valid_ms as f64).to_le_bytes());
+    out.extend_from_slice(&(g.ref_ms as f64).to_le_bytes());
+    out.extend_from_slice(&[0u8; 8]);
+    for v in data {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+pub fn earth_radius() -> f64 {
+    R_EARTH
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lambert_ndfd_corners() {
+        // NDFD CONUS 2.5 km: first point 20.19N 121.55W, LoV 265, latin 25
+        let p = Proj::lambert(20.19, -121.550004, 25.0, 25.0, 265.0, 2539.703, 2539.703, 6_371_200.0);
+        let (i, j) = p.ij(20.19, -121.550004).unwrap();
+        assert!(i.abs() < 1e-6 && j.abs() < 1e-6);
+        // last point from pygrib: (50.1024611, -60.88202274) at i=2144, j=1376
+        let (i, j) = p.ij(50.1024611, -60.88202274).unwrap();
+        assert!((i - 2144.0).abs() < 0.05 && (j - 1376.0).abs() < 0.05, "{i} {j}");
+    }
+
+    #[test]
+    fn geos_nadir() {
+        let p = Proj::Geos { h: 42_164_160.0, r_eq: 6_378_137.0, r_pol: 6_356_752.31414, lon0: -75.0, x0: -0.101332, dx: 5.6e-5, y0: 0.128212, dy: -5.6e-5 };
+        let (i, j) = p.ij(0.0, -75.0).unwrap();
+        assert!((i - 0.101332 / 5.6e-5).abs() < 1.0 && (j - 0.128212 / 5.6e-5).abs() < 1.0);
+        assert!(p.ij(0.0, 105.0).is_none());
+    }
+}

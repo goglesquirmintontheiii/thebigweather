@@ -1,5 +1,5 @@
 import { tool, crosshair, toast, settings, update } from "../store";
-import { playing, togglePlay, frames } from "../radar/controller";
+import { playing, togglePlay, frameCount } from "../anim";
 import { mapRef, measureTotal, measurePts, describeBearing, bearingInfo } from "../map/mapview";
 import { fmtDist } from "../util";
 import { Play, Pause, LocateFixed, Camera, Compass, Crosshair, Ruler, RadioTower, PenTool } from "lucide-preact";
@@ -77,7 +77,7 @@ export function Toolbar() {
       )}
       {t === "bearing" && bearingInfo.value && <div class="tool-readout glass">From {settings.value.radar.site}: {describeBearing()}</div>}
       <div class="toolbar glass">
-        {btn(playing.value, "Play / pause loop (Space)", togglePlay, playing.value ? <Pause size={19} /> : <Play size={19} />, frames.value.length < 2)}
+        {btn(playing.value, "Play / pause loop (Space)", togglePlay, playing.value ? <Pause size={19} /> : <Play size={19} />, frameCount.value < 2)}
         {btn(false, "My location (L)", locate, <LocateFixed size={19} />)}
         {btn(false, "Screenshot (S)", screenshot, <Camera size={19} />)}
         {btn(t === "bearing", "Distance & direction from radar (B)", () => (tool.value = t === "bearing" ? "none" : "bearing"), <Compass size={19} />)}

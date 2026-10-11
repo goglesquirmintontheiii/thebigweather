@@ -38,6 +38,7 @@ pub struct AppState {
     pub sites: RwLock<Vec<Site>>,
     pub stats: Arc<RwLock<Stats>>,
     pub started: Instant,
+    pub grids: Arc<crate::grid::service::GridService>,
 }
 
 type St = State<Arc<AppState>>;
@@ -64,7 +65,17 @@ fn bad(msg: &str) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, msg.into())
 }
 
+/// True for requests made directly from this machine (not forwarded by a proxy like Caddy).
+fn is_local(req: &Request) -> bool {
+    let direct = !req.headers().contains_key("x-forwarded-for") && !req.headers().contains_key("forwarded") && !req.headers().contains_key("x-real-ip");
+    let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip());
+    direct && peer.map(|ip| ip.is_loopback()).unwrap_or(false)
+}
+
 async fn auth(State(st): St, req: Request, next: Next) -> Result<Response, StatusCode> {
+    if st.cfg.read().server.local_no_auth && is_local(&req) {
+        return Ok(next.run(req).await);
+    }
     let token = st.cfg.read().server.token.clone();
     let hdr_ok = req
         .headers()
@@ -126,6 +137,11 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/sources", get(sources))
         .route("/keys", get(keys_get).put(keys_put))
         .route("/stats", get(stats))
+        .route("/grid/catalog", get(grid_catalog))
+        .route("/grid/frames", get(grid_frames))
+        .route("/grid/render", get(grid_render))
+        .route("/grid/value", get(grid_value))
+        .route("/metars", get(metars))
         .route("/ws", get(ws))
         .layer(DefaultBodyLimit::max(400 * 1024 * 1024))
         .route_layer(middleware::from_fn_with_state(st.clone(), auth));
@@ -136,6 +152,7 @@ pub fn router(st: Arc<AppState>) -> Router {
 
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/local", get(local_check))
         .nest("/api", api)
         .fallback_service(static_files)
         .layer(
@@ -346,4 +363,59 @@ async fn ws_conn(st: Arc<AppState>, mut sock: WebSocket) {
             }
         }
     }
+}
+
+/// Lets the app on the same machine discover that no token is needed.
+async fn local_check(State(st): St, req: Request) -> Json<Value> {
+    let local = st.cfg.read().server.local_no_auth && is_local(&req);
+    Json(json!({"local": local, "name": st.cfg.read().server.name}))
+}
+
+async fn grid_catalog(State(st): St) -> Json<Value> {
+    Json(st.grids.catalog())
+}
+
+#[derive(Deserialize)]
+struct FramesQ {
+    layer: String,
+    n: Option<usize>,
+    run: Option<String>,
+    storm: Option<String>,
+}
+
+async fn grid_frames(State(st): St, Query(q): Query<FramesQ>) -> Result<Json<Value>, ApiError> {
+    let r = st.grids.frames(&q.layer, q.n.unwrap_or(12).clamp(1, 120), q.run.as_deref(), q.storm.as_deref()).await?;
+    Ok(Json(json!(r)))
+}
+
+#[derive(Deserialize)]
+struct RenderQ {
+    key: String,
+    bbox: String,
+    w: usize,
+    h: usize,
+}
+
+async fn grid_render(State(st): St, headers: HeaderMap, Query(q): Query<RenderQ>) -> Result<Response, ApiError> {
+    let b: Vec<f64> = q.bbox.split(',').filter_map(|x| x.parse().ok()).collect();
+    if b.len() != 4 || q.w == 0 || q.h == 0 || q.w > 4096 || q.h > 4096 {
+        return Err(bad("bad bbox or size"));
+    }
+    let bytes = st.grids.render(&q.key, (b[0], b[1], b[2], b[3]), q.w, q.h).await?;
+    Ok(sweep_response(&headers, bytes, !q.key.starts_with("metar|")))
+}
+
+#[derive(Deserialize)]
+struct ValueQ {
+    key: String,
+    lat: f64,
+    lon: f64,
+}
+
+async fn grid_value(State(st): St, Query(q): Query<ValueQ>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({"value": st.grids.value(&q.key, q.lat, q.lon).await?})))
+}
+
+async fn metars(State(st): St) -> Json<Value> {
+    Json(json!(st.grids.latest_metars().map(|v| v.as_ref().clone()).unwrap_or_default()))
 }

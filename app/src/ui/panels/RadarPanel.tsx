@@ -63,7 +63,12 @@ function SitePicker() {
       </div>
       <div class="site-list">
         {shown.map(({ s, d }) => (
-          <button key={s.id} class={`site-row ${s.id === settings.value.radar.site ? "on" : ""}`} onClick={() => (selectSite(s.id), setQ(""))}>
+          <button
+            key={s.id}
+            class={`site-row ${s.id === settings.value.radar.site ? "on" : ""} ${settings.value.extraSites.includes(s.id) ? "extra" : ""}`}
+            title="Click to view · Ctrl+click to add alongside the current radar"
+            onClick={(e) => (selectSite(s.id, e.ctrlKey || e.metaKey), setQ(""))}
+          >
             <span class="sid">{s.id}</span>
             <span class="sname">{[s.name, s.state].filter(Boolean).join(", ")}</span>
             {s.type === "TDWR" && <span class="tag tdwr">TDWR</span>}
@@ -98,25 +103,55 @@ function L3ProductList() {
   const tdwr = currentSite.value?.type === "TDWR";
   const prods = l3Products.value.filter((p) => !!p.tdwr === tdwr);
   const groups = [...new Set(prods.map((p) => p.group))];
+  const cur = l3Products.value.find((p) => p.id === r.product);
+  // one button per product family (same product code at different tilts)
+  const fams = new Map<string, typeof prods>();
+  for (const p of prods) {
+    const k = `${p.code}|${p.name}`;
+    fams.set(k, [...(fams.get(k) ?? []), p].sort((a, b) => a.tilt - b.tilt));
+  }
+  const curFam = cur ? fams.get(`${cur.code}|${cur.name}`) : undefined;
   return (
     <section>
       {groups.map((g) => (
         <div key={g}>
           <label class="lbl">{g}</label>
           <div class="grid2">
-            {prods
-              .filter((p) => p.group === g)
-              .map((p) => (
-                <button key={p.id} class={`opt ${r.product === p.id ? "on" : ""}`} onClick={() => update((s) => (s.radar.product = p.id))} title={p.id}>
-                  {p.name}
-                  {p.tilt > 0 || ["Base", "Dual-pol", "TDWR"].includes(g) ? <span class="sub"> T{p.tilt + 1}</span> : null}
-                </button>
-              ))}
+            {[...fams.values()]
+              .filter((f) => f[0].group === g)
+              .map((f) => {
+                const on = f.some((p) => p.id === r.product);
+                // keep the current tilt when switching family if it exists
+                const target = f.find((p) => p.tilt === cur?.tilt) ?? f[0];
+                return (
+                  <button key={f[0].id} class={`opt ${on ? "on" : ""}`} onClick={() => update((s) => (s.radar.product = target.id))} title={f.map((p) => p.id).join(" · ")}>
+                    {f[0].name}
+                  </button>
+                );
+              })}
           </div>
         </div>
       ))}
+      {curFam && curFam.length > 1 && (
+        <div>
+          <label class="lbl">Tilt (↑ ↓)</label>
+          <div class="tilts">
+            {curFam.map((p) => (
+              <button key={p.id} class={`tilt ${p.id === r.product ? "on" : ""}`} onClick={() => update((s) => (s.radar.product = p.id))} title={p.id}>
+                {L3_TILT_LABEL(p.tilt, tdwr)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </section>
   );
+}
+
+/** Nominal elevation of the Nth Level III tilt (actual angle depends on the VCP; header shows the real one). */
+function L3_TILT_LABEL(t: number, tdwr: boolean) {
+  const a = tdwr ? [0.3, 0.6, 1.0, 1.5] : [0.5, 0.9, 1.3, 1.8];
+  return `T${t + 1} · ~${a[t] ?? "?"}°`;
 }
 
 function TiltPicker() {

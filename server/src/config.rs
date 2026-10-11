@@ -28,6 +28,10 @@ pub struct ServerCfg {
     pub web_dir: PathBuf,
     /// Name shown in the app's server list
     pub name: String,
+    /// Skip the token for apps running on this same machine (not applied to proxied requests)
+    pub local_no_auth: bool,
+    /// METAR bulk file (aviationweather.gov cache)
+    pub metar_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +152,8 @@ impl Default for ServerCfg {
             public_url: String::new(),
             web_dir: PathBuf::from("web"),
             name: "TheBigWeather".into(),
+            local_no_auth: true,
+            metar_url: "https://aviationweather.gov/data/cache/metars.cache.csv.gz".into(),
         }
     }
 }
