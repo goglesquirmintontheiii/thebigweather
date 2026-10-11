@@ -403,6 +403,23 @@ pub fn goes_layers() -> Vec<LayerDef> {
                 step_min: if sector.starts_with("meso") { 1 } else if *sector == "full" { 10 } else { 5 },
             });
         }
+        // RGB composites built on the server from several bands
+        for r in super::rgb::RECIPES {
+            out.push(LayerDef {
+                id: format!("goes/{sat}/{sector}/rgb-{}", r.id),
+                group: format!("Satellite · {sname}"),
+                name: r.name.to_string(),
+                units: "",
+                cmap: "RGB",
+                product: format!("{sat}|{sector}|rgb:{}", r.id),
+                transform: Transform::None,
+                nodata: vec![],
+                min_valid: None,
+                source: "goes",
+                model: None,
+                step_min: if sector.starts_with("meso") { 1 } else if *sector == "full" { 10 } else { 5 },
+            });
+        }
     }
     out
 }

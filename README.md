@@ -2,7 +2,7 @@
 
 Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted server that does the heavy lifting.
 
-**Status:** Phase 2 of 6 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE2_CHECKLIST.md](docs/PHASE2_CHECKLIST.md).
+**Status:** Phase 3 of 6 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE3_CHECKLIST.md](docs/PHASE3_CHECKLIST.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ## Quick start
 
@@ -23,13 +23,31 @@ Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted
 ### 2. Desktop app
 
 ```bash
-chmod +x TheBigWeather-0.2.1-x86_64.AppImage
-./TheBigWeather-0.2.1-x86_64.AppImage
+chmod +x TheBigWeather-0.3.0-x86_64.AppImage
+./TheBigWeather-0.3.0-x86_64.AppImage
 ```
 
 On first launch, paste the server URL and token. If the server runs on the same computer, click **Use the server on this computer** — no token needed (turn this off with `local_no_auth = false` under `[server]` in the config).
 
 The UI also works in a browser at the server URL (phones too, until the Android app exists).
+
+## Phase 3 features
+
+**Overlays** (Layers panel, grouped; each has a gear for color, opacity, size, labels and its own options):
+
+- **Severe:** SPC outlooks (days 1–8, categorical, tornado, wind, hail), mesoscale discussions, watch outlines, local storm reports, GOES GLM lightning
+- **Tropical:** NHC cones, tracks, forecast points and coastal watches/warnings; tropical outlook; Hurricane Hunter recon flights
+- **Outlooks:** WPC excessive rainfall, WPC winter storm severity, SPC fire weather, CPC 6–10 / 8–14 / monthly / seasonal and hazards, river flood outlook
+- **Surface:** fronts with pips plus highs/lows (current analysis or WPC forecast), METAR station plots with TAFs, NDBC buoys, tide predictions, river gauges, NWS offices
+- **Aviation:** SIGMETs/AIRMETs, G-AIRMETs, PIREPs, airports, live flights (ADS-B)
+- **Cameras:** more than 20 public camera networks (US DOTs, Canada, Finland, Iceland, Hong Kong, Singapore, New Zealand, Australia, NOAA BuoyCAMs), with icons by type. Floating viewers handle snapshots, HLS video and YouTube. You can add your own cameras, or attach one to a ship. The camera list lives in `server/data/camera_sources.json`; edit it to fix or add sources.
+- **Marine:** ships via AIS. Finland and Norway work without a key; worldwide coverage needs an aisstream.io key.
+- **Space:** ISS, Tiangong, Hubble and weather satellites, computed in the app. Shows ground track, footprint, next pass and NASA live video. Also an aurora forecast.
+- **Hazards:** earthquakes; wildfire perimeters and hotspots
+- **Fun:** Waffle House Index (locations from OpenStreetMap; the store-status check is off by default)
+- **My files:** GeoJSON, KML, KMZ and GPX (drop on the map)
+
+**Also new:** GOES RGB composites built on the server for every region (GeoColor, True Color, Air Mass, Dust, Day Cloud Phase, Fire Temperature, Night Microphysics, Day Convection), custom basemap tile servers, smoother playback (no blank frames), and nearest-radar priority when several radars overlap.
 
 ## Phase 2 features
 

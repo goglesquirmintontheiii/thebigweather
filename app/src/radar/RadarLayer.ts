@@ -44,6 +44,10 @@ uniform usampler2D u_azidx;
 uniform sampler2D u_az;
 uniform sampler2D u_lut;
 uniform sampler2D u_cmap;
+// other radars drawn at the same time (lat, lon in radians; usable range in m):
+// a pixel belongs to whichever radar is closest, since data is better nearer the radar
+uniform int u_nother;
+uniform vec3 u_others[8];
 
 const float PI = 3.141592653589793;
 const float R = 6371000.0;
@@ -68,6 +72,16 @@ void main() {
   float dlat = lat - u_lat0;
   float a = sin(dlat * 0.5) * sin(dlat * 0.5) + cos(u_lat0) * cos(lat) * sin(dlon * 0.5) * sin(dlon * 0.5);
   float ground = 2.0 * R * asin(min(1.0, sqrt(a)));
+  float lon = u_lon0 + dlon;
+  for (int k = 0; k < 8; k++) {
+    if (k >= u_nother) break;
+    vec3 o = u_others[k];
+    float ddl = lat - o.x;
+    float ddo = lon - o.y;
+    float h = sin(ddl * 0.5) * sin(ddl * 0.5) + cos(o.x) * cos(lat) * sin(ddo * 0.5) * sin(ddo * 0.5);
+    float d = 2.0 * R * asin(min(1.0, sqrt(h)));
+    if (d < ground && d < o.z) discard;
+  }
   float az = atan(sin(dlon) * cos(lat), cos(u_lat0) * sin(lat) - sin(u_lat0) * cos(lat) * cos(dlon));
   az = mod(degrees(az) + 360.0, 360.0);
   float slant = ground / u_cosel;
@@ -179,7 +193,7 @@ export class RadarLayer implements CustomLayerInterface {
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || "link error");
     this.prog = p;
-    for (const n of ["u_matrix", "u_extent", "u_cy", "u_lat0", "u_lon0", "u_first", "u_gate", "u_cosel", "u_ngates", "u_nrad", "u_word", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth", "u_rf", "u_data", "u_azidx", "u_az", "u_lut", "u_cmap"]) {
+    for (const n of ["u_matrix", "u_extent", "u_cy", "u_lat0", "u_lon0", "u_first", "u_gate", "u_cosel", "u_ngates", "u_nrad", "u_word", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth", "u_rf", "u_data", "u_azidx", "u_az", "u_lut", "u_cmap", "u_nother", "u_others"]) {
       this.loc[n] = gl.getUniformLocation(p, n);
     }
     this.vao = gl.createVertexArray()!;
@@ -311,6 +325,16 @@ export class RadarLayer implements CustomLayerInterface {
     const L = this.loc;
     for (const it of this.items) {
       const s = it.sweep;
+      // nearest-radar priority between the radars on screen
+      const others = this.items.filter((o) => o !== it && (o.sweep.lat !== s.lat || o.sweep.lon !== s.lon)).slice(0, 8);
+      const ov = new Float32Array(24);
+      others.forEach((o, k) => {
+        ov[k * 3] = (o.sweep.lat * Math.PI) / 180;
+        ov[k * 3 + 1] = (o.sweep.lon * Math.PI) / 180;
+        ov[k * 3 + 2] = sweepRange(o.sweep);
+      });
+      gl.uniform1i(L.u_nother, others.length);
+      gl.uniform3fv(L.u_others, ov);
       const g = this.cache.get(s) ?? this.upload(s);
       g.lastUsed = performance.now();
       const c = maplibregl.MercatorCoordinate.fromLngLat([s.lon, s.lat]);

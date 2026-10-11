@@ -28,6 +28,8 @@ uniform float u_cmin;
 uniform float u_cmax;
 uniform float u_opacity;
 uniform int u_smooth;
+uniform int u_rgb;
+uniform sampler2D u_color;
 
 float val(ivec2 p) {
   p = clamp(p, ivec2(0), u_size - 1);
@@ -36,6 +38,13 @@ float val(ivec2 p) {
 }
 
 void main() {
+  if (u_rgb == 1) {
+    vec4 c = texture(u_color, v_uv);
+    float a = c.a * u_opacity;
+    if (a <= 0.003) discard;
+    fragColor = vec4(c.rgb * a, a);
+    return;
+  }
   vec2 f = v_uv * vec2(u_size) - 0.5;
   ivec2 p0 = ivec2(floor(f));
   vec2 t = f - vec2(p0);
@@ -104,7 +113,7 @@ export class GridLayer implements CustomLayerInterface {
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || "link");
     this.prog = p;
-    for (const n of ["u_matrix", "u_data", "u_cmap", "u_size", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth"]) this.loc[n] = gl.getUniformLocation(p, n);
+    for (const n of ["u_matrix", "u_data", "u_cmap", "u_size", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth", "u_rgb", "u_color"]) this.loc[n] = gl.getUniformLocation(p, n);
     this.vao = gl.createVertexArray()!;
     gl.bindVertexArray(this.vao);
     const vbo = gl.createBuffer()!;
@@ -153,8 +162,15 @@ export class GridLayer implements CustomLayerInterface {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, r.w, r.h, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, r.data);
+    if (r.rgba) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, r.w, r.h, 0, gl.RGBA, gl.UNSIGNED_BYTE, r.rgba);
+    } else {
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, r.w, r.h, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, r.data);
+    }
     this.textures.set(r, { tex, used: performance.now() });
     // keep GPU memory bounded
     if (this.textures.size > 40) {
@@ -165,6 +181,30 @@ export class GridLayer implements CustomLayerInterface {
       }
     }
     return tex;
+  }
+
+  private dummyU?: WebGLTexture;
+  private dummyFl?: WebGLTexture;
+  /** 1x1 placeholders so both samplers always have a texture of the right kind bound */
+  private dummy(): WebGLTexture {
+    if (this.dummyU) return this.dummyU;
+    const gl = this.gl!;
+    const t = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, 1, 1, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, new Uint16Array(1));
+    return (this.dummyU = t);
+  }
+  private dummyF(): WebGLTexture {
+    if (this.dummyFl) return this.dummyFl;
+    const gl = this.gl!;
+    const t = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+    return (this.dummyFl = t);
   }
 
   private cmapTex(t: ColorTable): WebGLTexture {
@@ -186,7 +226,7 @@ export class GridLayer implements CustomLayerInterface {
   render(gl: WebGL2RenderingContext, opts: CustomRenderMethodInput) {
     const r = this.raster;
     const t = this.table;
-    if (!this.prog || !r || !t) return;
+    if (!this.prog || !r || (!t && !r.rgba)) return;
     gl.useProgram(this.prog);
     gl.bindVertexArray(this.vao!);
     gl.enable(gl.BLEND);
@@ -201,16 +241,33 @@ export class GridLayer implements CustomLayerInterface {
     gl.uniform2i(L.u_size, r.w, r.h);
     gl.uniform1f(L.u_scale, r.scale);
     gl.uniform1f(L.u_offset, r.offset);
-    gl.uniform1f(L.u_cmin, t.min);
-    gl.uniform1f(L.u_cmax, t.max);
     gl.uniform1f(L.u_opacity, this.opacity);
-    gl.uniform1i(L.u_smooth, this.smooth && !t.labels ? 1 : 0);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.texFor(r));
-    gl.uniform1i(L.u_data, 0);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.cmapTex(t));
-    gl.uniform1i(L.u_cmap, 1);
+    gl.uniform1i(L.u_rgb, r.rgba ? 1 : 0);
+    if (r.rgba) {
+      // the integer sampler still needs a valid binding
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, this.texFor(r));
+      gl.uniform1i(L.u_color, 2);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.dummy());
+      gl.uniform1i(L.u_data, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.dummyF());
+      gl.uniform1i(L.u_cmap, 1);
+    } else {
+      gl.uniform1f(L.u_cmin, t!.min);
+      gl.uniform1f(L.u_cmax, t!.max);
+      gl.uniform1i(L.u_smooth, this.smooth && !t!.labels ? 1 : 0);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, this.texFor(r));
+      gl.uniform1i(L.u_data, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.cmapTex(t!));
+      gl.uniform1i(L.u_cmap, 1);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, this.dummyF());
+      gl.uniform1i(L.u_color, 2);
+    }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
     gl.activeTexture(gl.TEXTURE0);

@@ -35,15 +35,15 @@ export interface GibsLayer {
 
 /** NASA GIBS composites (imagery only, no values) — GeoColor, Air Mass, Himawari. */
 export const GIBS: GibsLayer[] = [
-  { id: "goes-east-geocolor", name: "GeoColor", group: "Satellite · GOES-19 (East) composites", layer: "GOES-East_ABI_GeoColor_v0_NRT", level: 7, format: "png", step: 10 },
-  { id: "goes-east-airmass", name: "Air Mass RGB", group: "Satellite · GOES-19 (East) composites", layer: "GOES-East_ABI_Air_Mass_v0_NRT", level: 7, format: "png", step: 10 },
-  { id: "goes-east-dust", name: "Dust RGB", group: "Satellite · GOES-19 (East) composites", layer: "GOES-East_ABI_Dust_v0_NRT", level: 7, format: "png", step: 10 },
-  { id: "goes-east-fire", name: "Fire Temperature RGB", group: "Satellite · GOES-19 (East) composites", layer: "GOES-East_ABI_FireTemp_v0_NRT", level: 7, format: "png", step: 10 },
-  { id: "goes-west-geocolor", name: "GeoColor", group: "Satellite · GOES-18 (West) composites", layer: "GOES-West_ABI_GeoColor_v0_NRT", level: 7, format: "png", step: 10 },
-  { id: "goes-west-airmass", name: "Air Mass RGB", group: "Satellite · GOES-18 (West) composites", layer: "GOES-West_ABI_Air_Mass_v0_NRT", level: 7, format: "png", step: 10 },
-  { id: "himawari-ir", name: "Band 13 · Clean IR", group: "Satellite · Himawari-9", layer: "Himawari_AHI_Band13_Clean_Infrared_v0_NRT", level: 7, format: "png", step: 10 },
-  { id: "himawari-vis", name: "Band 3 · Red Visible", group: "Satellite · Himawari-9", layer: "Himawari_AHI_Band3_Red_Visible_1km_v0_NRT", level: 8, format: "png", step: 10 },
-  { id: "himawari-airmass", name: "Air Mass RGB", group: "Satellite · Himawari-9", layer: "Himawari_AHI_Air_Mass_v0_NRT", level: 7, format: "png", step: 10 },
+  { id: "goes-east-geocolor", name: "GeoColor", group: "Satellite · GOES-19 (East) composites", layer: "GOES-East_ABI_GeoColor", level: 7, format: "png", step: 10 },
+  { id: "goes-east-airmass", name: "Air Mass RGB", group: "Satellite · GOES-19 (East) composites", layer: "GOES-East_ABI_Air_Mass", level: 7, format: "png", step: 10 },
+  { id: "goes-east-dust", name: "Dust RGB", group: "Satellite · GOES-19 (East) composites", layer: "GOES-East_ABI_Dust", level: 7, format: "png", step: 10 },
+  { id: "goes-east-fire", name: "Fire Temperature RGB", group: "Satellite · GOES-19 (East) composites", layer: "GOES-East_ABI_FireTemp", level: 7, format: "png", step: 10 },
+  { id: "goes-west-geocolor", name: "GeoColor", group: "Satellite · GOES-18 (West) composites", layer: "GOES-West_ABI_GeoColor", level: 7, format: "png", step: 10 },
+  { id: "goes-west-airmass", name: "Air Mass RGB", group: "Satellite · GOES-18 (West) composites", layer: "GOES-West_ABI_Air_Mass", level: 7, format: "png", step: 10 },
+  { id: "himawari-ir", name: "Band 13 · Clean IR", group: "Satellite · Himawari-9", layer: "Himawari_AHI_Band13_Clean_Infrared", level: 7, format: "png", step: 10 },
+  { id: "himawari-vis", name: "Band 3 · Red Visible", group: "Satellite · Himawari-9", layer: "Himawari_AHI_Band3_Red_Visible_1km", level: 8, format: "png", step: 10 },
+  { id: "himawari-airmass", name: "Air Mass RGB", group: "Satellite · Himawari-9", layer: "Himawari_AHI_Air_Mass", level: 7, format: "png", step: 10 },
 ];
 
 export const gridLayers = signal<GridLayerDef[]>([]);

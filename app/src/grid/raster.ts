@@ -14,6 +14,8 @@ export interface Raster {
   valid: number;
   reference: number;
   data: Uint16Array;
+  /** RGB composites: premade colors instead of values */
+  rgba?: Uint8Array;
   bytes: number;
 }
 
@@ -22,6 +24,7 @@ export function parseRaster(buf: ArrayBuffer, key: string): Raster {
   if (String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3)) !== "TBWG") throw new Error("not a raster");
   const w = dv.getUint32(8, true);
   const h = dv.getUint32(12, true);
+  const rgb = (dv.getUint16(6, true) & 1) === 1;
   return {
     key,
     w,
@@ -34,7 +37,8 @@ export function parseRaster(buf: ArrayBuffer, key: string): Raster {
     offset: dv.getFloat32(52, true),
     valid: dv.getFloat64(56, true),
     reference: dv.getFloat64(64, true),
-    data: new Uint16Array(buf, 80, w * h),
+    data: rgb ? new Uint16Array(0) : new Uint16Array(buf, 80, w * h),
+    rgba: rgb ? new Uint8Array(buf, 80, w * h * 4) : undefined,
     bytes: buf.byteLength,
   };
 }
@@ -51,7 +55,7 @@ export function rasterValue(r: Raster, lat: number, lon: number): number {
   const y = mercY(lat);
   const px = Math.floor(((x - r.x0) / (r.x1 - r.x0)) * r.w);
   const py = Math.floor(((y - r.y0) / (r.y1 - r.y0)) * r.h);
-  if (px < 0 || py < 0 || px >= r.w || py >= r.h) return NaN;
+  if (px < 0 || py < 0 || px >= r.w || py >= r.h || r.rgba) return NaN;
   const raw = r.data[py * r.w + px];
   return raw === 0 ? NaN : r.offset + (raw - 1) * r.scale;
 }

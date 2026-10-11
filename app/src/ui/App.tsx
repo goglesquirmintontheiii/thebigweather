@@ -10,16 +10,22 @@ import { Legend } from "./Legend";
 import { StatusBar, Crosshair, FpsMeter } from "./Readouts";
 import { StatsPanel } from "./StatsPanel";
 import { AlertDetail } from "./AlertDetail";
-import { Toasts, ContextMenu } from "./Overlays";
+import { Toasts, ContextMenu, AddCameraDialog } from "./Overlays";
 import { ConnectDialog } from "./ConnectDialog";
 import { useHotkeys } from "./hotkeys";
 import { openLocalFile } from "../radar/controller";
+import { OverlayPopup } from "./OverlayPopup";
+import { CameraPanels } from "./CameraPanels";
+import { importFile, isMapFile, loadFiles } from "../overlays/files";
+import "../overlays/iss";
+import "../overlays/mycams";
 
 export function App() {
   const mapEl = useRef<HTMLDivElement>(null);
   useEffect(() => {
     createMap(mapEl.current!);
     startAlerts();
+    loadFiles();
   }, []);
   useHotkeys();
   const noServer = settings.value.servers.length === 0;
@@ -30,8 +36,10 @@ export function App() {
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault();
-        const f = e.dataTransfer?.files?.[0];
-        if (f) openLocalFile(f);
+        for (const f of [...(e.dataTransfer?.files ?? [])]) {
+          if (isMapFile(f)) importFile(f);
+          else openLocalFile(f);
+        }
       }}
     >
       <div ref={mapEl} class="map" />
@@ -48,6 +56,9 @@ export function App() {
       <StatusBar />
       <StatsPanel />
       <AlertDetail />
+      <OverlayPopup />
+      <CameraPanels />
+      <AddCameraDialog />
       <ContextMenu />
       <Toasts />
       {noServer && <ConnectDialog />}

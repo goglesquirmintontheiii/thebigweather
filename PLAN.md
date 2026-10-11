@@ -142,8 +142,10 @@ Each phase ends with a working AppImage + server and a test checklist.
 
 ## Status
 - Phase 1: done, user-tested; fixes from testing shipped with Phase 2.
-- Phase 2: done (this build). Test with `docs/PHASE2_CHECKLIST.md`.
-- Next: Phase 3 (overlays).
+- Phase 2: done, user-tested; fixes shipped with Phase 3.
+- Phase 3: done (this build). Test with `docs/PHASE3_CHECKLIST.md`.
+- Deferred from Phase 3: Blitzortung (its terms forbid third-party apps without approval; GOES GLM is used instead); NOAA Weather Radio transmitter map (no official machine-readable list with coordinates; revisit with the Phase 4 radio menu); Spotter Network / chasers and mPING (need accounts, so they move to Phase 4 with the account-based features).
+- Next: Phase 4 (power features).
 
 ---
 

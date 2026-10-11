@@ -14,6 +14,13 @@ fn attr_str(v: &netcdf_reader::NcVariable, name: &str) -> Option<String> {
 
 /// Decode a CMIP file. `max_dim` decimates very large sectors (0.5 km visible).
 pub fn decode_cmip(bytes: &[u8], max_dim: usize) -> Result<Grid> {
+    let b = read_band(bytes, max_dim)?;
+    Ok(Grid::from_values(b.nx, b.ny, b.proj, &b.vals, b.time, b.time))
+}
+
+/// Decode a CMIP file to physical values (K or reflectance factor), decimated so the larger
+/// side is at most `max_dim` (0 = full resolution).
+pub fn read_band(bytes: &[u8], max_dim: usize) -> Result<super::rgb::Band> {
     let f = NcFile::from_bytes(bytes).map_err(|e| anyhow!("netcdf: {e}"))?;
     let cmi = f.variable("CMI").map_err(|e| anyhow!("no CMI: {e}"))?;
     let shape = cmi.shape();
@@ -26,17 +33,24 @@ pub fn decode_cmip(bytes: &[u8], max_dim: usize) -> Result<Grid> {
     let fill = attr_f64(cmi, "_FillValue").unwrap_or(-1.0) as i32;
     let unsigned = attr_str(cmi, "_Unsigned").map(|s| s == "true").unwrap_or(false);
     let raw: Vec<i16> = f.read_variable::<i16>("CMI").map_err(|e| anyhow!("read CMI: {e}"))?.into_raw_vec_and_offset().0;
-    let vals: Vec<f32> = raw
-        .iter()
-        .map(|&r| {
-            let ri = r as i32;
-            if ri == fill {
-                return f32::NAN;
-            }
-            let v = if unsigned { (r as u16) as f32 } else { r as f32 };
-            v * scale + offset
-        })
-        .collect();
+    // decimate while converting so huge sectors (0.5 km full disk) never exist as f32
+    let stride = if max_dim > 0 { nx.max(ny).div_ceil(max_dim) } else { 1 };
+    let (onx, ony) = (nx / stride, ny / stride);
+    let conv = |r: i16| -> f32 {
+        if r as i32 == fill {
+            return f32::NAN;
+        }
+        let v = if unsigned { (r as u16) as f32 } else { r as f32 };
+        v * scale + offset
+    };
+    let mut vals = Vec::with_capacity(onx * ony);
+    for j in 0..ony {
+        let row = &raw[j * stride * nx..];
+        for i in 0..onx {
+            vals.push(conv(row[i * stride]));
+        }
+    }
+    drop(raw);
 
     // fixed-grid coordinates: int16 * scale + offset (radians)
     let axis = |name: &str| -> Result<(f64, f64)> {
@@ -64,9 +78,14 @@ pub fn decode_cmip(bytes: &[u8], max_dim: usize) -> Result<Grid> {
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s.replace(".0Z", "Z")).ok().or_else(|| chrono::DateTime::parse_from_rfc3339(&s).ok()))
         .map(|d| d.timestamp_millis())
         .unwrap_or(0);
-    let g = Grid::from_values(nx, ny, proj, &vals, time, time);
-    let stride = if max_dim > 0 { nx.max(ny).div_ceil(max_dim) } else { 1 };
-    Ok(g.decimate(stride))
+    if stride <= 1 {
+        return Ok(super::rgb::Band { nx, ny, proj, vals, time });
+    }
+    let proj = match proj {
+        Proj::Geos { h, r_eq, r_pol, lon0, x0, dx, y0, dy } => Proj::Geos { h, r_eq, r_pol, lon0, x0, dx: dx * stride as f64, y0, dy: dy * stride as f64 },
+        p => p,
+    };
+    Ok(super::rgb::Band { nx: onx, ny: ony, proj, vals, time })
 }
 
 /// Start time from an ABI file name: ..._sYYYYJJJHHMMSSt_...

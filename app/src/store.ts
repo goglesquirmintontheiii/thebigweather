@@ -18,7 +18,39 @@ export interface SavedPoint {
   notify: boolean;
 }
 
-export type Basemap = "dark" | "light" | "road" | "darkroad" | "terrain" | "satellite" | "google" | "offline";
+export type Basemap = "dark" | "light" | "road" | "darkroad" | "terrain" | "satellite" | "google" | "offline" | `custom:${string}`;
+
+/** A user-supplied raster tile source ({s} subdomains, {x} {y} {z}). */
+export interface CustomBasemap {
+  id: string;
+  name: string;
+  url: string;
+  subdomains: string;
+  minzoom: number;
+  maxzoom: number;
+  dark: boolean;
+}
+
+/** Per-overlay state: on/off, style overrides and overlay-specific options. */
+export interface OvlSettings {
+  on?: boolean;
+  color?: string;
+  opacity?: number;
+  size?: number;
+  labels?: boolean;
+  opts?: Record<string, string>;
+}
+
+/** A camera or stream the user placed on the map (YouTube, HLS, image or web page). */
+export interface MyCam {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  url: string;
+  /** link this stream to a ship (name or MMSI) instead of a map position */
+  ship?: string;
+}
 
 /** The single visible weather layer. */
 export type WeatherSel =
@@ -39,6 +71,9 @@ export interface Settings {
   extraSites: string[];
   showFps: boolean;
   version: number;
+  ovl: Record<string, OvlSettings>;
+  customBasemaps: CustomBasemap[];
+  myCams: MyCam[];
   overlays: { alerts: boolean; sites: boolean; counties: boolean; states: boolean; points: boolean; rings: boolean; labels: boolean };
   radar: {
     site: string;
@@ -75,6 +110,9 @@ const DEFAULTS: Settings = {
   extraSites: [],
   showFps: true,
   version: 2,
+  ovl: {},
+  customBasemaps: [],
+  myCams: [],
   overlays: { alerts: true, sites: true, counties: true, states: true, points: true, rings: false, labels: true },
   radar: { site: "KTLX", source: "L2", product: "REF", tiltAngle: 0.5, frames: 12, live: false, smooth: false, opacity: 0.9 },
   tables: {},

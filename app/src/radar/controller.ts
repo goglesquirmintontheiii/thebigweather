@@ -65,7 +65,7 @@ export const L2_MOMENTS = [
 export const sites = signal<Site[]>([]);
 export const l3Products = signal<L3Product[]>([]);
 export const frames = signal<Frame[]>([]);
-import { frameIndex, playing, frameCount } from "../anim";
+import { frameIndex, playing, frameCount, setFrameReady } from "../anim";
 export { frameIndex, playing };
 export const loading = signal(false);
 export const radarError = signal<string | null>(null);
@@ -79,7 +79,17 @@ export const showRadar = signal(true);
 export const pinned = signal<{ key: string; time: number }[] | null>(null);
 
 export const currentSite = computed(() => sites.value.find((s) => s.id === settings.value.radar.site));
-export const currentFrame = computed(() => frames.value[frameIndex.value]);
+/** The frame on screen: if the selected one has no data (still loading, or this volume lacks the
+ * tilt), hold the nearest earlier frame that does instead of going blank. */
+export const currentFrame = computed(() => {
+  const fs = frames.value;
+  const i = Math.min(frameIndex.value, fs.length - 1);
+  if (i < 0) return undefined;
+  if (fs[i]?.sweep) return fs[i];
+  for (let k = i - 1; k >= 0; k--) if (fs[k].sweep) return fs[k];
+  for (let k = i + 1; k < fs.length; k++) if (fs[k].sweep) return fs[k];
+  return fs[i];
+});
 
 /** The sweep under the user's eye: live partial overlay wins when on the newest frame. */
 export const displaySweep = computed<Sweep | undefined>(() => {
@@ -439,7 +449,10 @@ api.on("live_volume", (m) => {
 // ---------- animation ----------
 export { togglePlay } from "../anim";
 effect(() => {
-  if (settings.value.weather.kind === "radar") frameCount.value = frames.value.length;
+  if (settings.value.weather.kind === "radar") {
+    frameCount.value = frames.value.length;
+    setFrameReady((i) => !!frames.value[i]?.sweep);
+  }
 });
 
 // ---------- triggers ----------

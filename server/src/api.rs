@@ -39,6 +39,7 @@ pub struct AppState {
     pub stats: Arc<RwLock<Stats>>,
     pub started: Instant,
     pub grids: Arc<crate::grid::service::GridService>,
+    pub overlays: Arc<crate::overlays::Overlays>,
 }
 
 type St = State<Arc<AppState>>;
@@ -142,6 +143,8 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/grid/render", get(grid_render))
         .route("/grid/value", get(grid_value))
         .route("/metars", get(metars))
+        .route("/ovl/{id}", get(overlay))
+        .route("/camimg", get(camimg))
         .route("/ws", get(ws))
         .layer(DefaultBodyLimit::max(400 * 1024 * 1024))
         .route_layer(middleware::from_fn_with_state(st.clone(), auth));
@@ -369,6 +372,32 @@ async fn ws_conn(st: Arc<AppState>, mut sock: WebSocket) {
 async fn local_check(State(st): St, req: Request) -> Json<Value> {
     let local = st.cfg.read().server.local_no_auth && is_local(&req);
     Json(json!({"local": local, "name": st.cfg.read().server.name}))
+}
+
+async fn overlay(State(st): St, Path(id): Path<String>, Query(q): Query<std::collections::BTreeMap<String, String>>) -> Result<Response, ApiError> {
+    let mut q = q;
+    q.remove("token");
+    let key = st.cfg.read().keys.get("aisstream").cloned().unwrap_or_default();
+    let b = st.overlays.get(&id, &q, &key).await?;
+    let mut r = Response::new(Body::from(b));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(r)
+}
+
+#[derive(Deserialize)]
+struct CamQ {
+    id: String,
+}
+
+/// Redirect to a camera's current image (for sources whose image links expire).
+async fn camimg(State(st): St, Query(q): Query<CamQ>) -> Result<Response, ApiError> {
+    let url = crate::overlays::cameras::image_url(&st.overlays, &q.id).await?;
+    let mut r = Response::new(Body::empty());
+    *r.status_mut() = StatusCode::FOUND;
+    r.headers_mut().insert(header::LOCATION, HeaderValue::from_str(&url).map_err(|_| bad("bad url"))?);
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(r)
 }
 
 async fn grid_catalog(State(st): St) -> Json<Value> {

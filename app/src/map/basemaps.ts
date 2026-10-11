@@ -2,7 +2,7 @@
 // (labels, roads), like RadarOmega keeps place names readable over storms.
 
 import type { StyleSpecification, LayerSpecification, SourceSpecification } from "maplibre-gl";
-import type { Basemap } from "../store";
+import type { Basemap, CustomBasemap } from "../store";
 
 export const BASEMAPS: { id: Basemap; name: string; needsKey?: string }[] = [
   { id: "dark", name: "Dark" },
@@ -22,7 +22,7 @@ const OFM_ATTR = '<a href="https://openfreemap.org">OpenFreeMap</a> © <a href="
 
 const raster = (tiles: string[], attribution: string, maxzoom = 19, tileSize = 256): SourceSpecification => ({ type: "raster", tiles, tileSize, attribution, maxzoom });
 
-const BG: Record<Basemap, string> = {
+const BG: Record<string, string> = {
   dark: "#0b0e13",
   light: "#e9ecef",
   road: "#f2efe9",
@@ -33,8 +33,16 @@ const BG: Record<Basemap, string> = {
   offline: "#0b1016",
 };
 
-export function isDarkBasemap(b: Basemap) {
+export function isDarkBasemap(b: Basemap, custom?: CustomBasemap[]) {
+  if (b.startsWith("custom:")) return custom?.find((c) => `custom:${c.id}` === b)?.dark ?? true;
   return ["dark", "darkroad", "satellite", "google", "offline"].includes(b);
+}
+
+/** Expand a {s} template over its subdomains ("abc" or "mt0,mt1"). */
+export function customTiles(c: CustomBasemap): string[] {
+  if (!c.url.includes("{s}")) return [c.url];
+  const subs = c.subdomains.includes(",") ? c.subdomains.split(",").map((x) => x.trim()).filter(Boolean) : c.subdomains.trim().split("");
+  return (subs.length ? subs : ["a", "b", "c"]).map((s) => c.url.replace("{s}", s));
 }
 
 /** Offline land/borders, always available (bundled with the app). */
@@ -150,14 +158,14 @@ function vectorLayers(t: Theme, labels: boolean): LayerSpecification[] {
   return out;
 }
 
-export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey?: string; labels: boolean; provider?: "openfreemap" | "carto" }): StyleSpecification {
-  const dark = isDarkBasemap(b);
+export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey?: string; labels: boolean; provider?: "openfreemap" | "carto"; custom?: CustomBasemap[] }): StyleSpecification {
+  const dark = isDarkBasemap(b, opts.custom);
   const off = offlineLayers(dark);
   const style: StyleSpecification = {
     version: 8,
     glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
     sources: { ...off.sources },
-    layers: [{ id: "base-bg", type: "background", paint: { "background-color": BG[b] } }, ...off.layers],
+    layers: [{ id: "base-bg", type: "background", paint: { "background-color": BG[b as keyof typeof BG] ?? (dark ? "#0b0e13" : "#e9ecef") } }, ...off.layers],
   };
   const addRaster = (id: string, src: SourceSpecification, top = false, paint: Record<string, unknown> = {}) => {
     style.sources[id] = src;
@@ -169,6 +177,16 @@ export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey
     style.layers.push(...vectorLayers(t, opts.labels));
   };
   const useOfm = (opts.provider ?? "openfreemap") === "openfreemap";
+  if (b.startsWith("custom:")) {
+    const c = opts.custom?.find((x) => `custom:${x.id}` === b);
+    if (c) {
+      style.sources.custom = { type: "raster", tiles: customTiles(c), tileSize: 256, minzoom: c.minzoom, maxzoom: c.maxzoom, attribution: c.name };
+      style.layers.push({ id: "base-custom", type: "raster", source: "custom" } as LayerSpecification);
+      // keep place names readable on top when labels are on
+      if (opts.labels) addRaster("labels", raster(carto(dark ? "dark_only_labels" : "voyager_only_labels"), CARTO_ATTR, 20, 512), true);
+    }
+    return style;
+  }
   if (useOfm && (b === "dark" || b === "light" || b === "road")) {
     ofm(THEMES[b]);
     return style;

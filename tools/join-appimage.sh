@@ -3,18 +3,23 @@
 # Usage: put this next to the 5 part zips (and SHA256.txt), then: bash join-appimage.sh
 set -euo pipefail
 cd "$(dirname "$0")"
-name=TheBigWeather-0.2.1-x86_64.AppImage
+first=$(ls -1 TheBigWeather-*-x86_64.AppImage.part0.zip 2>/dev/null | sort -V | tail -1)
+[ -n "$first" ] || { echo "Put this script next to the TheBigWeather-…AppImage.partN.zip files"; exit 1; }
+name=${first%.part0.zip}
 tmp=$(mktemp -d)
-for i in 0 1 2 3 4; do
+n=$(ls -1 "$name".part*.zip | wc -l)
+for i in $(seq 0 $((n - 1))); do
   z="$name.part$i.zip"
   [ -f "$z" ] || { echo "Missing $z"; exit 1; }
   unzip -o -q "$z" -d "$tmp"
 done
 # join the raw parts only, in order (never the .zip files)
-cat "$tmp/$name.part0" "$tmp/$name.part1" "$tmp/$name.part2" "$tmp/$name.part3" "$tmp/$name.part4" > "$name"
+: > "$name"
+for i in $(seq 0 $((n - 1))); do cat "$tmp/$name.part$i" >> "$name"; done
 rm -rf "$tmp"
 chmod +x "$name"
-want=$(cut -d' ' -f1 SHA256.txt 2>/dev/null || true)
+want=$(grep -F "$name" SHA256.txt 2>/dev/null | cut -d' ' -f1 || true)
+[ -n "$want" ] || want=$(head -1 SHA256.txt 2>/dev/null | cut -d' ' -f1 || true)
 got=$(sha256sum "$name" | cut -d' ' -f1)
 if [ -n "$want" ] && [ "$want" != "$got" ]; then
   echo "Checksum mismatch: a part is incomplete. Re-download the parts and run again."

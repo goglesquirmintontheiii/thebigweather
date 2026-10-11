@@ -7,6 +7,7 @@
 
 pub mod decode;
 pub mod goes;
+pub mod rgb;
 pub mod metar;
 pub mod service;
 pub mod sources;
@@ -222,39 +223,8 @@ impl Grid {
     /// Sample onto a Web Mercator raster. bbox = (x0, y0, x1, y1) in 0..1 mercator units.
     /// Output keeps this grid's quantization (raw 0 = no data).
     pub fn render(&self, bbox: (f64, f64, f64, f64), w: usize, h: usize) -> Vec<u16> {
-        let (x0, y0, x1, y1) = bbox;
-        let lon_of = |px: usize| -> f64 { (x0 + (px as f64 + 0.5) / w as f64 * (x1 - x0)) * 360.0 - 180.0 };
-        let lat_of = |py: usize| -> f64 {
-            let y = y0 + (py as f64 + 0.5) / h as f64 * (y1 - y0);
-            (std::f64::consts::PI * (1.0 - 2.0 * y)).sinh().atan().to_degrees()
-        };
-        let mut out = vec![0u16; w * h];
-        match self.proj {
-            Proj::LatLon { .. } => {
-                // separable: columns depend only on lon, rows only on lat
-                let cols: Vec<isize> = (0..w)
-                    .map(|px| self.proj.ij(0.0, lon_of(px)).map(|(i, _)| i.round() as isize).unwrap_or(-1))
-                    .collect();
-                out.par_chunks_mut(w).enumerate().for_each(|(py, row)| {
-                    let j = self.proj.ij(lat_of(py), 0.0).map(|(_, j)| j.round() as isize).unwrap_or(-1);
-                    for (px, o) in row.iter_mut().enumerate() {
-                        *o = self.at(cols[px], j);
-                    }
-                });
-            }
-            _ => {
-                let lons: Vec<f64> = (0..w).map(lon_of).collect();
-                out.par_chunks_mut(w).enumerate().for_each(|(py, row)| {
-                    let lat = lat_of(py);
-                    for (px, o) in row.iter_mut().enumerate() {
-                        if let Some((fi, fj)) = self.proj.ij(lat, lons[px]) {
-                            *o = self.at(fi.round() as isize, fj.round() as isize);
-                        }
-                    }
-                });
-            }
-        }
-        out
+        let idx = sample_indices(&self.proj, self.nx, self.ny, bbox, w, h);
+        idx.par_iter().map(|&i| if i == u32::MAX { 0 } else { self.data[i as usize] }).collect()
     }
 
     /// Reduce resolution by an integer stride (keeps memory in check for huge grids).
@@ -280,6 +250,49 @@ impl Grid {
     }
 }
 
+/// For each pixel of a Web Mercator viewport (bbox in 0..1 mercator units), the index of the
+/// nearest source cell in a grid of `nx`×`ny` in `proj` (u32::MAX = outside).
+pub fn sample_indices(proj: &Proj, nx: usize, ny: usize, bbox: (f64, f64, f64, f64), w: usize, h: usize) -> Vec<u32> {
+    let (x0, y0, x1, y1) = bbox;
+    let lon_of = |px: usize| -> f64 { (x0 + (px as f64 + 0.5) / w as f64 * (x1 - x0)) * 360.0 - 180.0 };
+    let lat_of = |py: usize| -> f64 {
+        let y = y0 + (py as f64 + 0.5) / h as f64 * (y1 - y0);
+        (std::f64::consts::PI * (1.0 - 2.0 * y)).sinh().atan().to_degrees()
+    };
+    let at = |i: isize, j: isize| -> u32 {
+        if i < 0 || j < 0 || i as usize >= nx || j as usize >= ny {
+            u32::MAX
+        } else {
+            (j as usize * nx + i as usize) as u32
+        }
+    };
+    let mut out = vec![u32::MAX; w * h];
+    match proj {
+        Proj::LatLon { .. } => {
+            // separable: columns depend only on lon, rows only on lat
+            let cols: Vec<isize> = (0..w).map(|px| proj.ij(0.0, lon_of(px)).map(|(i, _)| i.round() as isize).unwrap_or(-1)).collect();
+            out.par_chunks_mut(w).enumerate().for_each(|(py, row)| {
+                let j = proj.ij(lat_of(py), 0.0).map(|(_, j)| j.round() as isize).unwrap_or(-1);
+                for (px, o) in row.iter_mut().enumerate() {
+                    *o = at(cols[px], j);
+                }
+            });
+        }
+        _ => {
+            let lons: Vec<f64> = (0..w).map(lon_of).collect();
+            out.par_chunks_mut(w).enumerate().for_each(|(py, row)| {
+                let lat = lat_of(py);
+                for (px, o) in row.iter_mut().enumerate() {
+                    if let Some((fi, fj)) = proj.ij(lat, lons[px]) {
+                        *o = at(fi.round() as isize, fj.round() as isize);
+                    }
+                }
+            });
+        }
+    }
+    out
+}
+
 /// Binary raster sent to apps ("TBWG"), little-endian:
 /// 0 "TBWG", 4 u16 version, 6 u16 flags, 8 u32 w, 12 u32 h,
 /// 16 f64 x0, 24 f64 y0, 32 f64 x1, 40 f64 y1 (mercator 0..1),
@@ -303,6 +316,26 @@ pub fn encode_raster(g: &Grid, bbox: (f64, f64, f64, f64), w: usize, h: usize, d
     for v in data {
         out.extend_from_slice(&v.to_le_bytes());
     }
+    out
+}
+
+/// RGBA raster ("TBWG" with flags bit 0 set): same 80-byte header, then w*h*4 bytes.
+pub fn encode_rgba(time: i64, bbox: (f64, f64, f64, f64), w: usize, h: usize, rgba: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(80 + rgba.len());
+    out.extend_from_slice(b"TBWG");
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&(w as u32).to_le_bytes());
+    out.extend_from_slice(&(h as u32).to_le_bytes());
+    for v in [bbox.0, bbox.1, bbox.2, bbox.3] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&1f32.to_le_bytes());
+    out.extend_from_slice(&0f32.to_le_bytes());
+    out.extend_from_slice(&(time as f64).to_le_bytes());
+    out.extend_from_slice(&(time as f64).to_le_bytes());
+    out.extend_from_slice(&[0u8; 8]);
+    out.extend_from_slice(rgba);
     out
 }
 

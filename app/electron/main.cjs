@@ -1,5 +1,5 @@
 // Electron shell for TheBigWeather.
-const { app, BrowserWindow, ipcMain, shell, screen, nativeTheme, protocol, net } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, screen, nativeTheme, protocol, net, session } = require("electron");
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -134,7 +134,28 @@ app.on("second-instance", () => {
     win.focus();
   }
 });
+/** Camera streams and embeds: public HLS servers rarely send CORS headers, and YouTube embeds
+ * need an http(s) referrer, which an app:// page doesn't have. */
+function setupMediaHeaders() {
+  const ses = session.defaultSession;
+  ses.webRequest.onBeforeSendHeaders({ urls: ["*://*.youtube.com/*", "*://*.youtube-nocookie.com/*", "*://*.googlevideo.com/*"] }, (d, cb) => {
+    const h = d.requestHeaders;
+    if (!h.Referer && !h.referer) h.Referer = "https://thebigweather.app/";
+    cb({ requestHeaders: h });
+  });
+  const media = /\.(m3u8|ts|m4s|aac|mp4|key|vtt)(\?|$)/i;
+  ses.webRequest.onHeadersReceived((d, cb) => {
+    const h = d.responseHeaders || {};
+    const has = Object.keys(h).some((k) => k.toLowerCase() === "access-control-allow-origin");
+    if (!has && (media.test(d.url) || d.resourceType === "media" || /mpegurl/i.test(String(h["content-type"] || h["Content-Type"] || "")))) {
+      h["Access-Control-Allow-Origin"] = ["*"];
+    }
+    cb({ responseHeaders: h });
+  });
+}
+
 app.whenReady().then(() => {
+  setupMediaHeaders();
   protocol.handle("app", (req) => {
     const u = new URL(req.url);
     let p = path.normalize(decodeURIComponent(u.pathname)).replace(/^([/\\])+/, "");

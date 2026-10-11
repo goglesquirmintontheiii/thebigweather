@@ -3,6 +3,7 @@
 use super::decode::{self, maybe_gunzip, DecodeOpts, MessageInfo};
 use super::metar::{self, Obs};
 use super::sources::{self, LayerDef, Match};
+use super::rgb::{self, RgbImage};
 use super::{encode_raster, goes, Grid};
 use crate::health::Health;
 use crate::s3;
@@ -79,6 +80,7 @@ pub struct GridService {
     inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     max_dim_mrms: usize,
     max_dim_goes: usize,
+    rgbs: Mutex<lru::LruCache<String, Arc<RgbImage>>>,
     /// optional folder of local files used as frames (offline use / case studies):
     /// files are named "<layer id with / as _>__<original name>"
     pub local_dir: RwLock<Option<PathBuf>>,
@@ -111,6 +113,7 @@ impl GridService {
             inflight: Mutex::new(HashMap::new()),
             max_dim_mrms: if full { 7000 } else { 3500 },
             max_dim_goes: if full { 5424 } else { 2712 },
+            rgbs: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(if full { 16 } else { 5 }).unwrap())),
             local_dir: RwLock::new(None),
         })
     }
@@ -530,7 +533,12 @@ impl GridService {
         let mut p = l.product.split('|');
         let sat: u32 = p.next().unwrap_or("19").parse()?;
         let sector = p.next().unwrap_or("conus");
-        let band: u32 = p.next().unwrap_or("13").parse()?;
+        let band_s = p.next().unwrap_or("13");
+        let rgb_recipe = band_s.strip_prefix("rgb:").and_then(rgb::recipe);
+        let band: u32 = match rgb_recipe {
+            Some(r) => r.base as u32,
+            None => band_s.parse()?,
+        };
         let (_, _, dir, tag, _) = sources::GOES_SECTORS.iter().find(|s| s.0 == sat && s.1 == sector).ok_or_else(|| anyhow!("unknown sector"))?;
         let bucket = format!("noaa-goes{sat}");
         let now = Utc::now();
@@ -553,7 +561,11 @@ impl GridService {
         let k = keys.len().saturating_sub(n);
         let frames = keys[k..]
             .iter()
-            .map(|o| FrameInfo { key: format!("goes|{}|{bucket}|{}", l.id, o.key), time: goes::time_from_name(&o.key).unwrap_or(0), label: String::new() })
+            .map(|o| FrameInfo {
+                key: format!("{}|{}|{bucket}|{}", if rgb_recipe.is_some() { "goesrgb" } else { "goes" }, l.id, o.key),
+                time: goes::time_from_name(&o.key).unwrap_or(0),
+                label: String::new(),
+            })
             .collect();
         Ok(FramesResp { frames, ..Default::default() })
     }
@@ -738,7 +750,72 @@ impl GridService {
 
     // ---------- render ----------
 
+    /// RGB composite for a `goesrgb|layer|bucket|base-band-key` frame.
+    pub async fn rgb(&self, key: &str) -> Result<Arc<RgbImage>> {
+        if let Some(i) = self.rgbs.lock().get(key) {
+            return Ok(i.clone());
+        }
+        let lock = self.inflight.lock().entry(key.to_string()).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone();
+        let _g = lock.lock().await;
+        if let Some(i) = self.rgbs.lock().get(key) {
+            return Ok(i.clone());
+        }
+        let res = self.load_rgb(key).await;
+        self.inflight.lock().remove(key);
+        let img = Arc::new(res?);
+        self.rgbs.lock().put(key.to_string(), img.clone());
+        Ok(img)
+    }
+
+    async fn load_rgb(&self, key: &str) -> Result<RgbImage> {
+        let parts: Vec<&str> = key.split('|').collect();
+        if parts.len() != 4 {
+            bail!("bad rgb key");
+        }
+        let l = self.layer(parts[1])?.clone();
+        let recipe = l.product.split('|').nth(2).and_then(|p| p.strip_prefix("rgb:")).and_then(rgb::recipe).ok_or_else(|| anyhow!("unknown composite"))?;
+        let (bucket, base_key) = (parts[2], parts[3]);
+        let sat = l.product.split('|').next().unwrap_or("19");
+        // the hour's listing has every band; match files by scan start time
+        let name = base_key.rsplit('/').next().unwrap_or("");
+        let start = name.split('_').find(|p| p.starts_with('s')).ok_or_else(|| anyhow!("bad file name"))?;
+        let mpos = base_key.rfind("-M").ok_or_else(|| anyhow!("bad file name"))?;
+        let prefix = &base_key[..mpos + 2];
+        let objs = self.list_cached(bucket, prefix, 45).await?;
+        let mut futs = vec![];
+        for &b in recipe.bands {
+            let want = format!("C{b:02}_G{sat}_{start}");
+            let obj = objs.iter().find(|o| o.key.contains(&want)).ok_or_else(|| anyhow!("band {b} not published yet for this scan"))?;
+            let url = s3::object_url(bucket, &obj.key);
+            futs.push(async move { (b, self.fetch(&url, None, true).await) });
+        }
+        let got = futures::future::join_all(futs).await;
+        let md = self.max_dim_goes;
+        let mut files = vec![];
+        for (b, r) in got {
+            files.push((b, r?));
+        }
+        self.blocking(move || {
+            let mut bands: [Option<rgb::Band>; 17] = Default::default();
+            for (b, bytes) in files {
+                bands[b as usize] = Some(goes::read_band(&bytes, md)?);
+            }
+            rgb::compose(recipe, &bands)
+        })
+        .await
+    }
+
     pub async fn render(&self, key: &str, bbox: (f64, f64, f64, f64), w: usize, h: usize) -> Result<Bytes> {
+        if key.starts_with("goesrgb|") {
+            let img = self.rgb(key).await?;
+            let out = self
+                .blocking(move || {
+                    let data = img.render(bbox, w, h);
+                    Ok(crate::radar::encode::zstd(&super::encode_rgba(img.time, bbox, w, h, &data)))
+                })
+                .await?;
+            return Ok(Bytes::from(out));
+        }
         let g = self.grid(key).await?;
         let out = self
             .blocking(move || {
@@ -750,6 +827,9 @@ impl GridService {
     }
 
     pub async fn value(&self, key: &str, lat: f64, lon: f64) -> Result<Option<f32>> {
+        if key.starts_with("goesrgb|") {
+            return Ok(None);
+        }
         Ok(self.grid(key).await?.sample(lat, lon))
     }
 

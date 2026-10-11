@@ -4,7 +4,8 @@ import * as maplibregl from "maplibre-gl";
 import type { Map as MLMap, GeoJSONSource } from "maplibre-gl";
 import { signal, effect } from "@preact/signals";
 import { settings, update, tool, crosshair, toast, selectedAlert, uid } from "../store";
-import { buildStyle, googleSession } from "./basemaps";
+import { buildStyle, googleSession, isDarkBasemap } from "./basemaps";
+import { attachOverlays, pickOverlay, popup } from "../overlays/manager";
 import { RadarLayer } from "../radar/RadarLayer";
 import { attachLayer, sites, currentSite, displaySweep, selectSite, activeTable, liveSweep, frames, liveState, extraFrames } from "../radar/controller";
 import { GridLayer } from "../grid/GridLayer";
@@ -50,7 +51,7 @@ async function styleFor() {
       toast(e.message, "warn");
     }
   }
-  return buildStyle(s.basemap, { googleSession: session, googleKey: key, labels: s.overlays.labels, provider: s.basemapProvider });
+  return buildStyle(s.basemap, { googleSession: session, googleKey: key, labels: s.overlays.labels, provider: s.basemapProvider, custom: s.customBasemaps });
 }
 
 function firstTopLayer(map: MLMap): string | undefined {
@@ -61,7 +62,7 @@ function addOverlays(map: MLMap) {
   const before = firstTopLayer(map);
   if (!map.getLayer(gridLayer.id)) map.addLayer(gridLayer, before);
   if (!map.getLayer(radarLayer.id)) map.addLayer(radarLayer, before);
-  const dark = ["dark", "darkroad", "satellite", "google", "offline"].includes(settings.value.basemap);
+  const dark = isDarkBasemap(settings.value.basemap, settings.value.customBasemaps);
   map.addSource("counties", { type: "geojson", data: "geo/counties.json" });
   map.addSource("states", { type: "geojson", data: "geo/states.json" });
   map.addLayer({ id: "ovl-counties", type: "line", source: "counties", minzoom: 5, paint: { "line-color": dark ? "#8a96a6" : "#6b7280", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.3, 10, 1], "line-opacity": 0.55 } }, before);
@@ -108,34 +109,122 @@ function addOverlays(map: MLMap) {
   rebuildGibs();
 }
 
+// RapidSweep beam: live events arrive every few seconds, so the beam is extrapolated from the
+// measured rotation rate and eased toward each new report instead of jumping.
+const beam = { az: 0, rate: 0, lastAz: NaN, lastT: 0, shown: NaN, raf: 0, key: "" };
+
+function angDiff(a: number, b: number) {
+  return ((a - b + 540) % 360) - 180;
+}
+
+function sweepActive() {
+  const l = liveState.value;
+  const r = settings.value.radar;
+  const onLatest = frameIndex.value >= frames.value.length - 1;
+  return !!(l && l.az !== undefined && !l.complete && r.live && r.source === "L2" && settings.value.weather.kind === "radar" && onLatest && currentSite.value);
+}
+
 function refreshSweepLine(map: MLMap) {
   const src = map.getSource("sweepline") as GeoJSONSource | undefined;
   if (!src) return;
   const l = liveState.value;
-  const r = settings.value.radar;
-  const onLatest = frameIndex.value >= frames.value.length - 1;
-  const site = currentSite.value;
-  if (!l || l.az === undefined || l.complete || !r.live || r.source !== "L2" || settings.value.weather.kind !== "radar" || !onLatest || !site) {
+  if (!sweepActive() || !l) {
     src.setData(EMPTY);
+    cancelAnimationFrame(beam.raf);
+    beam.raf = 0;
+    beam.shown = NaN;
     return;
   }
+  // new report: update the rotation-rate estimate (degrees per ms, clockwise)
+  const now = performance.now();
+  if (l.key !== beam.key) {
+    beam.key = l.key;
+    beam.lastAz = NaN;
+    beam.rate = 0;
+  }
+  if (l.az !== beam.lastAz) {
+    if (!Number.isNaN(beam.lastAz) && beam.lastT) {
+      const d = angDiff(l.az!, beam.lastAz);
+      const dt = now - beam.lastT;
+      if (d > 0 && dt > 200 && dt < 30_000) {
+        const r = d / dt;
+        beam.rate = beam.rate ? beam.rate * 0.6 + r * 0.4 : r;
+      }
+    }
+    beam.lastAz = l.az!;
+    beam.lastT = now;
+  }
+  if (!beam.raf) {
+    let lastDraw = 0;
+    const tick = () => {
+      beam.raf = 0;
+      if (!sweepActive()) return refreshSweepLine(map);
+      const t = performance.now();
+      // predict where the antenna is now, but never more than ~6 s past the last report
+      const ahead = Math.min(t - beam.lastT, 6000);
+      const target = (beam.lastAz + beam.rate * ahead + 360) % 360;
+      if (Number.isNaN(beam.shown)) beam.shown = target;
+      else {
+        const d = angDiff(target, beam.shown);
+        // ease toward the prediction; snap if far off (new tilt)
+        beam.shown = Math.abs(d) > 45 ? target : (beam.shown + d * 0.25 + 360) % 360;
+      }
+      if (t - lastDraw > 33) {
+        lastDraw = t;
+        drawBeam(map, beam.shown);
+      }
+      beam.raf = requestAnimationFrame(tick);
+    };
+    beam.raf = requestAnimationFrame(tick);
+  }
+}
+
+function drawBeam(map: MLMap, az: number) {
+  const src = map.getSource("sweepline") as GeoJSONSource | undefined;
+  const l = liveState.value;
+  const site = currentSite.value;
+  if (!src || !l || !site) return;
   // the decoder only knows the site position once a metadata record arrived; the site list always does
   const lat = l.lat && Math.abs(l.lat) > 0.1 ? l.lat : site.lat;
   const lon = l.lon && Math.abs(l.lon) > 0.1 ? l.lon : site.lon;
-  const end = destination(lat, lon, l.az, 250_000);
-  // trailing wedge of the last few degrees for a sense of direction
-  const trail: [number, number][] = [[lon, lat]];
-  for (let k = 0; k <= 6; k++) trail.push(destination(lat, lon, l.az - k * 1.5, 250_000));
+  const end = destination(lat, lon, az, 250_000);
+  // trailing arc of the last few degrees for a sense of direction
+  const trail: [number, number][] = [];
+  for (let k = 0; k <= 8; k++) trail.push(destination(lat, lon, az - k * 1.2, 250_000));
   src.setData({
     type: "FeatureCollection",
     features: [
       { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [[lon, lat], end] } },
-      { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: trail.slice(1) } },
+      { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: trail } },
     ],
   } as any);
 }
 
+/** Colors/widths for the built-in map overlays (Layers → gear). */
+function refreshBaseStyles(map: MLMap) {
+  const dark = isDarkBasemap(settings.value.basemap, settings.value.customBasemaps);
+  const st = (k: string) => settings.value.ovl[`base:${k}`] ?? {};
+  const set = (id: string, prop: string, v: any) => map.getLayer(id) && map.setPaintProperty(id, prop as any, v);
+  const c = st("counties");
+  set("ovl-counties", "line-color", c.color ?? (dark ? "#8a96a6" : "#6b7280"));
+  set("ovl-counties", "line-opacity", c.opacity ?? 0.55);
+  set("ovl-counties", "line-width", ["interpolate", ["linear"], ["zoom"], 5, 0.3 * (c.size ?? 1), 10, 1 * (c.size ?? 1)]);
+  const s = st("states");
+  set("ovl-states", "line-color", s.color ?? (dark ? "#c9d1d9" : "#374151"));
+  set("ovl-states", "line-opacity", s.opacity ?? 1);
+  set("ovl-states", "line-width", ["interpolate", ["linear"], ["zoom"], 3, 0.7 * (s.size ?? 1), 10, 2 * (s.size ?? 1)]);
+  const a = st("alerts");
+  const ao = a.opacity ?? 1;
+  set("ovl-alerts-fill", "fill-opacity", ["*", ao, ["case", ["boolean", ["feature-state", "hover"], false], 0.28, ["match", ["get", "kind"], "warning", 0.14, 0.07]]]);
+  set("ovl-alerts-line", "line-opacity", ao);
+  set("ovl-alerts-casing", "line-opacity", 0.7 * ao);
+  const r = st("rings");
+  set("ovl-rings", "line-color", r.color ?? "#9fb3c8");
+  set("ovl-rings", "line-opacity", r.opacity ?? 0.55);
+}
+
 function refreshOverlayVisibility(map: MLMap) {
+  refreshBaseStyles(map);
   const o = settings.value.overlays;
   const vis = (id: string, v: boolean) => map.getLayer(id) && map.setLayoutProperty(id, "visibility", v ? "visible" : "none");
   vis("ovl-counties", o.counties);
@@ -267,7 +356,7 @@ export function createMap(container: HTMLElement): MLMap {
   const s = settings.value;
   const map = new maplibregl.Map({
     container,
-    style: buildStyle(s.basemap === "google" ? "satellite" : s.basemap, { labels: s.overlays.labels, provider: s.basemapProvider }),
+    style: buildStyle(s.basemap === "google" ? "satellite" : s.basemap, { labels: s.overlays.labels, provider: s.basemapProvider, custom: s.customBasemaps }),
     center: s.view.center,
     zoom: s.view.zoom,
     attributionControl: { compact: true },
@@ -277,7 +366,6 @@ export function createMap(container: HTMLElement): MLMap {
     fadeDuration: 0,
     // arrow keys step frames / tilts instead of panning
     keyboard: false,
-    maxTileCacheSize: 400,
   } as any);
   map.touchZoomRotate.disableRotation();
   radarLayer = new RadarLayer();
@@ -286,6 +374,7 @@ export function createMap(container: HTMLElement): MLMap {
   attachGrid(gridLayer, map);
   attachGibs(map, () => (map.getLayer("grid") ? "grid" : firstTopLayer(map)));
   mapRef.value = map;
+  attachOverlays(map);
   (window as any).__tbw = { map, radarLayer, gridLayer, liveSweep, frames, liveState, extraFrames };
 
   // FPS: count rendered map frames per second
@@ -347,10 +436,13 @@ export function createMap(container: HTMLElement): MLMap {
 
   map.on("click", (e) => {
     contextMenu.value = null;
+    popup.value = null;
     if (tool.value === "measure") {
       measurePts.value = [...measurePts.value, [e.lngLat.lng, e.lngLat.lat]];
       return;
     }
+    // overlay features (reports, cameras, stations…) take priority over alert polygons
+    if (pickOverlay(e)) return;
     const feats = map.queryRenderedFeatures(e.point, { layers: ["ovl-alerts-fill"] });
     if (feats.length) {
       // queryRenderedFeatures returns the top-most (highest priority) polygon first
@@ -369,10 +461,10 @@ export function createMap(container: HTMLElement): MLMap {
   });
 
   // reactive refreshes
-  let lastStyleSig = `${s.basemap}|${s.overlays.labels}|${s.basemapProvider}`;
+  let lastStyleSig = `${s.basemap}|${s.overlays.labels}|${s.basemapProvider}|${JSON.stringify(s.customBasemaps.find((c) => `custom:${c.id}` === s.basemap) ?? "")}`;
   effect(() => {
     const st = settings.value;
-    const sig = `${st.basemap}|${st.overlays.labels}|${st.basemapProvider}`;
+    const sig = `${st.basemap}|${st.overlays.labels}|${st.basemapProvider}|${JSON.stringify(st.customBasemaps.find((c) => `custom:${c.id}` === st.basemap) ?? "")}`;
     if (sig !== lastStyleSig) {
       lastStyleSig = sig;
       styleFor().then((style) => map.setStyle(style, { diff: false }));
@@ -380,6 +472,7 @@ export function createMap(container: HTMLElement): MLMap {
   });
   effect(() => {
     void settings.value.overlays;
+    void settings.value.ovl;
     if (map.isStyleLoaded() || map.getLayer("ovl-states")) {
       refreshOverlayVisibility(map);
       refreshRings(map);

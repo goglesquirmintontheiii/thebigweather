@@ -3,6 +3,104 @@ import { BASEMAPS } from "../../map/basemaps";
 import { showRadar } from "../../radar/controller";
 import { Toggle } from "./RadarPanel";
 import { activeLabel, selectWeather } from "../../weather";
+import { OverlayGroups, StyleControls } from "../OverlayList";
+import { isDarkBasemap, customTiles } from "../../map/basemaps";
+import { useState } from "preact/hooks";
+import { uid, type CustomBasemap } from "../../store";
+import { Settings2, Plus, Trash2 } from "lucide-preact";
+
+type BaseKey = "alerts" | "sites" | "points" | "counties" | "states" | "labels" | "rings";
+
+function BaseRow({ label, k, style }: { label: string; k: BaseKey; style?: Partial<{ color: string; opacity: number; size: number }> }) {
+  const [open, setOpen] = useState(false);
+  const on = settings.value.overlays[k];
+  return (
+    <div class={`ovl-row ${open ? "open" : ""}`}>
+      <div class="ovl-line">
+        <label class="ovl-toggle">
+          <input type="checkbox" checked={on} onChange={(e) => update((x) => (x.overlays[k] = (e.target as HTMLInputElement).checked))} />
+          <span>{label}</span>
+        </label>
+        {style && (
+          <button class={`icon-btn gear ${open ? "on" : ""}`} title="Configure" onClick={() => setOpen(!open)}>
+            <Settings2 size={13} />
+          </button>
+        )}
+      </div>
+      {open && style && (
+        <div class="ovl-config">
+          <StyleControls id={`base:${k}`} def={style} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CustomBasemaps() {
+  const s = settings.value;
+  const [adding, setAdding] = useState(false);
+  const [f, setF] = useState<Omit<CustomBasemap, "id">>({ name: "", url: "", subdomains: "abc", minzoom: 0, maxzoom: 19, dark: true });
+  const valid = f.name.trim() && /^https?:\/\/.+\{z\}.*/.test(f.url) && f.url.includes("{x}") && f.url.includes("{y}");
+  return (
+    <div class="custom-bm">
+      {s.customBasemaps.map((c) => (
+        <div key={c.id} class={`custom-bm-row ${s.basemap === `custom:${c.id}` ? "on" : ""}`}>
+          <button class="custom-bm-name" onClick={() => update((x) => (x.basemap = `custom:${c.id}`))} title={customTiles(c)[0]}>
+            {c.name}
+          </button>
+          <span class="muted small">
+            z{c.minzoom}–{c.maxzoom}
+          </span>
+          <button class="icon-btn" title="Remove" onClick={() => update((x) => ((x.customBasemaps = x.customBasemaps.filter((y) => y.id !== c.id)), x.basemap === `custom:${c.id}` && (x.basemap = "dark")))}>
+            <Trash2 size={13} />
+          </button>
+        </div>
+      ))}
+      {adding ? (
+        <div class="custom-bm-form">
+          <input placeholder="Name" value={f.name} onInput={(e) => setF({ ...f, name: (e.target as HTMLInputElement).value })} />
+          <input placeholder="https://{s}.example.com/{z}/{x}/{y}.png" value={f.url} onInput={(e) => setF({ ...f, url: (e.target as HTMLInputElement).value.trim() })} />
+          <div class="row">
+            <span>Subdomains</span>
+            <input class="sm" placeholder="abc or mt0,mt1" value={f.subdomains} onInput={(e) => setF({ ...f, subdomains: (e.target as HTMLInputElement).value })} />
+          </div>
+          <div class="row">
+            <span>Zoom</span>
+            <input class="num" type="number" min={0} max={24} value={f.minzoom} onInput={(e) => setF({ ...f, minzoom: +(e.target as HTMLInputElement).value })} />
+            <span>to</span>
+            <input class="num" type="number" min={0} max={24} value={f.maxzoom} onInput={(e) => setF({ ...f, maxzoom: +(e.target as HTMLInputElement).value })} />
+          </div>
+          <Toggle label="Dark map (light overlays)" on={f.dark} set={(v) => setF({ ...f, dark: v })} />
+          <div class="row">
+            <button
+              class="btn sm"
+              disabled={!valid}
+              onClick={() => {
+                const id = uid();
+                update((x) => {
+                  x.customBasemaps.push({ ...f, id, name: f.name.trim() });
+                  x.basemap = `custom:${id}`;
+                });
+                setAdding(false);
+                setF({ name: "", url: "", subdomains: "abc", minzoom: 0, maxzoom: 19, dark: true });
+              }}
+            >
+              Add
+            </button>
+            <button class="btn sm ghost" onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+          </div>
+          <p class="muted small">Use {"{x} {y} {z}"} and optionally {"{s}"}. Only use tile servers you're allowed to use.</p>
+        </div>
+      ) : (
+        <button class="btn sm ghost" onClick={() => setAdding(true)}>
+          <Plus size={13} /> Custom tile server
+        </button>
+      )}
+    </div>
+  );
+}
 
 const SWATCH: Record<string, string> = {
   dark: "linear-gradient(135deg,#0b0e13,#1f2630)",
@@ -16,10 +114,10 @@ const SWATCH: Record<string, string> = {
 };
 
 const WEATHER_LATER = ["Air quality", "HeatRisk", "International radar"];
-const OVERLAYS_LATER = ["SPC outlooks & MDs", "Tropical", "METARs", "Lightning", "Storm reports", "Cameras", "Aviation", "Spotters & chasers"];
 
 export function LayersPanel() {
   const s = settings.value;
+  const dark = isDarkBasemap(s.basemap, s.customBasemaps);
   return (
     <div class="stack">
       <section>
@@ -44,6 +142,7 @@ export function LayersPanel() {
             </div>
           </div>
         )}
+        <CustomBasemaps />
       </section>
       <section>
         <label class="lbl">Weather layer</label>
@@ -90,22 +189,16 @@ export function LayersPanel() {
         </div>
       </section>
       <section>
-        <label class="lbl">Overlays</label>
-        <Toggle label="Weather alerts" on={s.overlays.alerts} set={(v) => update((x) => (x.overlays.alerts = v))} />
-        <Toggle label="Radar sites" on={s.overlays.sites} set={(v) => update((x) => (x.overlays.sites = v))} />
-        <Toggle label="My points" on={s.overlays.points} set={(v) => update((x) => (x.overlays.points = v))} />
-        <Toggle label="County lines" on={s.overlays.counties} set={(v) => update((x) => (x.overlays.counties = v))} />
-        <Toggle label="State lines" on={s.overlays.states} set={(v) => update((x) => (x.overlays.states = v))} />
-        <Toggle label="Map labels" on={s.overlays.labels} set={(v) => update((x) => (x.overlays.labels = v))} />
-        <Toggle label="Range rings" on={s.overlays.rings} set={(v) => update((x) => (x.overlays.rings = v))} />
-        <div class="later">
-          {OVERLAYS_LATER.map((o) => (
-            <span key={o} class="tag dim" title="Coming in phase 3">
-              {o}
-            </span>
-          ))}
-        </div>
+        <label class="lbl">Map</label>
+        <BaseRow label="Weather alerts" k="alerts" style={{ opacity: 1 }} />
+        <BaseRow label="Radar sites" k="sites" />
+        <BaseRow label="My points" k="points" />
+        <BaseRow label="County lines" k="counties" style={{ color: dark ? "#8a96a6" : "#6b7280", opacity: 0.55, size: 1 }} />
+        <BaseRow label="State lines" k="states" style={{ color: dark ? "#c9d1d9" : "#374151", opacity: 1, size: 1 }} />
+        <BaseRow label="Map labels" k="labels" />
+        <BaseRow label="Range rings" k="rings" style={{ color: "#9fb3c8", opacity: 0.55 }} />
       </section>
+      <OverlayGroups />
     </div>
   );
 }

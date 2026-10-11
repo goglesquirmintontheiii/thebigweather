@@ -3,7 +3,7 @@
 import { signal, computed, effect, batch } from "@preact/signals";
 import { api, lastHello } from "../api";
 import { settings, update } from "../store";
-import { frameIndex, playing, frameCount } from "../anim";
+import { frameIndex, playing, frameCount, setFrameReady } from "../anim";
 import { parseRaster, type Raster } from "./raster";
 import { GridLayer } from "./GridLayer";
 import { gridDef, gridTable } from "../weather";
@@ -37,7 +37,7 @@ export const gridTableActive = computed(() => {
   const w = settings.value.weather;
   if (w.kind !== "grid") return null;
   const def = gridDef(w.id);
-  if (!def) return null;
+  if (!def || def.cmap === "RGB") return null;
   const chosen = settings.value.tables[def.cmap];
   void settings.value.customPals;
   return chosen ? tableById(chosen) : gridTable(def.cmap);
@@ -70,6 +70,7 @@ function storeRaster(key: string, r: Raster, view: string) {
 }
 
 function clearRasters() {
+  layer?.set(null, null, 0, false);
   for (const v of rasters.values()) layer?.release(v.r);
   rasters.clear();
   rasterBytes = 0;
@@ -151,8 +152,10 @@ function push() {
   }
   const f = gridFrames.value[frameIndex.value];
   const hit = f ? rasters.get(f.key) : undefined;
-  gridRaster.value = hit?.r ?? null;
-  layer.set(hit?.r ?? null, gridTableActive.value, settings.value.grid.opacity, settings.value.grid.smooth);
+  // keep the previous picture until this frame arrives (no blank flashes while loading/animating)
+  const r = hit?.r ?? (gridFrames.value.length ? layer.raster : null);
+  gridRaster.value = r;
+  layer.set(r, gridTableActive.value, settings.value.grid.opacity, settings.value.grid.smooth);
 }
 
 /** Load rasters for the current frame first, then the rest (for animation). */
@@ -281,7 +284,13 @@ effect(() => {
 });
 
 effect(() => {
-  if (settings.value.weather.kind === "grid") frameCount.value = gridFrames.value.length;
+  if (settings.value.weather.kind === "grid") {
+    frameCount.value = gridFrames.value.length;
+    setFrameReady((i) => {
+      const f = gridFrames.value[i];
+      return !!f && rasters.has(f.key) && !f.error;
+    });
+  }
 });
 
 api.on("connected", () => {

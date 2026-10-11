@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 mod alerts;
+mod overlays;
 mod grid;
 mod api;
 mod config;
@@ -38,6 +39,9 @@ struct Cli {
     /// Folder of local gridded files used as frames ("<layer id with / as _>__<name>")
     #[arg(long)]
     grid_dir: Option<PathBuf>,
+    /// Folder of overlay fixtures ("<overlay id>.json") served instead of live feeds (testing)
+    #[arg(long)]
+    overlay_fixtures: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -178,6 +182,7 @@ async fn main() -> anyhow::Result<()> {
     stats::spawn(hub.clone(), data_dir.clone(), profile.stats_interval_ms, stats_latest.clone());
 
     let bind = cfg.server.bind.clone();
+    let profile_full = profile.name == "full";
     let state = Arc::new(api::AppState {
         cfg: parking_lot::RwLock::new(cfg.clone()),
         cfg_path: cli.config.clone(),
@@ -190,7 +195,12 @@ async fn main() -> anyhow::Result<()> {
         sites: parking_lot::RwLock::new(site_list),
         stats: stats_latest,
         started: std::time::Instant::now(),
-        grids,
+        grids: grids.clone(),
+        overlays: {
+            let o = overlays::Overlays::new(http.clone(), health.clone(), &data_dir, grids, profile_full);
+            *o.fixtures.write() = cli.overlay_fixtures.clone();
+            o
+        },
     });
 
     {
