@@ -6,6 +6,7 @@
 
 pub mod aviation;
 pub mod cameras;
+pub mod camdb;
 pub mod misc;
 pub mod noaa;
 pub mod obs;
@@ -37,7 +38,7 @@ pub struct Overlays {
     pub recon: aviation::Recon,
     pub ships: ships::Ships,
     pub cams: cameras::Cameras,
-    flight_gate: tokio::sync::Mutex<Instant>,
+    pub flights: aviation::Flights,
     pub full: bool,
     /// offline testing: `<id>.json` files served instead of live data
     pub fixtures: parking_lot::RwLock<Option<PathBuf>>,
@@ -66,7 +67,8 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("sigmet", 120),
     ("gairmet", 600),
     ("airports", 86400 * 7),
-    ("flights", 8),
+    ("flights", 2),
+    ("flighttrack", 20),
     ("recon", 30),
     ("buoys", 300),
     ("tides", 86400),
@@ -79,7 +81,7 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("waffle", 86400),
     ("wafflestatus", 1200),
     ("ships", 20),
-    ("cameras", 1800),
+    ("cameras", 0),
     ("tle", 7200),
     ("storms", 300),
 ];
@@ -94,6 +96,13 @@ pub fn fc(features: Vec<Value>) -> Value {
 
 pub fn point(lon: f64, lat: f64, props: Value) -> Value {
     json!({"type": "Feature", "geometry": {"type": "Point", "coordinates": [round(lon), round(lat)]}, "properties": props})
+}
+
+/// Great-circle distance in km.
+pub fn km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let (a1, a2) = (lat1.to_radians(), lat2.to_radians());
+    let h = ((a2 - a1) / 2.0).sin().powi(2) + a1.cos() * a2.cos() * ((lon2 - lon1).to_radians() / 2.0).sin().powi(2);
+    2.0 * 6371.0 * h.sqrt().asin()
 }
 
 pub fn round(v: f64) -> f64 {
@@ -125,7 +134,7 @@ impl Overlays {
             recon: aviation::Recon::default(),
             ships: ships::Ships::default(),
             cams: cameras::Cameras::default(),
-            flight_gate: tokio::sync::Mutex::new(Instant::now() - Duration::from_secs(5)),
+            flights: aviation::Flights::default(),
             full,
             fixtures: parking_lot::RwLock::new(None),
         })
@@ -201,6 +210,11 @@ impl Overlays {
             return Ok(Bytes::from(tokio::fs::read(f).await?));
         }
         let ck = format!("{id}?{}", q.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&"));
+        if ttl == 0 {
+            // cheap in-memory queries (camera index): no response cache
+            let v = self.build(id, q, aisstream_key).await?;
+            return Ok(Bytes::from(serde_json::to_vec(&v)?));
+        }
         if let Some((t, b)) = self.cache.lock().get(&ck) {
             if t.elapsed().as_secs() < ttl {
                 return Ok(b.clone());
@@ -264,7 +278,13 @@ impl Overlays {
             "sigmet" => aviation::sigmets(self).await,
             "gairmet" => aviation::gairmet(self, p("type"), p("fcst")).await,
             "airports" => aviation::airports(self, p("all") == "1").await,
-            "flights" => aviation::flights(self, p("lat"), p("lon"), p("r")).await,
+            "flights" => {
+                let lat: f64 = p("lat").parse().map_err(|_| anyhow!("lat"))?;
+                let lon: f64 = p("lon").parse().map_err(|_| anyhow!("lon"))?;
+                let r = p("r").parse::<f64>().unwrap_or(150.0).clamp(10.0, 250.0);
+                Ok(aviation::Flights::near(self, lat, lon, r))
+            }
+            "flighttrack" => aviation::Flights::track(self, p("hex"), p("mode") == "seen").await,
             "recon" => {
                 self.touch("recon");
                 aviation::Recon::ensure(self);
@@ -283,13 +303,13 @@ impl Overlays {
                 Ok(self.glm.geojson(p("minutes").parse().unwrap_or(15)))
             }
             "waffle" => misc::waffle(self).await,
-            "wafflestatus" => misc::waffle_status(self, p("urls")).await,
+            "wafflestatus" => misc::waffle_status(self, p("ids")).await,
             "ships" => {
                 self.touch("ships");
                 ships::Ships::ensure(self, ais_key);
                 Ok(self.ships.geojson(p("bbox")))
             }
-            "cameras" => cameras::list(self).await,
+            "cameras" => cameras::list(self, q).await,
             "tle" => misc::tle(self, p("group")).await,
             _ => bail!("unknown overlay {id}"),
         }

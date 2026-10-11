@@ -180,10 +180,11 @@ export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey
   if (b.startsWith("custom:")) {
     const c = opts.custom?.find((x) => `custom:${x.id}` === b);
     if (c) {
-      style.sources.custom = { type: "raster", tiles: customTiles(c), tileSize: 256, minzoom: c.minzoom, maxzoom: c.maxzoom, attribution: c.name };
+      const tms = c.url.includes("{-y}");
+      style.sources.custom = { type: "raster", tiles: customTiles(c).map((u) => u.replace("{-y}", "{y}")), tileSize: 256, minzoom: c.minzoom, maxzoom: c.maxzoom, attribution: c.name, ...(tms ? { scheme: "tms" } : {}) } as any;
       style.layers.push({ id: "base-custom", type: "raster", source: "custom" } as LayerSpecification);
       // keep place names readable on top when labels are on
-      if (opts.labels) addRaster("labels", raster(carto(dark ? "dark_only_labels" : "voyager_only_labels"), CARTO_ATTR, 20, 512), true);
+      if (opts.labels && c.labels) addRaster("labels", raster(carto(dark ? "dark_only_labels" : "voyager_only_labels"), CARTO_ATTR, 20, 512), true);
     }
     return style;
   }

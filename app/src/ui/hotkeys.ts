@@ -1,3 +1,4 @@
+import { popup } from "../overlays/manager";
 import { useEffect } from "preact/hooks";
 import { tool, crosshair, update, openPanel, selectedAlert } from "../store";
 import { tilts, l3Products } from "../radar/controller";
@@ -56,6 +57,9 @@ export function useHotkeys() {
         case "c":
           crosshair.value = !crosshair.value;
           break;
+        case "v":
+          update((s) => (s.ui.cursorValue = !s.ui.cursorValue));
+          break;
         case "m":
           tool.value = tool.value === "measure" ? "none" : "measure";
           break;
@@ -68,6 +72,7 @@ export function useHotkeys() {
         case "Escape":
           tool.value = "none";
           selectedAlert.value = null;
+          popup.value = null;
           openPanel.value = null;
           break;
         default:

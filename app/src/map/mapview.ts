@@ -3,11 +3,11 @@
 import * as maplibregl from "maplibre-gl";
 import type { Map as MLMap, GeoJSONSource } from "maplibre-gl";
 import { signal, effect } from "@preact/signals";
-import { settings, update, tool, crosshair, toast, selectedAlert, uid } from "../store";
+import { settings, update, tool, crosshair, toast, uid, details, type DetailItem } from "../store";
 import { buildStyle, googleSession, isDarkBasemap } from "./basemaps";
 import { attachOverlays, pickOverlay, popup } from "../overlays/manager";
 import { RadarLayer } from "../radar/RadarLayer";
-import { attachLayer, sites, currentSite, displaySweep, selectSite, activeTable, liveSweep, frames, liveState, extraFrames } from "../radar/controller";
+import { attachLayer, sites, currentSite, displaySweep, selectSite, activeTable, liveSweep, frames, liveState, extraFrames, extraLive } from "../radar/controller";
 import { GridLayer } from "../grid/GridLayer";
 import { attachGrid, gridRaster } from "../grid/controller";
 import { rasterValue } from "../grid/raster";
@@ -15,6 +15,7 @@ import { attachGibs, rebuildGibs } from "../grid/gibs";
 import { frameIndex } from "../anim";
 import { sampleAt } from "../radar/sweep";
 import { alerts } from "../alerts";
+import { alertStyle, alertVisible, alertKind, patternId, registerPatterns } from "../alertstyle";
 import { api } from "../api";
 import { distance, bearing, compass, fmtDist, circle, destination } from "../util";
 
@@ -68,28 +69,45 @@ function addOverlays(map: MLMap) {
   map.addLayer({ id: "ovl-counties", type: "line", source: "counties", minzoom: 5, paint: { "line-color": dark ? "#8a96a6" : "#6b7280", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.3, 10, 1], "line-opacity": 0.55 } }, before);
   map.addLayer({ id: "ovl-states", type: "line", source: "states", paint: { "line-color": dark ? "#c9d1d9" : "#374151", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.7, 10, 2] } }, before);
   map.addSource("alerts", { type: "geojson", data: EMPTY });
+  const hover: any = ["boolean", ["feature-state", "hover"], false];
   map.addLayer({
     id: "ovl-alerts-fill",
     type: "fill",
     source: "alerts",
-    paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.28, ["match", ["get", "kind"], "warning", 0.14, 0.07]] },
+    filter: ["==", ["get", "pat"], ""],
+    paint: { "fill-color": ["get", "fc"], "fill-opacity": ["case", hover, ["min", 0.6, ["+", ["get", "fo"], 0.14]], ["get", "fo"]] },
+  }, before);
+  map.addLayer({
+    id: "ovl-alerts-pattern",
+    type: "fill",
+    source: "alerts",
+    filter: ["!=", ["get", "pat"], ""],
+    paint: { "fill-pattern": ["get", "pat"], "fill-opacity": ["case", hover, 1, 0.85] },
   }, before);
   map.addLayer({
     id: "ovl-alerts-casing",
     type: "line",
     source: "alerts",
     filter: ["==", ["get", "kind"], "warning"],
-    paint: { "line-color": "#000", "line-width": ["case", ["has", "tag"], 6, 4], "line-opacity": 0.7 },
+    paint: { "line-color": "#000", "line-width": ["+", ["get", "lw"], ["case", ["has", "tag"], 3.6, 1.6]], "line-opacity": 0.7 },
   }, before);
   map.addLayer({
     id: "ovl-alerts-line",
     type: "line",
     source: "alerts",
     paint: {
-      "line-color": ["case", ["==", ["get", "tag"], "TORNADO EMERGENCY"], "#ff00ff", ["get", "color"]],
-      "line-width": ["case", ["has", "tag"], 3.5, ["==", ["get", "kind"], "warning"], 2.4, 1.4],
-      "line-dasharray": ["case", ["==", ["get", "kind"], "watch"], ["literal", [3, 2]], ["literal", [1, 0]]],
+      "line-color": ["case", ["==", ["get", "tag"], "TORNADO EMERGENCY"], "#ff00ff", ["get", "lc"]],
+      "line-width": ["case", ["has", "tag"], ["+", ["get", "lw"], 1.1], ["get", "lw"]],
+      "line-dasharray": ["match", ["get", "ls"], "dashed", ["literal", [3, 2]], "dotted", ["literal", [0.6, 1.6]], ["literal", [1, 0]]],
     },
+  }, before);
+  // new alerts flash for a while (per-type setting)
+  map.addLayer({
+    id: "ovl-alerts-flash",
+    type: "line",
+    source: "alerts",
+    filter: ["==", ["get", "fl"], 1],
+    paint: { "line-color": "#ffffff", "line-width": ["+", ["get", "lw"], 3], "line-opacity": 0, "line-blur": 1 },
   }, before);
   // RapidSweep progress: the current beam position
   map.addSource("sweepline", { type: "geojson", data: EMPTY });
@@ -109,95 +127,118 @@ function addOverlays(map: MLMap) {
   rebuildGibs();
 }
 
-// RapidSweep beam: live events arrive every few seconds, so the beam is extrapolated from the
-// measured rotation rate and eased toward each new report instead of jumping.
-const beam = { az: 0, rate: 0, lastAz: NaN, lastT: 0, shown: NaN, raf: 0, key: "" };
+// RapidSweep beams (main radar and any ctrl+clicked radars): live events arrive every few
+// seconds, so each beam is extrapolated from its measured rotation rate and eased toward each new
+// report instead of jumping.
+interface Beam {
+  rate: number;
+  lastAz: number;
+  lastT: number;
+  shown: number;
+  key: string;
+  lat: number;
+  lon: number;
+}
+const beams = new Map<string, Beam>();
+let beamRaf = 0;
 
 function angDiff(a: number, b: number) {
   return ((a - b + 540) % 360) - 180;
 }
 
-function sweepActive() {
-  const l = liveState.value;
+/** live states that should show a beam right now: site → message */
+function activeLive(): Map<string, { az: number; key: string; lat: number; lon: number }> {
+  const out = new Map<string, { az: number; key: string; lat: number; lon: number }>();
   const r = settings.value.radar;
-  const onLatest = frameIndex.value >= frames.value.length - 1;
-  return !!(l && l.az !== undefined && !l.complete && r.live && r.source === "L2" && settings.value.weather.kind === "radar" && onLatest && currentSite.value);
+  if (!r.live || r.source !== "L2" || settings.value.weather.kind !== "radar") return out;
+  if (frameIndex.value < frames.value.length - 1) return out;
+  const l = liveState.value;
+  const site = currentSite.value;
+  if (l && l.az !== undefined && !l.complete && site) out.set(site.id, { az: l.az, key: l.key, lat: l.lat && Math.abs(l.lat) > 0.1 ? l.lat : site.lat, lon: l.lon && Math.abs(l.lon) > 0.1 ? l.lon : site.lon });
+  for (const [id, e] of Object.entries(extraLive.value)) {
+    const st = e.state;
+    const s2 = sites.value.find((x) => x.id === id);
+    if (st.az === undefined || st.complete || !s2 || !settings.value.extraSites.includes(id)) continue;
+    out.set(id, { az: st.az, key: st.key, lat: st.lat && Math.abs(st.lat) > 0.1 ? st.lat : s2.lat, lon: st.lon && Math.abs(st.lon) > 0.1 ? st.lon : s2.lon });
+  }
+  return out;
 }
 
 function refreshSweepLine(map: MLMap) {
   const src = map.getSource("sweepline") as GeoJSONSource | undefined;
   if (!src) return;
-  const l = liveState.value;
-  if (!sweepActive() || !l) {
+  const live = activeLive();
+  for (const k of [...beams.keys()]) if (!live.has(k)) beams.delete(k);
+  if (!live.size) {
     src.setData(EMPTY);
-    cancelAnimationFrame(beam.raf);
-    beam.raf = 0;
-    beam.shown = NaN;
+    cancelAnimationFrame(beamRaf);
+    beamRaf = 0;
     return;
   }
-  // new report: update the rotation-rate estimate (degrees per ms, clockwise)
   const now = performance.now();
-  if (l.key !== beam.key) {
-    beam.key = l.key;
-    beam.lastAz = NaN;
-    beam.rate = 0;
-  }
-  if (l.az !== beam.lastAz) {
-    if (!Number.isNaN(beam.lastAz) && beam.lastT) {
-      const d = angDiff(l.az!, beam.lastAz);
-      const dt = now - beam.lastT;
-      if (d > 0 && dt > 200 && dt < 30_000) {
-        const r = d / dt;
-        beam.rate = beam.rate ? beam.rate * 0.6 + r * 0.4 : r;
-      }
+  for (const [site, l] of live) {
+    let b = beams.get(site);
+    if (!b || b.key !== l.key) {
+      b = { rate: 0, lastAz: NaN, lastT: 0, shown: NaN, key: l.key, lat: l.lat, lon: l.lon };
+      beams.set(site, b);
     }
-    beam.lastAz = l.az!;
-    beam.lastT = now;
+    b.lat = l.lat;
+    b.lon = l.lon;
+    // new report: update the rotation-rate estimate (degrees per ms, clockwise)
+    if (l.az !== b.lastAz) {
+      if (!Number.isNaN(b.lastAz) && b.lastT) {
+        const d = angDiff(l.az, b.lastAz);
+        const dt = now - b.lastT;
+        if (d > 0 && dt > 200 && dt < 30_000) {
+          const r = d / dt;
+          b.rate = b.rate ? b.rate * 0.6 + r * 0.4 : r;
+        }
+      }
+      b.lastAz = l.az;
+      b.lastT = now;
+    }
   }
-  if (!beam.raf) {
+  if (!beamRaf) {
     let lastDraw = 0;
     const tick = () => {
-      beam.raf = 0;
-      if (!sweepActive()) return refreshSweepLine(map);
+      beamRaf = 0;
+      if (!beams.size) return refreshSweepLine(map);
       const t = performance.now();
-      // predict where the antenna is now, but never more than ~6 s past the last report
-      const ahead = Math.min(t - beam.lastT, 6000);
-      const target = (beam.lastAz + beam.rate * ahead + 360) % 360;
-      if (Number.isNaN(beam.shown)) beam.shown = target;
-      else {
-        const d = angDiff(target, beam.shown);
-        // ease toward the prediction; snap if far off (new tilt)
-        beam.shown = Math.abs(d) > 45 ? target : (beam.shown + d * 0.25 + 360) % 360;
+      for (const b of beams.values()) {
+        // predict where the antenna is now, but never more than ~6 s past the last report
+        const ahead = Math.min(t - b.lastT, 6000);
+        const target = (b.lastAz + b.rate * ahead + 360) % 360;
+        if (Number.isNaN(b.shown)) b.shown = target;
+        else {
+          const d = angDiff(target, b.shown);
+          // ease toward the prediction; snap if far off (new tilt)
+          b.shown = Math.abs(d) > 45 ? target : (b.shown + d * 0.25 + 360) % 360;
+        }
       }
       if (t - lastDraw > 33) {
         lastDraw = t;
-        drawBeam(map, beam.shown);
+        drawBeams(map);
       }
-      beam.raf = requestAnimationFrame(tick);
+      beamRaf = requestAnimationFrame(tick);
     };
-    beam.raf = requestAnimationFrame(tick);
+    beamRaf = requestAnimationFrame(tick);
   }
 }
 
-function drawBeam(map: MLMap, az: number) {
+function drawBeams(map: MLMap) {
   const src = map.getSource("sweepline") as GeoJSONSource | undefined;
-  const l = liveState.value;
-  const site = currentSite.value;
-  if (!src || !l || !site) return;
-  // the decoder only knows the site position once a metadata record arrived; the site list always does
-  const lat = l.lat && Math.abs(l.lat) > 0.1 ? l.lat : site.lat;
-  const lon = l.lon && Math.abs(l.lon) > 0.1 ? l.lon : site.lon;
-  const end = destination(lat, lon, az, 250_000);
-  // trailing arc of the last few degrees for a sense of direction
-  const trail: [number, number][] = [];
-  for (let k = 0; k <= 8; k++) trail.push(destination(lat, lon, az - k * 1.2, 250_000));
-  src.setData({
-    type: "FeatureCollection",
-    features: [
-      { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [[lon, lat], end] } },
-      { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: trail } },
-    ],
-  } as any);
+  if (!src) return;
+  const features: any[] = [];
+  for (const b of beams.values()) {
+    if (Number.isNaN(b.shown)) continue;
+    const end = destination(b.lat, b.lon, b.shown, 250_000);
+    // trailing arc of the last few degrees for a sense of direction
+    const trail: [number, number][] = [];
+    for (let k = 0; k <= 8; k++) trail.push(destination(b.lat, b.lon, b.shown - k * 1.2, 250_000));
+    features.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [[b.lon, b.lat], end] } });
+    features.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: trail } });
+  }
+  src.setData({ type: "FeatureCollection", features } as any);
 }
 
 /** Colors/widths for the built-in map overlays (Layers → gear). */
@@ -215,7 +256,9 @@ function refreshBaseStyles(map: MLMap) {
   set("ovl-states", "line-width", ["interpolate", ["linear"], ["zoom"], 3, 0.7 * (s.size ?? 1), 10, 2 * (s.size ?? 1)]);
   const a = st("alerts");
   const ao = a.opacity ?? 1;
-  set("ovl-alerts-fill", "fill-opacity", ["*", ao, ["case", ["boolean", ["feature-state", "hover"], false], 0.28, ["match", ["get", "kind"], "warning", 0.14, 0.07]]]);
+  const hov: any = ["boolean", ["feature-state", "hover"], false];
+  set("ovl-alerts-fill", "fill-opacity", ["*", ao, ["case", hov, ["min", 0.6, ["+", ["get", "fo"], 0.14]], ["get", "fo"]]]);
+  set("ovl-alerts-pattern", "fill-opacity", ["*", ao, ["case", hov, 1, 0.85]]);
   set("ovl-alerts-line", "line-opacity", ao);
   set("ovl-alerts-casing", "line-opacity", 0.7 * ao);
   const r = st("rings");
@@ -229,24 +272,50 @@ function refreshOverlayVisibility(map: MLMap) {
   const vis = (id: string, v: boolean) => map.getLayer(id) && map.setLayoutProperty(id, "visibility", v ? "visible" : "none");
   vis("ovl-counties", o.counties);
   vis("ovl-states", o.states);
-  for (const id of ["ovl-alerts-fill", "ovl-alerts-casing", "ovl-alerts-line"]) vis(id, o.alerts);
+  for (const id of ["ovl-alerts-fill", "ovl-alerts-pattern", "ovl-alerts-casing", "ovl-alerts-line", "ovl-alerts-flash"]) vis(id, o.alerts);
   vis("ovl-rings", o.rings);
 }
+
+/** first time each alert was seen (for flashing new ones) */
+const alertSeen = new Map<string, number>();
+let alertsPrimed = false;
+let flashTimer: number | undefined;
 
 function refreshAlerts(map: MLMap) {
   const src = map.getSource("alerts") as GeoJSONSource | undefined;
   if (!src) return;
-  const feats = [...alerts.value.values()]
-    .filter((f) => f.geometry)
+  const now = Date.now();
+  const all = [...alerts.value.values()];
+  // alerts present at startup don't count as new
+  for (const f of all) if (!alertSeen.has(f.properties.id)) alertSeen.set(f.properties.id, alertsPrimed ? now : 0);
+  if (all.length) alertsPrimed = true;
+  let flashing = false;
+  const feats = all
+    .filter((f) => f.geometry && alertVisible(f.properties.event))
     .sort((a, b) => a.properties.priority - b.properties.priority)
     .map((f, i) => {
       const e: string = f.properties.event;
-      const kind = e.endsWith("Warning") ? "warning" : e.endsWith("Watch") ? "watch" : "other";
-      const props: any = { id: f.properties.id, color: f.properties.color, kind, event: e };
+      const st = alertStyle(e);
+      const seen = alertSeen.get(f.properties.id) ?? 0;
+      const fl = st.flash > 0 && seen > 0 && now - seen < st.flash * 1000 ? 1 : 0;
+      if (fl) flashing = true;
+      const fo = st.fill === "none" ? 0 : st.fillOpacity;
+      const props: any = { id: f.properties.id, kind: alertKind(e), event: e, fc: st.color, lc: st.border, lw: st.width, ls: st.line, fo, pat: st.fill === "none" ? "" : patternId(st.fill, st.color, st.fillOpacity), fl };
       if (f.properties.tag) props.tag = f.properties.tag;
       return { type: "Feature", id: i + 1, geometry: f.geometry, properties: props };
     });
   src.setData({ type: "FeatureCollection", features: feats } as any);
+  // blink the flash layer while any alert is still in its flash window
+  clearInterval(flashTimer);
+  if (flashing) {
+    let on = false;
+    flashTimer = window.setInterval(() => {
+      on = !on;
+      if (map.getLayer("ovl-alerts-flash")) map.setPaintProperty("ovl-alerts-flash", "line-opacity", on ? 0.95 : 0);
+    }, 450);
+    // re-evaluate when the earliest flash window ends
+    window.setTimeout(() => refreshAlerts(map), 5000);
+  } else if (map.getLayer("ovl-alerts-flash")) map.setPaintProperty("ovl-alerts-flash", "line-opacity", 0);
 }
 
 function refreshRings(map: MLMap) {
@@ -368,6 +437,7 @@ export function createMap(container: HTMLElement): MLMap {
     keyboard: false,
   } as any);
   map.touchZoomRotate.disableRotation();
+  registerPatterns(map);
   radarLayer = new RadarLayer();
   attachLayer(radarLayer);
   gridLayer = new GridLayer();
@@ -420,19 +490,23 @@ export function createMap(container: HTMLElement): MLMap {
   map.getCanvas().addEventListener("mouseleave", () => (hover.value = null));
 
   let hovered: number | string | undefined;
-  map.on("mousemove", "ovl-alerts-fill", (e) => {
+  const onAlertMove = (e: any) => {
     if (tool.value !== "none") return;
     map.getCanvas().style.cursor = "pointer";
     const f = e.features?.[0];
     if (hovered !== undefined) map.setFeatureState({ source: "alerts", id: hovered }, { hover: false });
     hovered = f?.id;
     if (hovered !== undefined) map.setFeatureState({ source: "alerts", id: hovered }, { hover: true });
-  });
-  map.on("mouseleave", "ovl-alerts-fill", () => {
+  };
+  map.on("mousemove", "ovl-alerts-fill", onAlertMove);
+  map.on("mousemove", "ovl-alerts-pattern", onAlertMove);
+  const onAlertLeave = () => {
     map.getCanvas().style.cursor = "";
     if (hovered !== undefined) map.setFeatureState({ source: "alerts", id: hovered }, { hover: false });
     hovered = undefined;
-  });
+  };
+  map.on("mouseleave", "ovl-alerts-fill", onAlertLeave);
+  map.on("mouseleave", "ovl-alerts-pattern", onAlertLeave);
 
   map.on("click", (e) => {
     contextMenu.value = null;
@@ -441,13 +515,17 @@ export function createMap(container: HTMLElement): MLMap {
       measurePts.value = [...measurePts.value, [e.lngLat.lng, e.lngLat.lat]];
       return;
     }
-    // overlay features (reports, cameras, stations…) take priority over alert polygons
-    if (pickOverlay(e)) return;
-    const feats = map.queryRenderedFeatures(e.point, { layers: ["ovl-alerts-fill"] });
-    if (feats.length) {
-      // queryRenderedFeatures returns the top-most (highest priority) polygon first
-      selectedAlert.value = feats[0].properties.id;
-    }
+    // point features (reports, cameras, stations…) take priority over areas
+    const pick = pickOverlay(e);
+    if (pick.handled) return;
+    // every alert under the cursor, most urgent first, then watches/storms/MDs from overlays
+    const layers = ["ovl-alerts-fill", "ovl-alerts-pattern"].filter((l) => map.getLayer(l));
+    const ids = [...new Set(map.queryRenderedFeatures(e.point, { layers }).map((f) => String(f.properties.id)))];
+    const al = ids.map((id) => alerts.value.get(id)).filter(Boolean).sort((a: any, b: any) => b.properties.priority - a.properties.priority || String(b.properties.sent).localeCompare(String(a.properties.sent)));
+    const items: DetailItem[] = [...al.map((a: any) => ({ kind: "alert" as const, id: a.properties.id })), ...pick.panel];
+    if (items.length) details.value = { items, i: 0 };
+    else if (pick.fallback) pick.fallback();
+    else details.value = null;
   });
   map.on("dblclick", (e) => {
     if (tool.value === "measure") e.preventDefault();
@@ -480,6 +558,7 @@ export function createMap(container: HTMLElement): MLMap {
   });
   effect(() => {
     void alerts.value;
+    void settings.value.alertCfg;
     refreshAlerts(map);
   });
   effect(() => {
@@ -512,6 +591,7 @@ export function createMap(container: HTMLElement): MLMap {
   });
   effect(() => {
     void liveState.value;
+    void extraLive.value;
     void currentSite.value;
     void frameIndex.value;
     void frames.value.length;

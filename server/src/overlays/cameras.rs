@@ -7,7 +7,9 @@ use anyhow::{anyhow, Result};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_SOURCES: &str = include_str!("../../data/camera_sources.json");
@@ -55,6 +57,12 @@ pub struct Cameras {
     lists: Mutex<HashMap<String, (Instant, Vec<Value>)>>,
     /// raw items for sources whose image URLs expire (looked up at view time)
     images: Mutex<HashMap<String, String>>,
+    /// the camera database from data/uploads (loaded in the background)
+    db: parking_lot::RwLock<Option<Arc<super::camdb::CamDb>>>,
+    db_state: Mutex<(bool, Option<Instant>, String)>, // (loading, last check, message)
+    /// combined live + database index, rebuilt when either changes
+    index: Mutex<Option<(u64, Arc<super::camdb::Index>)>>,
+    version: std::sync::atomic::AtomicU64,
 }
 
 pub fn sources(o: &Overlays) -> Vec<Source> {
@@ -358,17 +366,104 @@ fn parse_xml_items(body: &[u8], item: &str) -> Vec<HashMap<String, String>> {
 }
 
 /// All cameras from every source (each source cached separately; failures don't hide others).
-pub async fn list(o: &Overlays) -> Result<Value> {
-    let srcs = sources(o);
+/// Load (or reload, when the files changed) the camera database in the background.
+fn ensure_db(o: &Arc<Overlays>) {
+    {
+        let mut st = o.cams.db_state.lock();
+        if st.0 || st.1.map(|t| t.elapsed() < Duration::from_secs(60)).unwrap_or(false) {
+            return;
+        }
+        st.0 = true;
+        st.1 = Some(Instant::now());
+    }
+    let o = o.clone();
+    tokio::spawn(async move {
+        let root = o.data_dir.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let current = o.cams.db.read().as_ref().map(|d| d.stamp.clone());
+        let res = tokio::task::spawn_blocking(move || {
+            // cheap check first: same files as what's loaded → nothing to do
+            let files = super::camdb::find_files(&root.join("uploads"));
+            if files.is_empty() {
+                return Ok(None);
+            }
+            if let Some(cur) = &current {
+                let stamp = files
+                    .iter()
+                    .map(|p| {
+                        let m = std::fs::metadata(p).ok();
+                        let t = m.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+                        format!("{}:{}:{}", p.file_name().and_then(|n| n.to_str()).unwrap_or(""), m.map(|m| m.len()).unwrap_or(0), t)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|");
+                if &stamp == cur {
+                    return Ok(Some(None));
+                }
+            }
+            super::camdb::load(&root).map(|d| d.map(Some))
+        })
+        .await;
+        let mut st = o.cams.db_state.lock();
+        st.0 = false;
+        match res {
+            Ok(Ok(Some(Some(db)))) => {
+                let s = &db.stats;
+                st.2 = format!("{} cameras from {} ({} records; {} inactive, {} duplicates removed)", s.kept, s.file, s.records, s.inactive, s.marked_duplicate + s.duplicate_in_file);
+                o.health.ok("cam-db", "Camera database", &st.2);
+                *o.cams.db.write() = Some(Arc::new(db));
+                o.cams.version.fetch_add(1, Ordering::SeqCst);
+            }
+            Ok(Ok(Some(None))) => {}
+            Ok(Ok(None)) => {
+                if o.cams.db.write().take().is_some() {
+                    o.cams.version.fetch_add(1, Ordering::SeqCst);
+                }
+                st.2 = "no camera database file in data/uploads".into();
+            }
+            Ok(Err(e)) => {
+                st.2 = format!("{e:#}");
+                o.health.err("cam-db", "Camera database", &e);
+            }
+            Err(e) => st.2 = e.to_string(),
+        }
+    });
+}
+
+fn to_cam(f: &Value) -> Option<super::camdb::Cam> {
+    let p = &f["properties"];
+    let c = &f["geometry"]["coordinates"];
+    let s = |k: &str| p[k].as_str().map(|x| x.to_string());
+    Some(super::camdb::Cam {
+        id: s("id")?,
+        name: s("n").unwrap_or_default(),
+        src: s("s").unwrap_or_default(),
+        lat: c[1].as_f64()? as f32,
+        lon: c[0].as_f64()? as f32,
+        t: s("t").unwrap_or_else(|| "img".into()),
+        img: s("i"),
+        video: s("v"),
+        page: s("p"),
+        refresh: p["r"].as_u64().unwrap_or(120) as u32,
+        dir: None,
+        nb: false,
+        stale: false,
+    })
+}
+
+/// Refresh live source lists that are due.
+async fn refresh_sources(o: &Overlays, srcs: &[Source]) {
     let mut need = vec![];
     {
         let l = o.cams.lists.lock();
-        for s in &srcs {
+        for s in srcs {
             let ttl = if s.ttl > 0 { s.ttl } else { 1800 };
             if l.get(&s.id).map(|(t, _)| t.elapsed().as_secs() >= ttl).unwrap_or(true) {
                 need.push(s.clone());
             }
         }
+    }
+    if need.is_empty() {
+        return;
     }
     let res = futures::future::join_all(need.iter().map(|s| async move { (s.clone(), fetch_source(o, s).await) })).await;
     for (s, r) in res {
@@ -390,18 +485,76 @@ pub async fn list(o: &Overlays) -> Result<Value> {
             }
         }
     }
-    let l = o.cams.lists.lock();
-    let mut feats = vec![];
-    let mut srcs_out = vec![];
-    for s in &srcs {
-        let n = l.get(&s.id).map(|x| x.1.len()).unwrap_or(0);
-        srcs_out.push(json!({"id": s.id, "name": s.name, "region": s.region, "count": n, "off": s.default_off, "attribution": s.attribution}));
-        if let Some((_, v)) = l.get(&s.id) {
-            feats.extend(v.iter().cloned());
+    o.cams.version.fetch_add(1, Ordering::SeqCst);
+}
+
+fn index(o: &Overlays, srcs: &[Source]) -> Arc<super::camdb::Index> {
+    let ver = o.cams.version.load(Ordering::SeqCst);
+    if let Some((g, idx)) = o.cams.index.lock().as_ref() {
+        if *g == ver {
+            return idx.clone();
         }
     }
+    let live: Vec<super::camdb::Cam> = {
+        let l = o.cams.lists.lock();
+        srcs.iter().filter_map(|s| l.get(&s.id)).flat_map(|(_, v)| v.iter().filter_map(to_cam)).collect()
+    };
+    let db = o.cams.db.read().clone();
+    let idx = Arc::new(super::camdb::Index::build(live, db.as_deref()));
+    *o.cams.index.lock() = Some((ver, idx.clone()));
+    idx
+}
+
+/// Cameras. With `bbox` (+ `z`, `off`, `kinds`) answers from the combined live + database index
+/// (clustered when zoomed out); without it, every live camera (older apps).
+pub async fn list(o: &Arc<Overlays>, q: &super::Params) -> Result<Value> {
+    ensure_db(o);
+    let srcs = sources(o);
+    refresh_sources(o, &srcs).await;
+    let idx = index(o, &srcs);
+    // source list for the settings: live sources, then database sources
+    let mut srcs_out = vec![];
+    {
+        let l = o.cams.lists.lock();
+        for s in &srcs {
+            let n = l.get(&s.id).map(|x| x.1.len()).unwrap_or(0);
+            srcs_out.push(json!({"id": s.id, "name": s.name, "region": s.region, "count": n, "off": s.default_off, "attribution": s.attribution}));
+        }
+    }
+    let db = o.cams.db.read().clone();
+    let mut db_info = json!(null);
+    if let Some(db) = &db {
+        let kept: HashMap<&str, usize> = idx.cams.iter().filter(|c| c.src.starts_with("db:")).fold(HashMap::new(), |mut m, c| {
+            *m.entry(c.src.as_str()).or_default() += 1;
+            m
+        });
+        for (src, _) in &db.stats.sources {
+            let n = kept.get(src.as_str()).copied().unwrap_or(0);
+            srcs_out.push(json!({"id": src, "name": src.trim_start_matches("db:"), "region": "Camera database", "count": n, "off": false, "attribution": "Camera database"}));
+        }
+        db_info = json!({"stats": db.stats, "overlap_dropped": idx.dropped_overlap});
+    }
+    let msg = o.cams.db_state.lock().2.clone();
+    let feats = match q.get("bbox") {
+        Some(b) => {
+            let v: Vec<f32> = b.split(',').filter_map(|x| x.parse().ok()).collect();
+            if v.len() != 4 {
+                return Err(anyhow!("bad bbox"));
+            }
+            let z: f32 = q.get("z").and_then(|z| z.parse().ok()).unwrap_or(6.0);
+            let off: HashSet<String> = match q.get("off") {
+                Some(x) => x.split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect(),
+                None => srcs.iter().filter(|s| s.default_off).map(|s| s.id.clone()).collect(),
+            };
+            idx.query([v[0], v[1], v[2], v[3]], z, &off, q.get("kinds").map(|s| s.as_str()).unwrap_or("all"))
+        }
+        None => idx.cams.iter().filter(|c| !c.src.starts_with("db:")).map(super::camdb::feature).collect(),
+    };
     let mut out = fc(feats);
     out["sources"] = json!(srcs_out);
+    out["db"] = db_info;
+    out["db_msg"] = json!(msg);
+    out["total"] = json!(idx.cams.len());
     Ok(out)
 }
 

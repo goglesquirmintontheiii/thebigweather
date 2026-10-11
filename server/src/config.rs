@@ -265,9 +265,10 @@ pub fn detect_profile(cfg: &Config) -> Profile {
     let memory_mb = if cfg.profile.memory_mb > 0 {
         cfg.profile.memory_mb
     } else if full {
-        ((ram_gb * 1000.0 * 0.10) as usize).clamp(2048, 12_000)
+        // in-memory caches only; raw files stay in the disk cache, so a modest budget is enough
+        ((ram_gb * 1000.0 * 0.03) as usize).clamp(1536, 4096)
     } else {
-        ((ram_gb * 1000.0 * 0.08) as usize).clamp(384, 1536)
+        ((ram_gb * 1000.0 * 0.05) as usize).clamp(384, 1024)
     };
     Profile {
         name: if full { "full" } else { "lite" },

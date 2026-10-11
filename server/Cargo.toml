@@ -16,6 +16,7 @@ futures = "0.3.34"
 grib = { version = "0.19", default-features = false, features = ["png-unpack-with-png-crate", "ccsds-unpack-with-rust-aec", "jpeg2000-unpack-with-openjpeg", "time-calculation"] }
 hex = "0.4.3"
 lru = "0.18.5"
+mimalloc = "0.1.52"
 netcdf-reader = "0.9.1"
 once_cell = "1.21.4"
 parking_lot = "0.12.5"

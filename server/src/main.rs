@@ -1,4 +1,7 @@
 #![allow(dead_code)]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod alerts;
 mod overlays;
 mod grid;
@@ -58,6 +61,8 @@ enum Cmd {
     Profile,
     /// Decode radar files and print a summary
     Inspect { files: Vec<PathBuf> },
+    /// (Re)build the camera database from data/uploads and print what was kept
+    Camdb,
 }
 
 #[tokio::main]
@@ -84,12 +89,21 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Cmd::Inspect { files } => return inspect(files),
-        Cmd::Run => {}
+        Cmd::Run | Cmd::Camdb => {}
     }
 
     // Resolve paths relative to the config file's directory's parent (the server root)
     let root = cli.config.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_default();
     let abs = |p: &PathBuf| if p.is_absolute() { p.clone() } else { root.join(p) };
+    if let Some(Cmd::Camdb) = cli.cmd.as_ref() {
+        let data = abs(&cfg.server.data_dir);
+        std::fs::remove_file(data.join("cache/camdb.json.zst")).ok();
+        match overlays::camdb::load(&data)? {
+            Some(db) => println!("{}", serde_json::to_string_pretty(&db.stats)?),
+            None => println!("No camera file found in {}", data.join("uploads").display()),
+        }
+        return Ok(());
+    }
     let data_dir = abs(&cfg.server.data_dir);
     cfg.server.web_dir = abs(&cfg.server.web_dir);
     std::fs::create_dir_all(&data_dir)?;
@@ -120,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
     };
     tracing::info!("raw cache cap: {} GB", disk_cap / (1 << 30));
 
-    let grids = grid::service::GridService::new(http.clone(), health.clone(), &data_dir, profile.memory_mb / 2, profile.threads, profile.name == "full");
+    let grids = grid::service::GridService::new(http.clone(), health.clone(), &data_dir, profile.memory_mb * 55 / 100, profile.threads, profile.name == "full");
     *grids.local_dir.write() = cli.grid_dir.clone();
     if let Some(f) = &cli.metar_fixture {
         grids.load_metar_fixture(&std::fs::read(f)?)?;
@@ -132,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
         http.clone(),
         &cfg.radar,
         &data_dir,
-        profile.memory_mb / 2,
+        profile.memory_mb * 45 / 100,
         profile.threads,
         disk_cap,
         health.clone(),

@@ -306,6 +306,136 @@ const lightning: Draw = (c, s) => {
   c.stroke();
 };
 
+
+/** Lightning bolt (SDF so color and fade come from the layer). */
+const bolt: Draw = (c, s) => {
+  c.fillStyle = "#fff";
+  c.beginPath();
+  c.moveTo(s * 0.58, s * 0.04);
+  c.lineTo(s * 0.2, s * 0.56);
+  c.lineTo(s * 0.46, s * 0.56);
+  c.lineTo(s * 0.36, s * 0.96);
+  c.lineTo(s * 0.8, s * 0.4);
+  c.lineTo(s * 0.53, s * 0.4);
+  c.closePath();
+  c.fill();
+};
+
+/** Wind direction arrow pointing up (rotated by the layer to where the wind blows toward). */
+const arrow: Draw = (c, s) => {
+  c.fillStyle = "#fff";
+  c.beginPath();
+  c.moveTo(s / 2, s * 0.06);
+  c.lineTo(s * 0.8, s * 0.5);
+  c.lineTo(s * 0.58, s * 0.46);
+  c.lineTo(s * 0.58, s * 0.94);
+  c.lineTo(s * 0.42, s * 0.94);
+  c.lineTo(s * 0.42, s * 0.46);
+  c.lineTo(s * 0.2, s * 0.5);
+  c.closePath();
+  c.fill();
+};
+
+/** Storm report badges: colored circle with a white glyph per report type. */
+function lsr(fill: string, glyph: (c: CanvasRenderingContext2D, s: number) => void): Draw {
+  return (c, s) => {
+    badge(c, s, fill);
+    c.strokeStyle = "#fff";
+    c.fillStyle = "#fff";
+    c.lineWidth = 1.8;
+    c.lineCap = "round";
+    c.lineJoin = "round";
+    glyph(c, s);
+  };
+}
+const gTornado = (c: CanvasRenderingContext2D, s: number) => {
+  const rows = [[0.26, 0.74, 0.3], [0.32, 0.68, 0.42], [0.38, 0.6, 0.54], [0.43, 0.55, 0.66], [0.47, 0.52, 0.76]];
+  c.beginPath();
+  for (const [a, b, y] of rows) {
+    c.moveTo(s * a, s * y);
+    c.lineTo(s * b, s * y);
+  }
+  c.stroke();
+};
+const gFunnel = (c: CanvasRenderingContext2D, s: number) => {
+  c.beginPath();
+  c.moveTo(s * 0.26, s * 0.3);
+  c.lineTo(s * 0.74, s * 0.3);
+  c.lineTo(s * 0.5, s * 0.62);
+  c.closePath();
+  c.stroke();
+};
+const gHail = (c: CanvasRenderingContext2D, s: number) => {
+  for (const [x, y, r] of [[0.38, 0.4, 0.11], [0.62, 0.42, 0.09], [0.48, 0.64, 0.12]]) {
+    c.beginPath();
+    c.arc(s * x, s * y, s * r, 0, Math.PI * 2);
+    c.fill();
+  }
+};
+const gWind = (c: CanvasRenderingContext2D, s: number) => {
+  c.beginPath();
+  c.moveTo(s * 0.22, s * 0.38);
+  c.lineTo(s * 0.62, s * 0.38);
+  c.arc(s * 0.62, s * 0.3, s * 0.08, Math.PI / 2, -Math.PI, true);
+  c.moveTo(s * 0.22, s * 0.52);
+  c.lineTo(s * 0.76, s * 0.52);
+  c.moveTo(s * 0.22, s * 0.66);
+  c.lineTo(s * 0.56, s * 0.66);
+  c.arc(s * 0.56, s * 0.74, s * 0.08, -Math.PI / 2, Math.PI, false);
+  c.stroke();
+};
+const gFlood = (c: CanvasRenderingContext2D, s: number) => {
+  c.beginPath();
+  for (const y of [0.4, 0.56, 0.72]) {
+    c.moveTo(s * 0.22, s * y);
+    c.bezierCurveTo(s * 0.34, s * (y - 0.08), s * 0.42, s * (y + 0.08), s * 0.5, s * y);
+    c.bezierCurveTo(s * 0.58, s * (y - 0.08), s * 0.66, s * (y + 0.08), s * 0.78, s * y);
+  }
+  c.stroke();
+};
+const gSnow = (c: CanvasRenderingContext2D, s: number) => {
+  c.beginPath();
+  for (let k = 0; k < 3; k++) {
+    const a = (k * Math.PI) / 3;
+    c.moveTo(s / 2 + Math.cos(a) * s * 0.26, s / 2 + Math.sin(a) * s * 0.26);
+    c.lineTo(s / 2 - Math.cos(a) * s * 0.26, s / 2 - Math.sin(a) * s * 0.26);
+  }
+  c.stroke();
+};
+const gIce = (c: CanvasRenderingContext2D, s: number) => {
+  c.beginPath();
+  c.moveTo(s * 0.5, s * 0.22);
+  c.lineTo(s * 0.72, s * 0.5);
+  c.lineTo(s * 0.5, s * 0.78);
+  c.lineTo(s * 0.28, s * 0.5);
+  c.closePath();
+  c.stroke();
+};
+const gRain = (c: CanvasRenderingContext2D, s: number) => {
+  c.beginPath();
+  c.moveTo(s * 0.5, s * 0.22);
+  c.bezierCurveTo(s * 0.62, s * 0.42, s * 0.7, s * 0.52, s * 0.7, s * 0.6);
+  c.arc(s * 0.5, s * 0.6, s * 0.2, 0, Math.PI, false);
+  c.bezierCurveTo(s * 0.3, s * 0.52, s * 0.38, s * 0.42, s * 0.5, s * 0.22);
+  c.fill();
+};
+const gBolt = (c: CanvasRenderingContext2D, s: number) => {
+  c.beginPath();
+  c.moveTo(s * 0.56, s * 0.2);
+  c.lineTo(s * 0.34, s * 0.54);
+  c.lineTo(s * 0.48, s * 0.54);
+  c.lineTo(s * 0.42, s * 0.8);
+  c.lineTo(s * 0.68, s * 0.44);
+  c.lineTo(s * 0.53, s * 0.44);
+  c.closePath();
+  c.fill();
+};
+const gDot = (c: CanvasRenderingContext2D, s: number) => {
+  c.beginPath();
+  c.arc(s / 2, s / 2, s * 0.1, 0, Math.PI * 2);
+  c.fill();
+};
+
 export function registerIcons(map: MLMap) {
   make(map, "cam-img", 22, camera);
   make(map, "cam-hls", 22, video);
@@ -327,4 +457,16 @@ export function registerIcons(map: MLMap) {
   make(map, "pip-occl", 18, pipOccl);
   make(map, "plus", 12, lightning, true);
   for (let k = 0; k <= 150; k += 5) make(map, `barb-${k}`, 34, barb(k));
+  make(map, "bolt", 24, bolt, true);
+  make(map, "arrow", 20, arrow, true);
+  make(map, "lsr-tornado", 26, lsr("#dc2626", gTornado));
+  make(map, "lsr-funnel", 26, lsr("#f87171", gFunnel));
+  make(map, "lsr-hail", 26, lsr("#16a34a", gHail));
+  make(map, "lsr-wind", 26, lsr("#2563eb", gWind));
+  make(map, "lsr-flood", 26, lsr("#0f766e", gFlood));
+  make(map, "lsr-snow", 26, lsr("#6366f1", gSnow));
+  make(map, "lsr-ice", 26, lsr("#a855f7", gIce));
+  make(map, "lsr-rain", 26, lsr("#0891b2", gRain));
+  make(map, "lsr-lightning", 26, lsr("#ca8a04", gBolt));
+  make(map, "lsr-other", 26, lsr("#6b7280", gDot));
 }

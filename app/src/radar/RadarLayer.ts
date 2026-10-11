@@ -37,7 +37,7 @@ uniform float u_offset;
 uniform float u_cmin;
 uniform float u_cmax;
 uniform float u_opacity;
-uniform int u_smooth;
+uniform float u_smooth;   // 0 = off … 0.5 = bilinear … 1 = heavy
 uniform vec4 u_rf;
 uniform usampler2D u_data;
 uniform usampler2D u_azidx;
@@ -98,7 +98,7 @@ void main() {
     fragColor = vec4(u_rf.rgb * u_rf.a, u_rf.a) * u_opacity;
     return;
   }
-  if (u_smooth == 1) {
+  if (u_smooth > 0.0) {
     // bilinear in (azimuth, range) over valid neighbours
     float ac = texelFetch(u_az, ivec2(r0, 0), 0).r;
     float da = az - ac;
@@ -121,7 +121,25 @@ void main() {
     for (int i = 0; i < 4; i++) {
       if (valid(vs[i])) { acc += vs[i] * w[i]; wsum += w[i]; }
     }
-    if (wsum > 0.0) v = acc / wsum;
+    float sm = wsum > 0.0 ? acc / wsum : v;
+    if (u_smooth > 0.5) {
+      // heavier: gaussian over 3 radials x 5 gates, widening with the setting
+      float spread = (u_smooth - 0.5) * 2.0;
+      float step = 1.0 + spread * 1.5;
+      float acc2 = 0.0, ws2 = 0.0;
+      for (int dr = -1; dr <= 1; dr++) {
+        int rr = (r0 + dr + u_nrad) % u_nrad;
+        for (int dg = -2; dg <= 2; dg++) {
+          float vv = valueAt(rr, int(floor(g + float(dg) * step + 0.5)));
+          if (!valid(vv)) continue;
+          float wg = exp(-0.5 * float(dg * dg) - 0.9 * float(dr * dr));
+          acc2 += vv * wg;
+          ws2 += wg;
+        }
+      }
+      if (ws2 > 0.0) sm = mix(sm, acc2 / ws2, spread);
+    }
+    v = mix(v, sm, min(1.0, u_smooth * 2.0));
   }
   float t = (v - u_cmin) / (u_cmax - u_cmin);
   vec4 c = texture(u_cmap, vec2(clamp(t, 0.0, 1.0), 0.5));
@@ -177,7 +195,8 @@ export class RadarLayer implements CustomLayerInterface {
   private cache = new Map<Sweep, GpuSweep>();
   private cmaps = new Map<ColorTable, WebGLTexture>();
   items: DrawItem[] = [];
-  smooth = false;
+  /** 0 = off, 0.5 = bilinear, 1 = heavy */
+  smooth = 0;
   maxCached = 48;
 
   constructor(id = "radar") {
@@ -359,7 +378,7 @@ export class RadarLayer implements CustomLayerInterface {
       gl.uniform1f(L.u_cmin, it.table.min);
       gl.uniform1f(L.u_cmax, it.table.max);
       gl.uniform1f(L.u_opacity, it.opacity);
-      gl.uniform1i(L.u_smooth, this.smooth ? 1 : 0);
+      gl.uniform1f(L.u_smooth, this.smooth);
       const rf = it.table.rf ?? [0, 0, 0, 0];
       gl.uniform4f(L.u_rf, rf[0] / 255, rf[1] / 255, rf[2] / 255, rf[3] / 255);
       const bind = (unit: number, tex: WebGLTexture, name: string) => {

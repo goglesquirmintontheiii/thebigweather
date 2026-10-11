@@ -1,7 +1,7 @@
 import { useMemo } from "preact/hooks";
 import { rasterize, TEX_SIZE } from "../radar/colormaps";
 import { speedFactor, convertUnit } from "../util";
-import { settings } from "../store";
+import { settings, update } from "../store";
 import { activeLegend } from "../active";
 
 export function Legend() {
@@ -21,9 +21,15 @@ export function Legend() {
     return `linear-gradient(90deg, ${stops.join(",")})`;
   }, [t]);
   if (!L || !t) return null;
+  const top = settings.value.ui.legendTop;
+  const dock = {
+    class: top ? "top" : "",
+    title: top ? "Click to move the legend back to the corner" : "Click to show the legend as a strip across the top",
+    onClick: () => update((x) => (x.ui.legendTop = !x.ui.legendTop)),
+  };
   if (t.labels) {
     return (
-      <div class="legend glass cat">
+      <div class={`legend glass cat ${dock.class}`} title={dock.title} onClick={dock.onClick}>
         {Object.entries(t.labels)
           .filter(([k]) => +k < 15 && +k >= 0)
           .map(([k, name]) => {
@@ -38,7 +44,7 @@ export function Legend() {
       </div>
     );
   }
-  const ticks = 6;
+  const ticks = top ? 12 : 6;
   let unitLabel = L.units;
   const labels = Array.from({ length: ticks + 1 }, (_, i) => {
     const v = t.min + (i / ticks) * (t.max - t.min);
@@ -56,7 +62,7 @@ export function Legend() {
     return ax >= 10 || x === 0 || span >= 30 ? Math.round(x) : ax < 0.1 ? x.toFixed(3) : x.toFixed(ax < 1 ? 2 : 1);
   });
   return (
-    <div class="legend glass">
+    <div class={`legend glass ${dock.class}`} title={dock.title} onClick={dock.onClick}>
       <div class="bar" style={{ background: bg }} />
       <div class="lticks">
         {labels.map((l, i) => (

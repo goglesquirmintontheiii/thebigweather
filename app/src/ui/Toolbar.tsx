@@ -2,7 +2,7 @@ import { tool, crosshair, toast, settings, update } from "../store";
 import { playing, togglePlay, frameCount } from "../anim";
 import { mapRef, measureTotal, measurePts, describeBearing, bearingInfo } from "../map/mapview";
 import { fmtDist } from "../util";
-import { Play, Pause, LocateFixed, Camera, Compass, Crosshair, Ruler, RadioTower, PenTool } from "lucide-preact";
+import { Play, Pause, LocateFixed, Camera, Compass, Crosshair, Ruler, RadioTower, PenTool, MousePointer2 } from "lucide-preact";
 import * as maplibregl from "maplibre-gl";
 
 let locMarker: maplibregl.Marker | null = null;
@@ -82,6 +82,7 @@ export function Toolbar() {
         {btn(false, "Screenshot (S)", screenshot, <Camera size={19} />)}
         {btn(t === "bearing", "Distance & direction from radar (B)", () => (tool.value = t === "bearing" ? "none" : "bearing"), <Compass size={19} />)}
         {btn(crosshair.value, "Center crosshair value (C)", () => (crosshair.value = !crosshair.value), <Crosshair size={19} />)}
+        {btn(settings.value.ui.cursorValue, "Show the value under the mouse (V) · or hold Shift", () => update((s) => (s.ui.cursorValue = !s.ui.cursorValue)), <MousePointer2 size={19} />)}
         {btn(t === "measure", "Measure distance (M)", () => (tool.value = t === "measure" ? "none" : "measure"), <Ruler size={19} />)}
         {btn(settings.value.overlays.sites, "Show/hide radar sites (R)", () => update((s) => (s.overlays.sites = !s.overlays.sites)), <RadioTower size={19} />)}
         {btn(false, "Drawing mode — coming in phase 4", () => toast("Drawing mode arrives in phase 4"), <PenTool size={19} />, false)}

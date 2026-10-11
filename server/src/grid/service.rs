@@ -80,7 +80,7 @@ pub struct GridService {
     inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     max_dim_mrms: usize,
     max_dim_goes: usize,
-    rgbs: Mutex<lru::LruCache<String, Arc<RgbImage>>>,
+    rgbs: Mutex<(lru::LruCache<String, (Arc<RgbImage>, usize)>, usize, usize)>, // (cache, bytes, cap)
     /// optional folder of local files used as frames (offline use / case studies):
     /// files are named "<layer id with / as _>__<original name>"
     pub local_dir: RwLock<Option<PathBuf>>,
@@ -103,7 +103,8 @@ impl GridService {
             health,
             layers: sources::all_layers(),
             cache_dir,
-            grids: Mutex::new(SizedLru { map: lru::LruCache::unbounded(), bytes: 0, cap: memory_mb * 1024 * 1024 }),
+            // 70% decoded grids, 30% RGB composites
+            grids: Mutex::new(SizedLru { map: lru::LruCache::unbounded(), bytes: 0, cap: memory_mb * 1024 * 1024 * 7 / 10 }),
             listings: Mutex::new(HashMap::new()),
             texts: Mutex::new(HashMap::new()),
             ndfd: tokio::sync::Mutex::new(HashMap::new()),
@@ -113,7 +114,7 @@ impl GridService {
             inflight: Mutex::new(HashMap::new()),
             max_dim_mrms: if full { 7000 } else { 3500 },
             max_dim_goes: if full { 5424 } else { 2712 },
-            rgbs: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(if full { 16 } else { 5 }).unwrap())),
+            rgbs: Mutex::new((lru::LruCache::unbounded(), 0, memory_mb * 1024 * 1024 * 3 / 10)),
             local_dir: RwLock::new(None),
         })
     }
@@ -140,7 +141,11 @@ impl GridService {
         }
         let l = s3::list(&self.http, bucket, prefix, None, None, 10).await?;
         let v = Arc::new(l.objects);
-        self.listings.lock().insert(k, (Instant::now(), v.clone()));
+        let mut m = self.listings.lock();
+        if m.len() > 300 {
+            m.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(900));
+        }
+        m.insert(k, (Instant::now(), v.clone()));
         Ok(v)
     }
 
@@ -199,17 +204,18 @@ impl GridService {
 
     // ---------- frames ----------
 
-    pub async fn frames(&self, layer_id: &str, n: usize, run: Option<&str>, storm: Option<&str>) -> Result<FramesResp> {
+    pub async fn frames(&self, layer_id: &str, n: usize, run: Option<&str>, storm: Option<&str>, end: Option<i64>) -> Result<FramesResp> {
+        let end = end.and_then(chrono::DateTime::from_timestamp_millis).filter(|t| *t < Utc::now());
         let l = self.layer(layer_id)?.clone();
         if let Some(local) = self.local_frames(&l) {
             return Ok(local);
         }
         let res = match l.source {
-            "mrms" => self.mrms_frames(&l, n).await,
+            "mrms" => self.mrms_frames(&l, n, end).await,
             "model" => self.model_frames(&l, run, storm).await,
             "ndfd" => self.ndfd_frames(&l).await,
             "metar" => Ok(self.metar_frames(&l, n)),
-            "goes" => self.goes_frames(&l, n).await,
+            "goes" => self.goes_frames(&l, n, end).await,
             "future" => self.future_frames(&l).await,
             _ => bail!("unknown source"),
         };
@@ -256,10 +262,11 @@ impl GridService {
         Some(FramesResp { frames, ..Default::default() })
     }
 
-    async fn mrms_frames(&self, l: &LayerDef, n: usize) -> Result<FramesResp> {
-        let now = Utc::now();
+    async fn mrms_frames(&self, l: &LayerDef, n: usize, end: Option<chrono::DateTime<Utc>>) -> Result<FramesResp> {
+        let now = end.unwrap_or_else(Utc::now);
+        let end_ms = end.map(|t| t.timestamp_millis());
         let mut keys: Vec<s3::Object> = vec![];
-        for back in 0..2 {
+        for back in 0..3 {
             let d = now - chrono::Duration::days(back);
             let prefix = format!("CONUS/{}/{}/", l.product, ymd(d));
             let objs = self.list_cached(sources::MRMS_BUCKET, &prefix, 50).await?;
@@ -271,6 +278,12 @@ impl GridService {
             }
         }
         keys.retain(|o| o.key.ends_with(".grib2.gz"));
+        if let Some(e) = end_ms {
+            keys.retain(|o| {
+                let stem = o.key.rsplit('_').next().unwrap_or("").trim_end_matches(".grib2.gz");
+                chrono::NaiveDateTime::parse_from_str(stem, "%Y%m%d-%H%M%S").map(|t| t.and_utc().timestamp_millis() <= e).unwrap_or(false)
+            });
+        }
         let k = keys.len().saturating_sub(n);
         let frames = keys[k..]
             .iter()
@@ -491,6 +504,17 @@ impl GridService {
         let b2 = b.clone();
         let msgs = tokio::task::spawn_blocking(move || decode::list_messages(&b2)).await??;
         let version = Utc::now().timestamp();
+        // keep only fresh NDFD files (each can be tens of MB)
+        m.retain(|_, (t, ..)| t.elapsed() < Duration::from_secs(1800));
+        while m.len() >= 12 {
+            let oldest = m.iter().min_by_key(|(_, (t, ..))| *t).map(|(k, _)| k.clone());
+            match oldest {
+                Some(k) => {
+                    m.remove(&k);
+                }
+                None => break,
+            }
+        }
         m.insert(url, (Instant::now(), version, b.clone(), msgs.iter().map(|x| MessageInfo { ..*x }).collect()));
         Ok((version, b, msgs))
     }
@@ -529,7 +553,7 @@ impl GridService {
         FramesResp { frames, ..Default::default() }
     }
 
-    async fn goes_frames(&self, l: &LayerDef, n: usize) -> Result<FramesResp> {
+    async fn goes_frames(&self, l: &LayerDef, n: usize, end: Option<chrono::DateTime<Utc>>) -> Result<FramesResp> {
         let mut p = l.product.split('|');
         let sat: u32 = p.next().unwrap_or("19").parse()?;
         let sector = p.next().unwrap_or("conus");
@@ -541,14 +565,15 @@ impl GridService {
         };
         let (_, _, dir, tag, _) = sources::GOES_SECTORS.iter().find(|s| s.0 == sat && s.1 == sector).ok_or_else(|| anyhow!("unknown sector"))?;
         let bucket = format!("noaa-goes{sat}");
-        let now = Utc::now();
+        let now = end.unwrap_or_else(Utc::now);
+        let end_ms = end.map(|t| t.timestamp_millis());
         let mut keys: Vec<s3::Object> = vec![];
         let want = format!("C{band:02}_G{sat}_");
-        for back in 0..4 {
+        for back in 0..24 {
             let t = now - chrono::Duration::hours(back);
             let prefix = format!("{dir}/{:04}/{:03}/{:02}/OR_ABI-L2-{tag}-M", t.year(), t.ordinal(), t.hour());
             let objs = self.list_cached(&bucket, &prefix, 45).await.unwrap_or_default();
-            let mut v: Vec<s3::Object> = objs.iter().filter(|o| o.key.contains(&want)).cloned().collect();
+            let mut v: Vec<s3::Object> = objs.iter().filter(|o| o.key.contains(&want) && end_ms.map(|e| goes::time_from_name(&o.key).unwrap_or(0) <= e).unwrap_or(true)).cloned().collect();
             v.extend(keys);
             keys = v;
             if keys.len() >= n {
@@ -752,18 +777,31 @@ impl GridService {
 
     /// RGB composite for a `goesrgb|layer|bucket|base-band-key` frame.
     pub async fn rgb(&self, key: &str) -> Result<Arc<RgbImage>> {
-        if let Some(i) = self.rgbs.lock().get(key) {
+        if let Some((i, _)) = self.rgbs.lock().0.get(key) {
             return Ok(i.clone());
         }
         let lock = self.inflight.lock().entry(key.to_string()).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone();
         let _g = lock.lock().await;
-        if let Some(i) = self.rgbs.lock().get(key) {
+        if let Some((i, _)) = self.rgbs.lock().0.get(key) {
             return Ok(i.clone());
         }
         let res = self.load_rgb(key).await;
         self.inflight.lock().remove(key);
         let img = Arc::new(res?);
-        self.rgbs.lock().put(key.to_string(), img.clone());
+        {
+            let n = img.rgba.len() + 256;
+            let mut c = self.rgbs.lock();
+            if let Some((_, old)) = c.0.put(key.to_string(), (img.clone(), n)) {
+                c.1 -= old;
+            }
+            c.1 += n;
+            while c.1 > c.2 && c.0.len() > 1 {
+                match c.0.pop_lru() {
+                    Some((_, (_, s))) => c.1 -= s,
+                    None => break,
+                }
+            }
+        }
         Ok(img)
     }
 

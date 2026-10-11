@@ -7,7 +7,7 @@ import { TopBar } from "./Header";
 import { Toolbar } from "./Toolbar";
 import { Timeline } from "./Timeline";
 import { Legend } from "./Legend";
-import { StatusBar, Crosshair, FpsMeter } from "./Readouts";
+import { StatusBar, Crosshair, FpsMeter, CursorValue } from "./Readouts";
 import { StatsPanel } from "./StatsPanel";
 import { AlertDetail } from "./AlertDetail";
 import { Toasts, ContextMenu, AddCameraDialog } from "./Overlays";
@@ -16,6 +16,7 @@ import { useHotkeys } from "./hotkeys";
 import { openLocalFile } from "../radar/controller";
 import { OverlayPopup } from "./OverlayPopup";
 import { CameraPanels } from "./CameraPanels";
+import { ConfigModal } from "./OverlayList";
 import { importFile, isMapFile, loadFiles } from "../overlays/files";
 import "../overlays/iss";
 import "../overlays/mycams";
@@ -26,6 +27,7 @@ export function App() {
     createMap(mapEl.current!);
     startAlerts();
     loadFiles();
+    (window as any).__tbwImport = importFile;
   }, []);
   useHotkeys();
   const noServer = settings.value.servers.length === 0;
@@ -44,6 +46,7 @@ export function App() {
     >
       <div ref={mapEl} class="map" />
       <Crosshair />
+      <CursorValue />
       <TopBar />
       <FpsMeter />
       <Rail />
@@ -58,6 +61,7 @@ export function App() {
       <AlertDetail />
       <OverlayPopup />
       <CameraPanels />
+      <ConfigModal />
       <AddCameraDialog />
       <ContextMenu />
       <Toasts />

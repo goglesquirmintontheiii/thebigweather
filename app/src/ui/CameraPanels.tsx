@@ -17,6 +17,8 @@ export interface CamView {
   page?: string | null;
   refresh?: number;
   attribution?: string;
+  /** the URL breaks with a cache-buster query: refetch with no-store instead */
+  nobust?: boolean;
   x: number;
   y: number;
 }
@@ -36,7 +38,8 @@ export function openCamera(p: any) {
     video: p.v,
     page: p.p,
     refresh: p.r,
-    attribution: p.a,
+    attribution: p.a ?? (String(p.s ?? "").startsWith("db:") ? `Camera database · ${String(p.s).slice(3)}` : undefined),
+    nobust: !!p.nb,
     x: 80 + ((n * 36) % 300),
     y: 90 + ((n * 36) % 240),
   };
@@ -83,6 +86,26 @@ function Snapshot({ c }: { c: CamView }) {
   const [bust, setBust] = useState(() => Math.floor(Date.now() / 1000));
   const [err, setErr] = useState(false);
   const [at, setAt] = useState(0);
+  const [blob, setBlob] = useState<string | null>(null);
+  // cameras whose URL can't take a cache-buster: fetch without the browser cache
+  useEffect(() => {
+    if (!c.nobust || !c.img) return;
+    let gone = false;
+    fetch(c.img, { cache: "no-store" })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+      .then((b) => {
+        if (gone) return;
+        setBlob((old) => {
+          if (old) URL.revokeObjectURL(old);
+          return URL.createObjectURL(b);
+        });
+      })
+      .catch(() => !gone && setBlob(null));
+    return () => {
+      gone = true;
+    };
+  }, [bust, c.id]);
+  useEffect(() => () => blob && URL.revokeObjectURL(blob), []);
   useEffect(() => {
     const ms = Math.max(5, Math.min(c.refresh ?? 60, 300)) * 1000;
     const t = setInterval(() => setBust(Math.floor(Date.now() / 1000)), ms);
@@ -94,7 +117,7 @@ function Snapshot({ c }: { c: CamView }) {
         <div class="cam-empty">Image unavailable</div>
       ) : (
         <img
-          src={imageUrl(c, bust)}
+          src={c.nobust ? blob ?? c.img ?? "" : imageUrl(c, bust)}
           referrerpolicy="no-referrer"
           onLoad={() => {
             setErr(false);
@@ -120,7 +143,10 @@ function HlsVideo({ url }: { url: string }) {
   useEffect(() => {
     const v = ref.current!;
     let hls: Hls | null = null;
-    if (Hls.isSupported()) {
+    if (/\.(mp4|webm|mov)(\?|$)/i.test(url)) {
+      // plain video file / stream the browser can play itself
+      v.src = url;
+    } else if (Hls.isSupported()) {
       hls = new Hls({ lowLatencyMode: true, maxBufferLength: 20, backBufferLength: 10 });
       hls.loadSource(url);
       hls.attachMedia(v);

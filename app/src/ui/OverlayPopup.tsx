@@ -1,7 +1,7 @@
 // Details for a clicked overlay feature (reports, stations, cameras, ships, satellites…).
 
 import { useEffect, useState } from "preact/hooks";
-import { popup } from "../overlays/manager";
+import { popup, trackNote, showFlightTrack } from "../overlays/manager";
 import { openCamera, openStream } from "./CameraPanels";
 import { nextPass } from "../overlays/iss";
 import { api } from "../api";
@@ -24,6 +24,111 @@ function Taf({ id }: { id: string }) {
   if (taf === undefined) return <div class="muted small">Loading TAF…</div>;
   if (!taf) return <div class="muted small">No TAF for {id}</div>;
   return <pre class="pop-raw">{taf}</pre>;
+}
+
+/** Sky layers from the raw METAR (FEW020 SCT045 BKN100 OVC250 VV005 CLR). */
+export function skyLayers(raw: string): { cover: string; oktas: number; ft: number; cb?: boolean }[] {
+  const out: { cover: string; oktas: number; ft: number; cb?: boolean }[] = [];
+  const OK: Record<string, number> = { FEW: 2, SCT: 4, BKN: 6, OVC: 8, VV: 8 };
+  for (const m of (raw ?? "").matchAll(/\b(FEW|SCT|BKN|OVC|VV)(\d{3})(CB|TCU)?\b/g)) out.push({ cover: m[1], oktas: OK[m[1]], ft: +m[2] * 100, cb: !!m[3] });
+  return out;
+}
+
+function SkyGraph({ raw }: { raw: string }) {
+  const layers = skyLayers(raw);
+  const clear = /\b(CLR|SKC|NCD|NSC|CAVOK)\b/.test(raw ?? "");
+  const W = 150;
+  const H = 120;
+  const top = 25000;
+  // square-root height scale gives low clouds (what matters for flying) more room
+  const y = (ft: number) => H - 14 - Math.sqrt(Math.min(ft, top) / top) * (H - 24);
+  const ticks = [1000, 3000, 5000, 10000, 20000];
+  return (
+    <svg class="sky-graph" width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
+      <rect x="0" y="0" width={W} height={H} rx="6" fill="rgba(255,255,255,.03)" />
+      {ticks.map((t) => (
+        <g key={t}>
+          <line x1="34" x2={W - 4} y1={y(t)} y2={y(t)} stroke="rgba(255,255,255,.08)" />
+          <text x="30" y={y(t) + 3} text-anchor="end" font-size="8.5" fill="#8b97a6">
+            {t >= 1000 ? `${t / 1000}k` : t}
+          </text>
+        </g>
+      ))}
+      <line x1="34" x2={W - 4} y1={H - 14} y2={H - 14} stroke="#8b97a6" />
+      {layers.map((l, i) => {
+        const w = ((W - 44) * l.oktas) / 8;
+        return (
+          <g key={i}>
+            <rect x={36} y={y(l.ft) - 4} width={w} height="8" rx="4" fill={l.cover === "VV" ? "#a3a3a3" : l.cb ? "#f59e0b" : "#e2e8f0"} opacity={0.35 + l.oktas / 16} />
+            <text x={38 + w + 2 > W - 30 ? W - 6 : 38 + w + 2} y={y(l.ft) + 3} font-size="8.5" fill="#e7edf4" text-anchor={38 + w + 2 > W - 30 ? "end" : "start"}>
+              {l.cover}
+              {l.cb ? " CB" : ""}
+            </text>
+          </g>
+        );
+      })}
+      {!layers.length && (
+        <text x={W / 2 + 14} y={H / 2} text-anchor="middle" font-size="10" fill="#8b97a6">
+          {clear ? "Clear skies" : "No cloud report"}
+        </text>
+      )}
+      <text x={W / 2 + 14} y={H - 3} text-anchor="middle" font-size="8.5" fill="#8b97a6">
+        Sky (ft above ground)
+      </text>
+    </svg>
+  );
+}
+
+function WindCompass({ wd, ws, wg }: { wd?: number | null; ws?: number | null; wg?: number | null }) {
+  const S = 120;
+  const c = S / 2;
+  const r = 44;
+  const calm = !ws || ws < 1;
+  const vrb = wd == null && !calm;
+  const sp = settings.value.units.speed;
+  const conv = sp === "mph" ? 1.15078 : sp === "km/h" ? 1.852 : sp === "m/s" ? 0.514444 : 1;
+  const u = sp === "kt" ? "kt" : sp;
+  // arrow points where the wind blows toward; the tail sits on the direction it comes from
+  const a = (((wd ?? 0) - 90) * Math.PI) / 180;
+  const tail = [c + Math.cos(a) * r, c + Math.sin(a) * r];
+  const head = [c - Math.cos(a) * (r - 12), c - Math.sin(a) * (r - 12)];
+  return (
+    <svg class="wind-compass" width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
+      <circle cx={c} cy={c} r={r + 6} fill="rgba(255,255,255,.03)" stroke="rgba(255,255,255,.15)" />
+      {Array.from({ length: 16 }, (_, i) => {
+        const t = ((i * 22.5 - 90) * Math.PI) / 180;
+        const l = i % 4 === 0 ? 7 : 3;
+        return <line key={i} x1={c + Math.cos(t) * (r + 6)} y1={c + Math.sin(t) * (r + 6)} x2={c + Math.cos(t) * (r + 6 - l)} y2={c + Math.sin(t) * (r + 6 - l)} stroke="#8b97a6" />;
+      })}
+      {["N", "E", "S", "W"].map((d, i) => {
+        const t = ((i * 90 - 90) * Math.PI) / 180;
+        return (
+          <text key={d} x={c + Math.cos(t) * (r - 6)} y={c + Math.sin(t) * (r - 6) + 3.5} text-anchor="middle" font-size="9.5" font-weight="700" fill="#b9c3cf">
+            {d}
+          </text>
+        );
+      })}
+      {!calm && !vrb && (
+        <>
+          <line x1={tail[0]} y1={tail[1]} x2={head[0]} y2={head[1]} stroke="#3fb7ff" stroke-width="3" stroke-linecap="round" />
+          <polygon
+            points={`${head[0] - Math.cos(a) * 10 + Math.sin(a) * 6},${head[1] - Math.sin(a) * 10 - Math.cos(a) * 6} ${head[0] - Math.cos(a) * 10 - Math.sin(a) * 6},${head[1] - Math.sin(a) * 10 + Math.cos(a) * 6} ${head[0] - Math.cos(a) * 1},${head[1] - Math.sin(a) * 1}`}
+            fill="#3fb7ff"
+          />
+        </>
+      )}
+      <circle cx={c} cy={c} r="17" fill="#0e1218" stroke="rgba(255,255,255,.12)" />
+      <text x={c} y={c + 1} text-anchor="middle" font-size="12" font-weight="700" fill="#e7edf4">
+        {calm ? "Calm" : Math.round((ws ?? 0) * conv)}
+      </text>
+      <text x={c} y={c + 11} text-anchor="middle" font-size="7.5" fill="#8b97a6">
+        {calm ? "" : wg ? `G${Math.round(wg * conv)} ${u}` : u}
+      </text>
+      <text x={c} y={S - 2} text-anchor="middle" font-size="8.5" fill="#8b97a6">
+        {calm ? "" : vrb ? "Variable" : `From ${Math.round(wd!)}°`}
+      </text>
+    </svg>
+  );
 }
 
 function Tides({ id }: { id: string }) {
@@ -87,7 +192,7 @@ export function OverlayPopup() {
           <b>{p.title}</b>
           {p.sub && <div class="muted small">{p.sub}</div>}
         </div>
-        <button class="icon-btn" onClick={() => (popup.value = null)}>
+        <button class="icon-btn" onClick={() => ((popup.value = null), p.kind === "flight" && showFlightTrack(null))}>
           <X size={14} />
         </button>
       </div>
@@ -122,7 +227,14 @@ export function OverlayPopup() {
           {props.name === "ISS" && <div class="muted small">The feed can be blank or blue when the station is out of contact.</div>}
         </>
       )}
+      {p.kind === "metar" && props.raw && (
+        <div class="metar-viz">
+          <WindCompass wd={props.wd} ws={props.ws} wg={props.wg} />
+          <SkyGraph raw={props.raw} />
+        </div>
+      )}
       {p.kind === "metar" && props.id && <Taf id={props.id} />}
+      {p.kind === "flight" && <div class="muted small">{trackNote.value || "Loading track…"}</div>}
       {p.kind === "tide" && <Tides id={props.id} />}
       {p.text && <pre class="pop-raw">{p.text}</pre>}
       <div class="pop-actions">

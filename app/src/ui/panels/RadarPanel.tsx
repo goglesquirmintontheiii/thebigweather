@@ -1,10 +1,11 @@
 import { useMemo, useState, useRef } from "preact/hooks";
 import { settings, update, toast } from "../../store";
-import { sites, tilts, l3Products, L2_MOMENTS, selectSite, currentSite, tableKeyFor, loadHistory, backToLatest, pinned, openLocalFile } from "../../radar/controller";
+import { sites, tilts, l3Products, L2_MOMENTS, selectSite, currentSite, tableKeyFor, backToLatest, pinned, openLocalFile } from "../../radar/controller";
 import { BUILTIN, COLORBLIND, parsePal } from "../../radar/colormaps";
 import { mapRef, flyToSite } from "../../map/mapview";
 import { distance, fmtDist } from "../../util";
-import { Search, Upload, History, Crosshair } from "lucide-preact";
+import { Search, Upload, Crosshair } from "lucide-preact";
+import { Slider, smoothLabel } from "../controls";
 
 export function RadarPanel() {
   const r = settings.value.radar;
@@ -179,17 +180,17 @@ function DisplayOptions() {
   const r = settings.value.radar;
   return (
     <section class="opts">
-      <div class="row">
-        <span>Frames</span>
-        <input type="range" min={1} max={60} value={r.frames} onChange={(e) => update((s) => (s.radar.frames = +(e.target as HTMLInputElement).value))} />
-        <span class="val">{r.frames}</span>
-      </div>
+      {settings.value.anim.mode === "count" ? (
+        <Slider label="Frames" value={r.frames} min={1} max={120} live={false} set={(v) => update((s) => (s.radar.frames = v))} />
+      ) : (
+        <div class="row muted small">Frames: last {settings.value.anim.minutes} min (timeline settings)</div>
+      )}
       <div class="row">
         <span>Opacity</span>
         <input type="range" min={10} max={100} value={Math.round(r.opacity * 100)} onInput={(e) => update((s) => (s.radar.opacity = +(e.target as HTMLInputElement).value / 100))} />
         <span class="val">{Math.round(r.opacity * 100)}%</span>
       </div>
-      <Toggle label="Smoothing" on={r.smooth} set={(v) => update((s) => (s.radar.smooth = v))} />
+      <Slider label="Smoothing" value={r.smooth} min={0} max={1} step={0.05} fmt={smoothLabel} set={(v) => update((s) => (s.radar.smooth = v))} />
       {r.source === "L2" && <Toggle label="RapidSweep (live chunks)" on={r.live} set={(v) => update((s) => (s.radar.live = v))} />}
     </section>
   );
@@ -266,26 +267,11 @@ function ColorTablePicker() {
 }
 
 function HistoryBox() {
-  const today = new Date().toISOString().slice(0, 10);
-  const [date, setDate] = useState(today);
-  const [time, setTime] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   return (
     <section>
-      <label class="lbl">History (UTC)</label>
-      <div class="row">
-        <input type="date" value={date} max={today} min="1991-06-01" onChange={(e) => setDate((e.target as HTMLInputElement).value)} />
-        <input type="time" value={time} onChange={(e) => setTime((e.target as HTMLInputElement).value)} />
-        <button
-          class="btn sm"
-          onClick={() => {
-            const end = time ? Date.parse(`${date}T${time}:59Z`) : undefined;
-            loadHistory(date, end);
-          }}
-        >
-          <History size={13} /> Load
-        </button>
-      </div>
+      <label class="lbl">Files</label>
+      <p class="muted small">History is in the timeline at the bottom (clock button).</p>
       <div class="row">
         {pinned.value && (
           <button class="btn sm ghost" onClick={backToLatest}>

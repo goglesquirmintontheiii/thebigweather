@@ -1,6 +1,7 @@
 import { openPanel, type PanelId, connection } from "../store";
 import { alerts } from "../alerts";
-import { Layers, Radar, TriangleAlert, MapPin, Activity, Settings, Radio, FolderOpen, CloudSun, Search, ArrowLeftRight, X } from "lucide-preact";
+import { Layers, Radar, TriangleAlert, MapPin, Activity, Settings, Radio, FolderOpen, CloudSun, Search, ArrowLeftRight, X, Map as MapIcon } from "lucide-preact";
+import { MapPanel } from "./panels/MapPanel";
 import { LayersPanel } from "./panels/LayersPanel";
 import { RadarPanel } from "./panels/RadarPanel";
 import { AlertsPanel } from "./panels/AlertsPanel";
@@ -11,6 +12,7 @@ import { SettingsPanel } from "./panels/SettingsPanel";
 const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "radar", icon: Radar, label: "Radar" },
   { id: "layers", icon: Layers, label: "Layers" },
+  { id: "map", icon: MapIcon, label: "Basemap" },
   { id: "alerts", icon: TriangleAlert, label: "Alerts" },
   { id: "points", icon: MapPin, label: "My points" },
   { id: "sources", icon: Activity, label: "Data sources" },
@@ -50,7 +52,7 @@ export function Rail() {
   );
 }
 
-const TITLES: Record<string, string> = { radar: "Radar", layers: "Layers", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings" };
+const TITLES: Record<string, string> = { radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings" };
 
 export function SidePanel() {
   const p = openPanel.value;
@@ -66,6 +68,7 @@ export function SidePanel() {
       <div class="panel-body">
         {p === "radar" && <RadarPanel />}
         {p === "layers" && <LayersPanel />}
+        {p === "map" && <MapPanel />}
         {p === "alerts" && <AlertsPanel />}
         {p === "points" && <PointsPanel />}
         {p === "sources" && <SourcesPanel />}

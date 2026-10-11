@@ -1,14 +1,20 @@
-// Overlay toggles with a config gear per layer (style + layer options).
+// Overlay toggles; the gear opens the layer's settings in a centered window.
 
-import { useState, useRef } from "preact/hooks";
+import { useState, useRef, useEffect } from "preact/hooks";
+import { signal } from "@preact/signals";
 import { settings, update, type OvlSettings } from "../store";
-import { OVERLAYS, styleFor, optsFor, type OverlayDef } from "../overlays/defs";
-import { ovlStatus, ovlMeta } from "../overlays/manager";
-import { fileOverlays, importFile, removeFile } from "../overlays/files";
-import { Settings2, ChevronRight, Upload, Trash2, Loader, AlertTriangle } from "lucide-preact";
+import { OVERLAYS, optsFor, overlayDef, type OverlayDef } from "../overlays/defs";
+import { ovlStatus, ovlMeta, refreshOverlay } from "../overlays/manager";
+import { fileOverlays, fileImports, importFile, removeFile } from "../overlays/files";
+import { Settings2, ChevronRight, Upload, Trash2, Loader, AlertTriangle, X, RefreshCw } from "lucide-preact";
 import { camDialog } from "./Overlays";
+import { AlertConfig } from "./AlertConfig";
+import { Toggle } from "./panels/RadarPanel";
 
-function setOvl(id: string, fn: (o: OvlSettings) => void) {
+/** Layer whose settings window is open: overlay id, "file:<id>" or "base:<name>". */
+export const configModal = signal<string | null>(null);
+
+export function setOvl(id: string, fn: (o: OvlSettings) => void) {
   update((s) => {
     const o = { ...(s.ovl[id] ?? {}) };
     fn(o);
@@ -30,7 +36,9 @@ function Status({ id }: { id: string }) {
   return st.count !== undefined ? <span class="ovl-count muted">{st.count.toLocaleString()}</span> : null;
 }
 
-export function StyleControls({ id, def }: { id: string; def: Partial<{ color: string; opacity: number; size: number; labels: boolean }> }) {
+type StyleDef = Partial<{ color: string; opacity: number; size: number; labels: boolean }>;
+
+export function StyleControls({ id, def, generic = true, refresh }: { id: string; def: StyleDef; generic?: boolean; refresh?: number }) {
   const o = settings.value.ovl[id] ?? {};
   return (
     <>
@@ -54,15 +62,35 @@ export function StyleControls({ id, def }: { id: string; def: Partial<{ color: s
           <span class="val">{Math.round(((o.size ?? def.size) / def.size) * 100)}%</span>
         </div>
       )}
-      {def.labels !== undefined && (
-        <label class="toggle">
-          <span>Labels</span>
-          <input type="checkbox" checked={o.labels ?? def.labels} onChange={(e) => setOvl(id, (x) => (x.labels = (e.target as HTMLInputElement).checked))} />
-          <i />
-        </label>
+      {def.labels !== undefined && <Toggle label="Labels" on={o.labels ?? def.labels} set={(v) => setOvl(id, (x) => (x.labels = v))} />}
+      {generic && (
+        <>
+          <div class="row">
+            <span>Show from zoom</span>
+            <input type="range" min={0} max={12} step={1} value={o.minzoom ?? 0} onChange={(e) => setOvl(id, (x) => (x.minzoom = +(e.target as HTMLInputElement).value || undefined))} />
+            <span class="val">{o.minzoom ? o.minzoom : "Any"}</span>
+          </div>
+          <Toggle label="Draw above weather" hint="Areas normally sit under the radar/satellite picture" on={!!o.top} set={(v) => setOvl(id, (x) => (x.top = v || undefined))} />
+          {refresh ? (
+            <div class="row">
+              <span>Refresh every</span>
+              <select value={String(o.refresh ?? refresh)} onChange={(e) => setOvl(id, (x) => (x.refresh = +(e.target as HTMLSelectElement).value === refresh ? undefined : +(e.target as HTMLSelectElement).value))}>
+                {[...new Set([10, 20, 30, 60, 120, 300, 600, 900, 1800, 3600, refresh])]
+                  .filter((v) => v >= Math.min(refresh, 10))
+                  .sort((a, b) => a - b)
+                  .map((v) => (
+                    <option key={v} value={v}>
+                      {v < 60 ? `${v} s` : v < 3600 ? `${v / 60} min` : `${v / 3600} h`}
+                      {v === refresh ? " (default)" : ""}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          ) : null}
+        </>
       )}
       {Object.keys(o).some((k) => k !== "on" && k !== "opts") && (
-        <button class="btn sm ghost" onClick={() => setOvl(id, (x) => (delete x.color, delete x.opacity, delete x.size, delete x.labels))}>
+        <button class="btn sm ghost" onClick={() => setOvl(id, (x) => (delete x.color, delete x.opacity, delete x.size, delete x.labels, delete x.minzoom, delete x.refresh, delete x.top))}>
           Reset style
         </button>
       )}
@@ -72,27 +100,52 @@ export function StyleControls({ id, def }: { id: string; def: Partial<{ color: s
 
 function CameraSources() {
   const srcs: any[] = ovlMeta.value.cameras ?? [];
-  if (!srcs.length) return <div class="muted small">Turn on to load the camera list.</div>;
+  const db = ovlMeta.value.camdb;
+  if (!srcs.length) return <div class="muted small">Turn the layer on to load the camera list.</div>;
   const offStr = settings.value.ovl.cameras?.opts?.off;
   const off = new Set(offStr !== undefined ? offStr.split(",").filter(Boolean) : srcs.filter((s) => s.off).map((s) => s.id));
-  const toggle = (id: string, on: boolean) =>
+  const setOff = (ids: string[], on: boolean) =>
     setOvl("cameras", (x) => {
       const n = new Set(off);
-      if (on) n.delete(id);
-      else n.add(id);
+      for (const id of ids) on ? n.delete(id) : n.add(id);
       x.opts = { ...(x.opts ?? {}), off: [...n].join(",") };
     });
+  const groups = [...new Set(srcs.map((s) => (s.region === "Camera database" ? "Camera database" : "Live sources")))];
   return (
     <div class="cam-srcs">
-      {srcs.map((s) => (
-        <label key={s.id} class="cam-src" title={s.attribution}>
-          <input type="checkbox" checked={!off.has(s.id)} onChange={(e) => toggle(s.id, (e.target as HTMLInputElement).checked)} />
-          <span>{s.name}</span>
-          <small class="muted">
-            {s.region} · {s.count}
-          </small>
-        </label>
-      ))}
+      {groups.map((g) => {
+        const list = srcs.filter((s) => (s.region === "Camera database" ? "Camera database" : "Live sources") === g);
+        return (
+          <div key={g} class="cam-group">
+            <div class="cam-ghead">
+              <b>{g}</b>
+              <button class="btn xs ghost" onClick={() => setOff(list.map((s) => s.id), true)}>
+                All on
+              </button>
+              <button class="btn xs ghost" onClick={() => setOff(list.map((s) => s.id), false)}>
+                All off
+              </button>
+            </div>
+            {list.map((s) => (
+              <label key={s.id} class="cam-src" title={s.attribution}>
+                <input type="checkbox" checked={!off.has(s.id)} onChange={(e) => setOff([s.id], (e.target as HTMLInputElement).checked)} />
+                <span>{s.name}</span>
+                <small class="muted">
+                  {s.region !== "Camera database" ? `${s.region} · ` : ""}
+                  {Number(s.count).toLocaleString()}
+                </small>
+              </label>
+            ))}
+          </div>
+        );
+      })}
+      {db?.db && (
+        <p class="muted small">
+          Database: {db.db.stats.records.toLocaleString()} records → {db.db.stats.kept.toLocaleString()} usable ({db.db.stats.inactive.toLocaleString()} inactive, {(db.db.stats.marked_duplicate + db.db.stats.duplicate_in_file).toLocaleString()} duplicates). {db.db.overlap_dropped.toLocaleString()} more were
+          left out because a live source already shows them.
+        </p>
+      )}
+      {!db?.db && db?.msg && <p class="muted small">{db.msg}</p>}
     </div>
   );
 }
@@ -101,7 +154,7 @@ function MyCamList() {
   const cams = settings.value.myCams;
   return (
     <div class="cam-srcs">
-      {cams.length === 0 && <div class="muted small">None yet.</div>}
+      {cams.length === 0 && <div class="muted small">None yet. Right-click the map → Add camera here.</div>}
       {cams.map((c) => (
         <div key={c.id} class="cam-src">
           <span title={c.url}>{c.name}</span>
@@ -118,100 +171,219 @@ function MyCamList() {
   );
 }
 
-function Config({ d }: { d: OverlayDef }) {
-  const opts = optsFor(d);
+/** An option as buttons when it has few short choices, else a dropdown. */
+function OptionControl({ d, op, value }: { d: OverlayDef; op: NonNullable<OverlayDef["options"]>[number]; value: string }) {
+  const set = (v: string) => setOvl(d.id, (x) => (x.opts = { ...(x.opts ?? {}), [op.key]: v }));
+  const short = op.choices.length <= 4 && op.choices.every(([, l]) => l.length <= 14);
   return (
-    <div class="ovl-config">
-      {d.options?.map((op) => (
-        <div class="row" key={op.key}>
-          <span>{op.label}</span>
-          <select value={opts[op.key]} onChange={(e) => setOvl(d.id, (x) => (x.opts = { ...(x.opts ?? {}), [op.key]: (e.target as HTMLSelectElement).value }))}>
-            {op.choices.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
+    <div class="row">
+      <span>{op.label}</span>
+      {short ? (
+        <div class="seg sm">
+          {op.choices.map(([v, l]) => (
+            <button key={v} class={value === v ? "on" : ""} onClick={() => set(v)}>
+              {l}
+            </button>
+          ))}
         </div>
-      ))}
-      <StyleControls id={d.id} def={d.style} />
-      {d.id === "cameras" && <CameraSources />}
-      {d.id === "mycams" && <MyCamList />}
-      {d.note && <p class="muted small">{d.note}</p>}
-      {ovlStatus.value[d.id]?.error && <p class="err-text small">{ovlStatus.value[d.id]?.error}</p>}
+      ) : (
+        <select value={value} onChange={(e) => set((e.target as HTMLSelectElement).value)}>
+          {op.choices.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
+function OverlayConfig({ d }: { d: OverlayDef }) {
+  const opts = optsFor(d);
+  const st = ovlStatus.value[d.id];
+  return (
+    <>
+      {!!d.options?.length && (
+        <section>
+          <label class="lbl">Options</label>
+          {d.options.map((op) => (
+            <OptionControl key={op.key} d={d} op={op} value={opts[op.key]} />
+          ))}
+        </section>
+      )}
+      <section>
+        <label class="lbl">Display</label>
+        <StyleControls id={d.id} def={d.style} refresh={d.feed === "client" ? undefined : d.refresh} />
+      </section>
+      {d.id === "cameras" && (
+        <section>
+          <label class="lbl">Camera sources</label>
+          <CameraSources />
+        </section>
+      )}
+      {d.id === "mycams" && (
+        <section>
+          <label class="lbl">My cameras</label>
+          <MyCamList />
+        </section>
+      )}
+      <section>
+        {d.note && <p class="muted small">{d.note}</p>}
+        {st?.error && <p class="err-text small">{st.error}</p>}
+        {st?.count !== undefined && !st.error && <p class="muted small">{st.count.toLocaleString()} shown{st.note ? ` · ${st.note}` : ""}</p>}
+      </section>
+    </>
+  );
+}
+
+const BASE_NAMES: Record<string, string> = { alerts: "Weather alerts", counties: "County lines", states: "State lines", rings: "Range rings" };
+const BASE_STYLE: Record<string, StyleDef> = { counties: { color: "#8a96a6", opacity: 0.55, size: 1 }, states: { color: "#c9d1d9", opacity: 1, size: 1 }, rings: { color: "#9fb3c8", opacity: 0.55 } };
+
+/** Centered settings window for one layer (RadarOmega style). */
+export function ConfigModal() {
+  const id = configModal.value;
+  useEffect(() => {
+    if (!id) return;
+    const k = (e: KeyboardEvent) => e.key === "Escape" && (configModal.value = null);
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [id]);
+  if (!id) return null;
+  const close = () => (configModal.value = null);
+  let title = id;
+  let body: any = null;
+  let onToggle: { on: boolean; set: (v: boolean) => void } | null = null;
+  let reload: (() => void) | null = null;
+  if (id.startsWith("base:")) {
+    const k = id.slice(5) as keyof typeof settings.value.overlays;
+    title = BASE_NAMES[k] ?? k;
+    onToggle = { on: !!settings.value.overlays[k], set: (v) => update((x) => (x.overlays[k] = v)) };
+    body =
+      k === "alerts" ? (
+        <AlertConfig />
+      ) : (
+        <section>
+          <label class="lbl">Display</label>
+          <StyleControls id={id} def={BASE_STYLE[k] ?? {}} generic={false} />
+        </section>
+      );
+  } else if (id.startsWith("file:")) {
+    const f = fileOverlays.value.find((x) => `file:${x.id}` === id);
+    title = f?.name ?? "File";
+    onToggle = { on: !!settings.value.ovl[id]?.on, set: (v) => setOvl(id, (x) => (x.on = v)) };
+    body = (
+      <>
+        <section>
+          <label class="lbl">Display</label>
+          <StyleControls id={id} def={{ color: "#f472b6", opacity: 0.8, size: 2, labels: true }} />
+        </section>
+        <section>
+          <p class="muted small">
+            {f?.count.toLocaleString()} features{f?.size ? ` · ${(f.size / 1048576).toFixed(1)} MB` : ""}. Colors set inside a KML file are kept.
+          </p>
+          <button class="btn sm ghost" onClick={() => (removeFile(id.slice(5)), close())}>
+            <Trash2 size={13} /> Remove file
+          </button>
+        </section>
+      </>
+    );
+  } else {
+    const d = overlayDef(id);
+    if (!d) return null;
+    title = d.name;
+    onToggle = { on: !!settings.value.ovl[id]?.on, set: (v) => setOvl(id, (x) => (x.on = v)) };
+    body = <OverlayConfig d={d} />;
+    if (d.feed !== "client") reload = () => refreshOverlay(id);
+  }
+  return (
+    <div class="modal-back" onPointerDown={(e) => e.target === e.currentTarget && close()}>
+      <div class={`modal glass ovl-modal ${id === "base:alerts" ? "wide" : ""}`}>
+        <div class="ovl-modal-head">
+          <h3>{title}</h3>
+          {onToggle && (
+            <label class="toggle compact" title="Show on the map">
+              <input type="checkbox" checked={onToggle.on} onChange={(e) => onToggle!.set((e.target as HTMLInputElement).checked)} />
+              <i />
+            </label>
+          )}
+          {reload && (
+            <button class="icon-btn" title="Reload now" onClick={reload}>
+              <RefreshCw size={14} />
+            </button>
+          )}
+          <button class="icon-btn" title="Close (Esc)" onClick={close}>
+            <X size={16} />
+          </button>
+        </div>
+        <div class="ovl-modal-body">{body}</div>
+      </div>
     </div>
   );
 }
 
 function Row({ d }: { d: OverlayDef }) {
-  const [open, setOpen] = useState(false);
   const on = !!settings.value.ovl[d.id]?.on;
-  void styleFor;
   return (
-    <div class={`ovl-row ${open ? "open" : ""}`}>
+    <div class="ovl-row">
       <div class="ovl-line">
         <label class="ovl-toggle">
           <input type="checkbox" checked={on} onChange={(e) => setOvl(d.id, (x) => (x.on = (e.target as HTMLInputElement).checked))} />
           <span>{d.name}</span>
         </label>
         <Status id={d.id} />
-        <button class={`icon-btn gear ${open ? "on" : ""}`} title="Configure" onClick={() => setOpen(!open)}>
+        <button class={`icon-btn gear ${configModal.value === d.id ? "on" : ""}`} title="Settings" onClick={() => (configModal.value = d.id)}>
           <Settings2 size={13} />
         </button>
       </div>
-      {open && <Config d={d} />}
     </div>
   );
 }
 
 function FileRow({ id, name, count }: { id: string; name: string; count: number }) {
-  const [open, setOpen] = useState(false);
   const key = `file:${id}`;
   const on = !!settings.value.ovl[key]?.on;
   return (
-    <div class={`ovl-row ${open ? "open" : ""}`}>
+    <div class="ovl-row">
       <div class="ovl-line">
         <label class="ovl-toggle">
           <input type="checkbox" checked={on} onChange={(e) => setOvl(key, (x) => (x.on = (e.target as HTMLInputElement).checked))} />
           <span title={name}>{name}</span>
         </label>
-        <span class="ovl-count muted">{count}</span>
-        <button class={`icon-btn gear ${open ? "on" : ""}`} title="Configure" onClick={() => setOpen(!open)}>
+        <span class="ovl-count muted">{count.toLocaleString()}</span>
+        <button class="icon-btn gear" title="Settings" onClick={() => (configModal.value = key)}>
           <Settings2 size={13} />
         </button>
       </div>
-      {open && (
-        <div class="ovl-config">
-          <StyleControls id={key} def={{ color: "#f472b6", opacity: 0.8, size: 2, labels: true }} />
-          <button class="btn sm ghost" onClick={() => removeFile(id)}>
-            <Trash2 size={13} /> Remove file
-          </button>
-        </div>
-      )}
     </div>
   );
 }
 
-export function OverlayGroups() {
+export function OverlayGroups({ filter = "" }: { filter?: string }) {
   const groups = [...new Set(OVERLAYS.map((o) => o.group))];
   const [shut, setShut] = useState<Record<string, boolean>>({});
   const fileRef = useRef<HTMLInputElement>(null);
+  const q = filter.trim().toLowerCase();
+  const match = (o: OverlayDef) => !q || o.name.toLowerCase().includes(q) || o.group.toLowerCase().includes(q);
   const count = (g: string) => OVERLAYS.filter((o) => o.group === g && settings.value.ovl[o.id]?.on).length;
+  const importing = Object.entries(fileImports.value);
   return (
     <>
-      {groups.map((g) => (
-        <section key={g} class="ovl-group">
-          <button class="ovl-ghead" onClick={() => setShut({ ...shut, [g]: !shut[g] })}>
-            <ChevronRight size={13} class={shut[g] ? "" : "rot"} />
-            <span>{g}</span>
-            {count(g) > 0 && <span class="ovl-badge">{count(g)}</span>}
-          </button>
-          {!shut[g] &&
-            OVERLAYS.filter((o) => o.group === g).map((d) => (
-              <Row key={d.id} d={d} />
-            ))}
-        </section>
-      ))}
+      {groups
+        .filter((g) => OVERLAYS.some((o) => o.group === g && match(o)))
+        .map((g) => (
+          <section key={g} class="ovl-group">
+            <button class="ovl-ghead" onClick={() => setShut({ ...shut, [g]: !shut[g] })}>
+              <ChevronRight size={13} class={shut[g] && !q ? "" : "rot"} />
+              <span>{g}</span>
+              {count(g) > 0 && <span class="ovl-badge">{count(g)}</span>}
+            </button>
+            {(!shut[g] || q) &&
+              OVERLAYS.filter((o) => o.group === g && match(o)).map((d) => (
+                <Row key={d.id} d={d} />
+              ))}
+          </section>
+        ))}
       <section class="ovl-group">
         <div class="ovl-ghead static">
           <span>My files</span>
@@ -226,12 +398,17 @@ export function OverlayGroups() {
             hidden
             onChange={async (e) => {
               const fs = [...((e.target as HTMLInputElement).files ?? [])];
-              for (const f of fs) await importFile(f);
               (e.target as HTMLInputElement).value = "";
+              for (const f of fs) await importFile(f);
             }}
           />
         </div>
-        {fileOverlays.value.length === 0 && <div class="muted small">No files yet. GeoJSON, KML, KMZ or GPX.</div>}
+        {importing.map(([n, note]) => (
+          <div key={n} class="ovl-row importing">
+            <Loader size={12} class="spin muted" /> <span>{n}</span> <small class="muted">{note}</small>
+          </div>
+        ))}
+        {fileOverlays.value.length === 0 && !importing.length && <div class="muted small">No files yet. GeoJSON, KML, KMZ or GPX.</div>}
         {fileOverlays.value.map((f) => (
           <FileRow key={f.id} {...f} />
         ))}

@@ -1,4 +1,5 @@
 import { hover, centerReadout, fps } from "../map/mapview";
+import { signal } from "@preact/signals";
 import { crosshair, settings } from "../store";
 import { activeLegend } from "../active";
 import { fmtValue, fmtGrid, fmtDist, compass } from "../util";
@@ -65,6 +66,34 @@ export function FpsMeter() {
   return (
     <div class={`fps ${f === null ? "idle" : f < 30 ? "low" : ""}`} title="Map frames drawn per second (idle when nothing is changing)">
       {f === null ? "idle" : `${f} fps`}
+    </div>
+  );
+}
+
+/** true while Shift is held (temporary cursor readout) */
+export const shiftHeld = signal(false);
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Shift" && !shiftHeld.value) shiftHeld.value = true;
+});
+window.addEventListener("keyup", (e) => {
+  if (e.key === "Shift") shiftHeld.value = false;
+});
+window.addEventListener("blur", () => (shiftHeld.value = false));
+
+/** Data value next to the mouse pointer (toolbar toggle, or hold Shift). */
+export function CursorValue() {
+  const h = hover.value;
+  if (!h || !(settings.value.ui.cursorValue || shiftHeld.value)) return null;
+  const L = activeLegend.value;
+  const ok = L && !Number.isNaN(h.value);
+  return (
+    <div class="cursor-val" style={{ left: `${h.x + 16}px`, top: `${h.y + 14}px` }}>
+      <b>{ok ? fmt(h.value) : "—"}</b>
+      {h.range > 0 && (
+        <span>
+          {fmtDist(h.range)} {compass(h.az)} · {heightStr(h.height)}
+        </span>
+      )}
     </div>
   );
 }

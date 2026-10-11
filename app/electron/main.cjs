@@ -18,7 +18,7 @@ app.commandLine.appendSwitch("enable-gpu-rasterization");
 app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.commandLine.appendSwitch("enable-unsafe-swiftshader");
 // keep the renderer heap bounded (radar sweeps are cached explicitly, so a big heap only hides garbage)
-app.commandLine.appendSwitch("js-flags", "--max-old-space-size=1536");
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
 // Wayland when available, X11 otherwise
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 if (process.env.TBW_SOFTWARE_GL) {
@@ -147,7 +147,9 @@ function setupMediaHeaders() {
   ses.webRequest.onHeadersReceived((d, cb) => {
     const h = d.responseHeaders || {};
     const has = Object.keys(h).some((k) => k.toLowerCase() === "access-control-allow-origin");
-    if (!has && (media.test(d.url) || d.resourceType === "media" || /mpegurl/i.test(String(h["content-type"] || h["Content-Type"] || "")))) {
+    const ct = String(h["content-type"] || h["Content-Type"] || "");
+    // media streams, plus map tiles from custom tile servers that don't send CORS headers
+    if (!has && (media.test(d.url) || d.resourceType === "media" || /mpegurl|^image\/|protobuf|vector-tile/i.test(ct))) {
       h["Access-Control-Allow-Origin"] = ["*"];
     }
     cb({ responseHeaders: h });

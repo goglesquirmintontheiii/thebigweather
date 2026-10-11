@@ -4,7 +4,8 @@ import { signal } from "@preact/signals";
 import { api } from "./api";
 import { settings, toast } from "./store";
 import { pointInGeometry } from "./util";
-import { playAlertSound } from "./sound";
+import { playAlertSound, playNamed } from "./sound";
+import { alertStyle, alertVisible } from "./alertstyle";
 
 export const ALERT_COLORS: Record<string, string> = {
   "Tornado Warning": "#ff0000",
@@ -105,8 +106,32 @@ function decorate(f: any) {
   return f;
 }
 
+let lastSound = 0;
+/** Per-type sounds (Layers → Weather alerts → gear): the most urgent new alert's sound plays. */
+function typeSounds(fs: any[]) {
+  const s = settings.value;
+  const scope = s.alertCfg.soundScope ?? "all";
+  let best: { pri: number; sound: string } | null = null;
+  for (const f of fs) {
+    const p = f.properties;
+    if (p.messageType && p.messageType !== "Alert") continue;
+    if (!alertVisible(p.event)) continue;
+    const snd = alertStyle(p.event).sound;
+    if (snd === "off") continue;
+    if (scope === "points" && !s.points.some((pt) => pointInGeometry(pt.lon, pt.lat, f.geometry))) continue;
+    if (!best || p.priority > best.pri) best = { pri: p.priority, sound: snd };
+  }
+  if (best && Date.now() - lastSound > 3000) {
+    lastSound = Date.now();
+    playNamed(best.sound as any);
+    return true;
+  }
+  return false;
+}
+
 function notifyNew(fs: any[]) {
   const s = settings.value;
+  const played = typeSounds(fs);
   if (s.notify.mode === "off") return;
   for (const f of fs) {
     const p = f.properties;
@@ -120,7 +145,7 @@ function notifyNew(fs: any[]) {
     const tag = p.tag ? ` · ${p.tag}` : "";
     const where = hits.length ? ` for ${hits.join(", ")}` : "";
     toast(`${p.event}${tag}${where}`, "alert", 9000);
-    if (s.audio.alerts) playAlertSound(p.event, p.tag);
+    if (s.audio.alerts && !played) playAlertSound(p.event, p.tag);
     if (s.notify.desktop && "Notification" in window) {
       const show = () => new Notification(`${p.event}${tag}`, { body: (p.areaDesc ?? "").slice(0, 180), silent: true });
       if (Notification.permission === "granted") show();

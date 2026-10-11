@@ -1,14 +1,15 @@
-import { selectedAlert } from "../store";
+// Info panel: alerts (and watches, storms, MDs) under a click, with arrows to step through them.
+
+import { details, type DetailItem } from "../store";
 import { alerts } from "../alerts";
 import { fmtTime } from "../util";
 import { zoomToGeometry } from "./panels/AlertsPanel";
-import { X, Maximize2 } from "lucide-preact";
+import { X, Maximize2, ChevronLeft, ChevronRight, ExternalLink } from "lucide-preact";
+import { useEffect } from "preact/hooks";
 
-export function AlertDetail() {
-  const id = selectedAlert.value;
-  if (!id) return null;
+function AlertBody({ id, nav }: { id: string; nav: any }) {
   const a = alerts.value.get(id);
-  if (!a) return null;
+  if (!a) return <OvlBody p={{ title: "Alert expired", rows: [] }} nav={nav} />;
   const p = a.properties;
   const fl = p.flags ?? {};
   const facts: [string, string][] = [];
@@ -28,11 +29,12 @@ export function AlertDetail() {
           <div class="muted small">
             {p.senderName} · until {fmtTime(Date.parse(p.ends ?? p.expires), true)}
           </div>
+          {nav}
         </div>
         <button class="icon-btn" title="Zoom to" onClick={() => zoomToGeometry(a.geometry)}>
           <Maximize2 size={15} />
         </button>
-        <button class="icon-btn" onClick={() => (selectedAlert.value = null)}>
+        <button class="icon-btn" title="Close (Esc)" onClick={() => (details.value = null)}>
           <X size={16} />
         </button>
       </div>
@@ -54,4 +56,86 @@ export function AlertDetail() {
       </div>
     </div>
   );
+}
+
+function OvlBody({ p, nav }: { p: any; nav: any }) {
+  return (
+    <div class="alert-detail glass" style={{ "--c": p.color ?? "#94a3b8" }}>
+      <div class="ad-head">
+        <span class="bar" />
+        <div>
+          <h3>{p.title}</h3>
+          {p.sub && <div class="muted small">{p.sub}</div>}
+          {nav}
+        </div>
+        <button class="icon-btn" title="Close (Esc)" onClick={() => (details.value = null)}>
+          <X size={16} />
+        </button>
+      </div>
+      {p.rows?.length > 0 && (
+        <div class="facts wide">
+          {p.rows.map(([k, v]: [string, string]) => (
+            <span key={k}>
+              <small>{k}</small>
+              <b>{v}</b>
+            </span>
+          ))}
+        </div>
+      )}
+      <div class="ad-body">
+        {p.text && <pre>{p.text}</pre>}
+        <div class="pop-actions">
+          {[...(p.links ?? []), ...(p.link ? [p.link] : [])].map(([label, url]: [string, string]) => (
+            <button key={url} class="btn sm ghost" onClick={() => window.open(url, "_blank")}>
+              <ExternalLink size={13} /> {label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function label(it: DetailItem) {
+  if (it.kind === "alert") return alerts.value.get(it.id)?.properties.event ?? "Alert";
+  return it.p.title;
+}
+
+export function AlertDetail() {
+  const d = details.value;
+  useEffect(() => {
+    if (!d || d.items.length < 2) return;
+    const key = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
+      if (e.key === "[" || e.key === ",") step(-1);
+      if (e.key === "]" || e.key === ".") step(1);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [d?.items.length]);
+  if (!d || !d.items.length) return null;
+  const i = Math.min(d.i, d.items.length - 1);
+  const it = d.items[i];
+  const n = d.items.length;
+  const nav =
+    n > 1 ? (
+      <div class="ad-nav" title={d.items.map((x, k) => `${k + 1}. ${label(x)}`).join("\n")}>
+        <button class="icon-btn" onClick={() => step(-1)} title="Previous ( [ )">
+          <ChevronLeft size={16} />
+        </button>
+        <span>
+          {i + 1}/{n}
+        </span>
+        <button class="icon-btn" onClick={() => step(1)} title="Next ( ] )">
+          <ChevronRight size={16} />
+        </button>
+      </div>
+    ) : null;
+  return it.kind === "alert" ? <AlertBody id={it.id} nav={nav} /> : <OvlBody p={it.p} nav={nav} />;
+}
+
+function step(dir: number) {
+  const d = details.value;
+  if (!d) return;
+  details.value = { ...d, i: (d.i + dir + d.items.length) % d.items.length };
 }

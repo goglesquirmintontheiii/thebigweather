@@ -65,7 +65,7 @@ export const L2_MOMENTS = [
 export const sites = signal<Site[]>([]);
 export const l3Products = signal<L3Product[]>([]);
 export const frames = signal<Frame[]>([]);
-import { frameIndex, playing, frameCount, setFrameReady } from "../anim";
+import { frameIndex, playing, frameCount, setFrameReady, framesToRequest, trimToSpan, historyEnd } from "../anim";
 export { frameIndex, playing };
 export const loading = signal(false);
 export const radarError = signal<string | null>(null);
@@ -74,6 +74,18 @@ export const liveSweep = signal<Sweep | null>(null);
 export const liveState = signal<{ key: string; radials: number; elev: number; time: number; az?: number; lat?: number; lon?: number; complete?: boolean } | null>(null);
 /** Extra radars drawn alongside the main one (ctrl+click). site -> frames */
 export const extraFrames = signal<Record<string, Frame[]>>({});
+export interface LiveMsg {
+  key: string;
+  radials: number;
+  elev: number;
+  time: number;
+  az?: number;
+  lat?: number;
+  lon?: number;
+  complete?: boolean;
+}
+/** RapidSweep for the extra radars: live message + partial sweep per site */
+export const extraLive = signal<Record<string, { state: LiveMsg; sweep: Sweep | null }>>({});
 export const showRadar = signal(true);
 /** Explicit frames (history browsing / opened files). null = follow latest. */
 export const pinned = signal<{ key: string; time: number }[] | null>(null);
@@ -172,6 +184,9 @@ function pushToLayer() {
       let best: Frame | undefined;
       for (const x of fs) if (x.sweep && (!best || Math.abs(x.sweep.start - tMain) < Math.abs(best.sweep!.start - tMain))) best = x;
       if (best?.sweep && (!tMain || Math.abs(best.sweep.start - tMain) < 15 * 60_000)) items.push({ sweep: best.sweep, table: t, opacity: op });
+      // RapidSweep partial for this radar, drawn over its last complete frame while on the newest frame
+      const lv = extraLive.value[site]?.sweep;
+      if (lv && frameIndex.value >= frames.value.length - 1 && settings.value.radar.live) items.push({ sweep: lv, table: t, opacity: op });
     }
     if (f?.sweep) items.push({ sweep: f.sweep, table: t, opacity: op });
     if (liveSweep.value && frameIndex.value === frames.value.length - 1) items.push({ sweep: liveSweep.value, table: t, opacity: op });
@@ -190,6 +205,7 @@ effect(() => {
   void settings.value.radar.smooth;
   void settings.value.weather;
   void extraFrames.value;
+  void extraLive.value;
   pushToLayer();
 });
 
@@ -276,7 +292,8 @@ export async function reload(opts: { keepIndex?: boolean } = {}) {
       list = pinned.value.map((p) => ({ key: p.key, time: p.time }));
       liveKey = null;
     } else if (r.source === "L2") {
-      const res = await api.get(`/api/radar/${r.site}/latest?n=${r.frames}`);
+      const n = framesToRequest(r.frames, 4, 200);
+      const res = await api.get(`/api/radar/${r.site}/latest?n=${n}`);
       list = res.volumes.map((v: any) => ({ key: v.key, time: v.time }));
       const live = res.live;
       // completed live volumes are newer than the archive bucket's latest
@@ -297,10 +314,11 @@ export async function reload(opts: { keepIndex?: boolean } = {}) {
         list.push({ key: liveKey, time: m.time, live: true });
       }
       list.sort((a, b) => a.time - b.time);
-      list = list.slice(-r.frames);
+      list = settings.value.anim.mode === "time" ? trimToSpan(list) : list.slice(-r.frames);
     } else {
-      const res = await api.get(`/api/l3/${r.site}/${r.product}/list?n=${r.frames}`);
-      list = res.volumes.map((v: any) => ({ key: v.key, time: v.time }));
+      const n = framesToRequest(r.frames, 4, 200);
+      const res = await api.get(`/api/l3/${r.site}/${r.product}/list?n=${n}`);
+      list = trimToSpan(res.volumes.map((v: any) => ({ key: v.key, time: v.time })));
       liveKey = null;
     }
     if (gen !== generation) return;
@@ -427,9 +445,55 @@ async function refreshLive(force = false) {
 }
 
 let liveThrottle: number | undefined;
+const extraThrottle = new Map<string, number>();
+const extraBusy = new Set<string>();
+
+async function refreshExtraLive(site: string) {
+  const r = settings.value.radar;
+  const e = extraLive.value[site];
+  if (!e || extraBusy.has(site)) return;
+  extraBusy.add(site);
+  try {
+    const key = e.state.key;
+    const meta = await getMeta(key, true);
+    const t = pickTilt(meta, r.product, r.tiltAngle);
+    const fs = extraFrames.value[site] ?? [];
+    const newest = fs[fs.length - 1]?.sweep;
+    if (!t || (newest && t.time <= newest.start + 30000)) return;
+    const sw = await loadL2Sweep(key, r.product, r.tiltAngle, true);
+    const cur = extraLive.value[site];
+    if (!sw || !cur || cur.state.key !== key) return;
+    const prev = cur.sweep;
+    extraLive.value = { ...extraLive.value, [site]: { ...cur, sweep: sw } };
+    if (prev && prev !== sw && layer) layer.release(prev);
+  } catch {
+    /* volume rolled over */
+  } finally {
+    extraBusy.delete(site);
+  }
+}
+
 api.on("live", (m) => {
   const r = settings.value.radar;
-  if (m.site !== r.site || r.source !== "L2" || !r.live) return;
+  if (r.source !== "L2" || !r.live) return;
+  if (m.site !== r.site) {
+    // an extra (ctrl+clicked) radar
+    if (!settings.value.extraSites.includes(m.site)) return;
+    const prev = extraLive.value[m.site];
+    const state: LiveMsg = { key: m.key, radials: m.radials, elev: m.elev, time: m.time, az: m.az, lat: m.lat, lon: m.lon, complete: m.complete };
+    if (prev && prev.state.key !== m.key && prev.sweep && layer) layer.release(prev.sweep);
+    extraLive.value = { ...extraLive.value, [m.site]: { state, sweep: prev && prev.state.key === m.key ? prev.sweep : null } };
+    if (!extraThrottle.get(m.site)) {
+      extraThrottle.set(
+        m.site,
+        window.setTimeout(() => {
+          extraThrottle.delete(m.site);
+          refreshExtraLive(m.site);
+        }, 900),
+      );
+    }
+    return;
+  }
   liveState.value = { key: m.key, radials: m.radials, elev: m.elev, time: m.time, az: m.az, lat: m.lat, lon: m.lon, complete: m.complete };
   if (m.key !== liveKey) {
     liveKey = m.key;
@@ -444,7 +508,14 @@ api.on("live", (m) => {
 });
 api.on("live_volume", (m) => {
   if (m.site === settings.value.radar.site) setTimeout(() => reload({ keepIndex: true }), 500);
+  else if (settings.value.extraSites.includes(m.site)) setTimeout(() => reloadExtras(), 800);
 });
+
+/** Live feeds wanted: the main radar, plus the extras when RapidSweep is on. */
+export function watchSites() {
+  const r = settings.value.radar;
+  api.watch([r.site, ...(r.live && r.source === "L2" ? settings.value.extraSites : [])]);
+}
 
 // ---------- animation ----------
 export { togglePlay } from "../anim";
@@ -460,7 +531,8 @@ let reloadTimer: number | undefined;
 let lastSig = "";
 effect(() => {
   const r = settings.value.radar;
-  const sig = `${r.site}|${r.source}|${r.product}|${r.tiltAngle}|${r.frames}|${r.live}|${pinned.value?.map((p) => p.key).join(",") ?? ""}|${settings.value.weather.kind === "radar"}`;
+  const a = settings.value.anim;
+  const sig = `${r.site}|${r.source}|${r.product}|${r.tiltAngle}|${r.frames}|${r.live}|${pinned.value?.map((p) => p.key).join(",") ?? ""}|${settings.value.weather.kind === "radar"}|${a.mode}|${a.minutes}`;
   void api.base;
   if (sig === lastSig) return;
   const siteChanged = lastSig.split("|")[0] !== r.site;
@@ -479,7 +551,7 @@ effect(() => {
     frames.value = frames.value.map((f) => ({ key: f.key, time: f.time, live: f.live }));
     liveSweep.value = null;
   }
-  api.watch([r.site]);
+  watchSites();
   reloadTimer = window.setTimeout(() => reload(), 120);
 });
 
@@ -497,7 +569,7 @@ api.on("connected", async () => {
   } catch {
     /* ignore */
   }
-  api.watch([settings.value.radar.site]);
+  watchSites();
   reload({ keepIndex: true });
 });
 
@@ -516,7 +588,17 @@ export async function loadHistory(date: string, endMs?: number) {
     const res = await api.get(`/api/radar/${r.site}/day/${date.replace(/-/g, "")}`);
     let v: { key: string; time: number }[] = res.volumes;
     if (endMs) v = v.filter((x) => x.time <= endMs);
-    v = v.slice(-r.frames);
+    // time spans can reach back into the previous day
+    if (settings.value.anim.mode === "time" && v.length && v[0].time > (endMs ?? v[v.length - 1].time) - settings.value.anim.minutes * 60_000) {
+      try {
+        const prev = new Date(Date.parse(`${date}T00:00:00Z`) - 86400_000).toISOString().slice(0, 10).replace(/-/g, "");
+        const r2 = await api.get(`/api/radar/${r.site}/day/${prev}`);
+        v = [...r2.volumes, ...v];
+      } catch {
+        /* no earlier day */
+      }
+    }
+    v = settings.value.anim.mode === "time" ? trimToSpan(v) : v.slice(-r.frames);
     if (!v.length) {
       toast("No volumes for that time", "warn");
       return;
@@ -530,7 +612,23 @@ export async function loadHistory(date: string, endMs?: number) {
 
 export function backToLatest() {
   pinned.value = null;
+  historyEnd.value = null;
 }
+
+// the timeline's history picker drives radar history too
+let lastHist: number | null = null;
+effect(() => {
+  const end = historyEnd.value;
+  const a = settings.value.anim;
+  const sig = `${a.mode}|${a.minutes}|${settings.value.radar.frames}|${settings.value.radar.site}`;
+  const radar = settings.value.weather.kind === "radar";
+  const was = lastHist;
+  lastHist = end;
+  if (!radar) return;
+  if (end) loadHistory(new Date(end).toISOString().slice(0, 10), end);
+  else if (was) pinned.value = null;
+  void sig;
+});
 
 /** Plain click: show only this radar. Ctrl/Cmd+click: add/remove it as an extra radar. */
 export function selectSite(id: string, additive = false) {
@@ -551,7 +649,7 @@ export function selectSite(id: string, additive = false) {
 let extraGen = 0;
 async function loadSiteFrames(site: string, gen: number): Promise<Frame[]> {
   const r = settings.value.radar;
-  const n = Math.min(r.frames, 20);
+  const n = Math.min(framesToRequest(r.frames, 4, 200), 30);
   let list: Frame[];
   let product = r.product;
   if (r.source === "L2") {
@@ -599,12 +697,20 @@ let extraSig = "";
 effect(() => {
   const st = settings.value;
   const r = st.radar;
-  const sig = `${st.extraSites.join(",")}|${r.source}|${r.product}|${r.tiltAngle}|${r.frames}|${st.weather.kind}`;
+  const sig = `${st.extraSites.join(",")}|${r.source}|${r.product}|${r.tiltAngle}|${r.frames}|${st.weather.kind}|${r.live}`;
   void api.base;
   if (sig === extraSig) return;
   const sitesOnly = extraSig.split("|").slice(1).join("|") === sig.split("|").slice(1).join("|");
   extraSig = sig;
   if (!sitesOnly) extraFrames.value = {};
+  // drop live state for radars no longer shown
+  const keep: Record<string, any> = {};
+  for (const [k, v] of Object.entries(extraLive.value)) {
+    if (st.extraSites.includes(k) && r.live && sitesOnly) keep[k] = v;
+    else if (v.sweep && layer) layer.release(v.sweep);
+  }
+  extraLive.value = keep;
+  watchSites();
   setTimeout(reloadExtras, 150);
 });
 

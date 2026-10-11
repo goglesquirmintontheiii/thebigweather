@@ -280,7 +280,13 @@ pub async fn storms(o: &Overlays) -> Result<Value> {
         feats.push(point(
             lon,
             lat,
-            json!({"id": s["id"], "name": s["name"], "bin": s["binNumber"], "class": s["classification"], "wind": s["intensity"], "pres": s["pressure"], "move": format!("{} {} mph", s["movementDir"].as_i64().unwrap_or(0), s["movementSpeed"].as_i64().unwrap_or(0)), "adv": s["publicAdvisory"]["url"]}),
+            json!({
+                "id": s["id"], "name": s["name"], "bin": s["binNumber"], "class": s["classification"], "wind": s["intensity"], "pres": s["pressure"],
+                "move": format!("{} {} mph", s["movementDir"].as_i64().unwrap_or(0), s["movementSpeed"].as_i64().unwrap_or(0)),
+                "mdir": s["movementDir"], "mspd": s["movementSpeed"], "lat": lat, "lon": lon, "updated": s["lastUpdate"],
+                "advnum": s["publicAdvisory"]["advNum"], "adv": s["publicAdvisory"]["url"], "fcstadv": s["forecastAdvisory"]["url"],
+                "disc": s["forecastDiscussion"]["url"], "graphics": s["forecastGraphics"]["url"], "wsp": s["windSpeedProbabilities"]["url"],
+            }),
         ));
     }
     Ok(fc(feats))
@@ -300,8 +306,13 @@ pub async fn nhc(o: &Overlays) -> Result<Value> {
         return Ok(fc(vec![]));
     }
     let mut feats = layers(o, NHC_SVC, &ids).await?;
+    // which storm each NHC layer belongs to (by bin slot)
+    let slots: Vec<(u32, Value)> = st["features"].as_array().map(|a| a.iter().filter_map(|f| Some((f["properties"]["bin"].as_str().and_then(bin_start)?, f["properties"].clone()))).collect()).unwrap_or_default();
     for f in feats.iter_mut() {
         let l = f["properties"]["_layer"].as_u64().unwrap_or(0) as u32;
+        if let Some((_, sp)) = slots.iter().find(|(b, _)| l >= *b && l < *b + 26) {
+            f["properties"]["_s"] = sp.clone();
+        }
         let off = (l - 4) % 26;
         let kind = match off {
             2 => "point",
@@ -509,9 +520,34 @@ pub async fn lsr(o: &Overlays, hours: &str) -> Result<Value> {
     Ok(fc(feats))
 }
 
+/// NWS offices: the IEM list, with each point moved onto the office building from OpenStreetMap
+/// when one is mapped within 25 km (IEM positions are station points, often ~1 km off).
 pub async fn wfo(o: &Overlays) -> Result<Value> {
     let b = o.disk_cached("wfo.geojson", std::time::Duration::from_secs(86400 * 30), "https://mesonet.agron.iastate.edu/geojson/network.py?network=WFO").await?;
-    Ok(serde_json::from_slice(&b)?)
+    let mut v: Value = serde_json::from_slice(&b)?;
+    let osm = wfo_buildings(o).await.unwrap_or_default();
+    if let Some(fs) = v["features"].as_array_mut() {
+        for f in fs {
+            let (Some(lon), Some(lat)) = (f["geometry"]["coordinates"][0].as_f64(), f["geometry"]["coordinates"][1].as_f64()) else { continue };
+            let best = osm.iter().map(|(a, b)| (a, b, crate::overlays::km(lat, lon, *b, *a))).filter(|x| x.2 < 25.0).min_by(|x, y| x.2.total_cmp(&y.2));
+            if let Some((blon, blat, _)) = best {
+                f["geometry"]["coordinates"] = json!([super::round(*blon), super::round(*blat)]);
+                f["properties"]["exact"] = json!(true);
+            }
+        }
+    }
+    Ok(v)
+}
+
+async fn wfo_buildings(o: &Overlays) -> Result<Vec<(f64, f64)>> {
+    let q = r#"[out:json][timeout:90];nwr["name"~"National Weather Service|Weather Forecast Office",i](17,-180,72,-60);out center;"#;
+    let url = format!("https://overpass-api.de/api/interpreter?data={}", q.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect::<String>());
+    let b = o.disk_cached("wfo_osm.json", std::time::Duration::from_secs(86400 * 30), &url).await?;
+    let v: Value = serde_json::from_slice(&b)?;
+    Ok(v["elements"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|e| Some((e["lon"].as_f64().or(e["center"]["lon"].as_f64())?, e["lat"].as_f64().or(e["center"]["lat"].as_f64())?))).collect())
+        .unwrap_or_default())
 }
 
 #[cfg(test)]

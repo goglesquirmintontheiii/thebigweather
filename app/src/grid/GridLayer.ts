@@ -27,7 +27,7 @@ uniform float u_offset;
 uniform float u_cmin;
 uniform float u_cmax;
 uniform float u_opacity;
-uniform int u_smooth;
+uniform float u_smooth;
 uniform int u_rgb;
 uniform sampler2D u_color;
 
@@ -51,7 +51,7 @@ void main() {
   float v;
   float c = val(ivec2(floor(v_uv * vec2(u_size))));
   if (c < -1e29) discard;
-  if (u_smooth == 1) {
+  if (u_smooth > 0.0) {
     float a = val(p0), b = val(p0 + ivec2(1, 0)), d = val(p0 + ivec2(0, 1)), e = val(p0 + ivec2(1, 1));
     float wa = (1.0 - t.x) * (1.0 - t.y), wb = t.x * (1.0 - t.y), wd = (1.0 - t.x) * t.y, we = t.x * t.y;
     float acc = 0.0, ws = 0.0;
@@ -59,7 +59,22 @@ void main() {
     if (b > -1e29) { acc += b * wb; ws += wb; }
     if (d > -1e29) { acc += d * wd; ws += wd; }
     if (e > -1e29) { acc += e * we; ws += we; }
-    v = ws > 0.0 ? acc / ws : c;
+    float sm = ws > 0.0 ? acc / ws : c;
+    if (u_smooth > 0.5) {
+      float spread = (u_smooth - 0.5) * 2.0;
+      float acc2 = 0.0, ws2 = 0.0;
+      for (int dy = -2; dy <= 2; dy++)
+        for (int dx = -2; dx <= 2; dx++) {
+          vec2 q = f + vec2(float(dx), float(dy)) * (0.6 + spread);
+          float vv = val(ivec2(floor(q + 0.5)));
+          if (vv < -1e29) continue;
+          float wg = exp(-0.35 * float(dx * dx + dy * dy));
+          acc2 += vv * wg;
+          ws2 += wg;
+        }
+      if (ws2 > 0.0) sm = mix(sm, acc2 / ws2, spread);
+    }
+    v = mix(c, sm, min(1.0, u_smooth * 2.0));
   } else {
     v = c;
   }
@@ -102,7 +117,7 @@ export class GridLayer implements CustomLayerInterface {
   raster: Raster | null = null;
   table: ColorTable | null = null;
   opacity = 0.85;
-  smooth = true;
+  smooth = 0.5;
 
   onAdd(map: MLMap, gl: WebGL2RenderingContext) {
     this.map = map;
@@ -135,7 +150,7 @@ export class GridLayer implements CustomLayerInterface {
     this.cmaps.clear();
   }
 
-  set(raster: Raster | null, table: ColorTable | null, opacity: number, smooth: boolean) {
+  set(raster: Raster | null, table: ColorTable | null, opacity: number, smooth: number) {
     this.raster = raster;
     this.table = table;
     this.opacity = opacity;
@@ -257,7 +272,7 @@ export class GridLayer implements CustomLayerInterface {
     } else {
       gl.uniform1f(L.u_cmin, t!.min);
       gl.uniform1f(L.u_cmax, t!.max);
-      gl.uniform1i(L.u_smooth, this.smooth && !t!.labels ? 1 : 0);
+      gl.uniform1f(L.u_smooth, t!.labels ? 0 : this.smooth);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.texFor(r));
       gl.uniform1i(L.u_data, 0);

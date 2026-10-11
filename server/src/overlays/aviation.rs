@@ -93,50 +93,219 @@ pub async fn airports(o: &Overlays, all: bool) -> Result<Value> {
 }
 
 /// Aircraft near a point (ADS-B Exchange-style APIs: airplanes.live, then adsb.lol).
-pub async fn flights(o: &Overlays, lat: &str, lon: &str, r: &str) -> Result<Value> {
-    let lat: f64 = lat.parse().map_err(|_| anyhow!("lat"))?;
-    let lon: f64 = lon.parse().map_err(|_| anyhow!("lon"))?;
-    let r = r.parse::<f64>().unwrap_or(150.0).clamp(10.0, 250.0).round();
-    // the public APIs allow 1 request per second
-    {
-        let mut gate = o.flight_gate.lock().await;
-        let wait = Duration::from_millis(1100).saturating_sub(gate.elapsed());
-        tokio::time::sleep(wait).await;
-        *gate = Instant::now();
+// ---------- ADS-B flights ----------
+//
+// One background poller per server: the app asks for "aircraft near here", the poller makes at
+// most one upstream request every few seconds for the most recent area, merges the result into a
+// shared store and keeps a track per aircraft. Map moves never hit the upstream APIs directly, and
+// HTTP 429 answers back the poller off (and switch sources) instead of failing the overlay.
+
+#[derive(Clone)]
+struct Aircraft {
+    props: Value,
+    lat: f64,
+    lon: f64,
+    seen: Instant,
+    /// [lon, lat, altitude ft (or -1 on ground), unix ms]
+    track: std::collections::VecDeque<[f64; 4]>,
+}
+
+#[derive(Default)]
+pub struct Flights {
+    running: AtomicBool,
+    aircraft: RwLock<HashMap<String, Aircraft>>,
+    /// latest requested area (lat, lon, radius nm) and when it was last fetched
+    want: parking_lot::Mutex<Option<(f64, f64, f64, Instant)>>,
+    fetched: parking_lot::Mutex<Vec<(f64, f64, f64, Instant)>>,
+    /// per source: retry-not-before
+    backoff: parking_lot::Mutex<[Option<Instant>; 2]>,
+    pub status: parking_lot::Mutex<String>,
+}
+
+const FLIGHT_SOURCES: [&str; 2] = ["https://api.airplanes.live/v2/point", "https://api.adsb.lol/v2/point"];
+
+fn nm_between(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (la1, lo1, la2, lo2) = (a.0.to_radians(), a.1.to_radians(), b.0.to_radians(), b.1.to_radians());
+    let h = ((la2 - la1) / 2.0).sin().powi(2) + la1.cos() * la2.cos() * ((lo2 - lo1) / 2.0).sin().powi(2);
+    2.0 * 3440.065 * h.sqrt().asin()
+}
+
+impl Flights {
+    fn covered(&self, lat: f64, lon: f64, r: f64) -> bool {
+        self.fetched.lock().iter().any(|(a, b, rr, t)| t.elapsed() < Duration::from_secs(20) && nm_between((*a, *b), (lat, lon)) + r <= rr + 15.0)
     }
-    let urls = [format!("https://api.airplanes.live/v2/point/{lat:.2}/{lon:.2}/{r}"), format!("https://api.adsb.lol/v2/point/{lat:.2}/{lon:.2}/{r}")];
-    let mut last = anyhow!("no ADS-B source");
-    for u in &urls {
-        match o.get_json(u).await {
-            Ok(v) => {
-                let feats = v["ac"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|a| {
-                        let la = a["lat"].as_f64()?;
-                        let lo = a["lon"].as_f64()?;
-                        let alt = a["alt_baro"].as_f64().map(|x| json!(x)).unwrap_or_else(|| json!(a["alt_baro"].as_str().unwrap_or("")));
-                        Some(point(
-                            lo,
-                            la,
-                            json!({
-                                "hex": a["hex"], "cs": a["flight"].as_str().map(|s| s.trim()), "reg": a["r"], "type": a["t"],
-                                "alt": alt, "gs": a["gs"], "trk": a["track"].as_f64().or(a["true_heading"].as_f64()).unwrap_or(0.0),
-                                "sq": a["squawk"], "cat": a["category"], "emer": a["emergency"],
-                            }),
-                        ))
-                    })
-                    .collect();
-                let mut out = fc(feats);
-                out["src"] = json!(super::host(u));
-                return Ok(out);
+
+    pub fn ensure(o: &Arc<Overlays>) {
+        if o.flights.running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let o = o.clone();
+        tokio::spawn(async move {
+            let gap = Duration::from_millis(if o.full { 2500 } else { 4000 });
+            loop {
+                if o.idle("flights", 120) {
+                    break;
+                }
+                let want = *o.flights.want.lock();
+                if let Some((lat, lon, r, _)) = want {
+                    // refresh the area every ~8 s, sooner when the view moved somewhere new
+                    let stale = !o.flights.covered(lat, lon, r) || o.flights.fetched.lock().last().map(|x| x.3.elapsed() > Duration::from_secs(8)).unwrap_or(true);
+                    if stale {
+                        Self::fetch(&o, lat, lon, r).await;
+                    }
+                }
+                Self::prune(&o);
+                tokio::time::sleep(gap).await;
             }
-            Err(e) => last = e,
+            o.flights.running.store(false, Ordering::SeqCst);
+        });
+    }
+
+    async fn fetch(o: &Arc<Overlays>, lat: f64, lon: f64, r: f64) {
+        let now = Instant::now();
+        let order: Vec<usize> = {
+            let b = o.flights.backoff.lock();
+            (0..2).filter(|i| b[*i].map(|t| t <= now).unwrap_or(true)).collect()
+        };
+        if order.is_empty() {
+            *o.flights.status.lock() = "rate limited, waiting".into();
+            return;
+        }
+        for i in order {
+            let url = format!("{}/{lat:.2}/{lon:.2}/{}", FLIGHT_SOURCES[i], r.round());
+            let res = o.http.get(&url).timeout(Duration::from_secs(20)).send().await;
+            match res {
+                Ok(resp) if resp.status().as_u16() == 429 => {
+                    let secs = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).unwrap_or(30).clamp(10, 300);
+                    o.flights.backoff.lock()[i] = Some(Instant::now() + Duration::from_secs(secs));
+                    tracing::info!("flights: {} rate limited for {secs}s", super::host(&url));
+                    continue;
+                }
+                Ok(resp) if resp.status().is_success() => {
+                    let Ok(v) = resp.json::<Value>().await else { continue };
+                    Self::merge(o, &v);
+                    o.flights.fetched.lock().push((lat, lon, r, Instant::now()));
+                    o.flights.fetched.lock().retain(|x| x.3.elapsed() < Duration::from_secs(30));
+                    *o.flights.status.lock() = super::host(&url).to_string();
+                    o.health.ok("ovl-flights", "ADS-B flights", super::host(&url));
+                    return;
+                }
+                Ok(resp) => {
+                    o.flights.backoff.lock()[i] = Some(Instant::now() + Duration::from_secs(15));
+                    o.health.err("ovl-flights", "ADS-B flights", &anyhow!("HTTP {} from {}", resp.status(), super::host(&url)));
+                }
+                Err(e) => {
+                    o.flights.backoff.lock()[i] = Some(Instant::now() + Duration::from_secs(15));
+                    o.health.err("ovl-flights", "ADS-B flights", &anyhow!(e));
+                }
+            }
         }
     }
-    Err(last)
+
+    fn merge(o: &Overlays, v: &Value) {
+        let now_ms = chrono::Utc::now().timestamp_millis() as f64;
+        let mut m = o.flights.aircraft.write();
+        for a in v["ac"].as_array().map(|x| x.as_slice()).unwrap_or(&[]) {
+            let (Some(la), Some(lo), Some(hex)) = (a["lat"].as_f64(), a["lon"].as_f64(), a["hex"].as_str()) else { continue };
+            let alt_num = a["alt_baro"].as_f64();
+            let alt = alt_num.map(|x| json!(x)).unwrap_or_else(|| json!(a["alt_baro"].as_str().unwrap_or("")));
+            let props = json!({
+                "hex": hex, "cs": a["flight"].as_str().map(|s| s.trim()), "reg": a["r"], "type": a["t"], "desc": a["desc"],
+                "alt": alt, "gs": a["gs"], "trk": a["track"].as_f64().or(a["true_heading"].as_f64()).unwrap_or(0.0),
+                "vr": a["baro_rate"], "sq": a["squawk"], "cat": a["category"], "emer": a["emergency"],
+                "own": a["ownOp"], "from": a["orig"], "to": a["dest"],
+            });
+            let e = m.entry(hex.to_string()).or_insert_with(|| Aircraft { props: props.clone(), lat: la, lon: lo, seen: Instant::now(), track: Default::default() });
+            e.props = props;
+            e.lat = la;
+            e.lon = lo;
+            e.seen = Instant::now();
+            let moved = e.track.back().map(|p| (p[0] - lo).abs() > 0.002 || (p[1] - la).abs() > 0.002).unwrap_or(true);
+            if moved {
+                e.track.push_back([super::round(lo), super::round(la), alt_num.unwrap_or(-1.0), now_ms]);
+                if e.track.len() > 1500 {
+                    e.track.pop_front();
+                }
+            }
+        }
+    }
+
+    fn prune(o: &Overlays) {
+        o.flights.aircraft.write().retain(|_, a| a.seen.elapsed() < Duration::from_secs(600));
+    }
+
+    /// Aircraft near a point from the shared store (no upstream request).
+    pub fn near(o: &Arc<Overlays>, lat: f64, lon: f64, r: f64) -> Value {
+        o.touch("flights");
+        let pending = !o.flights.covered(lat, lon, r);
+        *o.flights.want.lock() = Some((lat, lon, r, Instant::now()));
+        Self::ensure(o);
+        let m = o.flights.aircraft.read();
+        let feats: Vec<Value> = m
+            .values()
+            .filter(|a| a.seen.elapsed() < Duration::from_secs(90) && nm_between((lat, lon), (a.lat, a.lon)) <= r + 10.0)
+            .map(|a| point(a.lon, a.lat, a.props.clone()))
+            .collect();
+        let mut out = fc(feats);
+        out["pending"] = json!(pending);
+        out["src"] = json!(o.flights.status.lock().clone());
+        out
+    }
+
+    /// Track for one aircraft: the full flight from the ADS-B archive when available, else what
+    /// this server has seen since the aircraft first showed up.
+    pub async fn track(o: &Overlays, hex: &str, seen_only: bool) -> Result<Value> {
+        let hex = hex.trim().to_ascii_lowercase();
+        if hex.is_empty() || hex.len() > 8 || !hex.chars().all(|c| c.is_ascii_alphanumeric() || c == '~') {
+            bail!("bad aircraft id");
+        }
+        let local: Vec<[f64; 4]> = o.flights.aircraft.read().get(&hex).map(|a| a.track.iter().copied().collect()).unwrap_or_default();
+        let mut pts: Vec<[f64; 4]> = vec![];
+        let mut source = "seen";
+        let url = format!("https://globe.adsb.lol/data/traces/{}/trace_full_{hex}.json", &hex[hex.len() - 2..]);
+        if seen_only {
+        } else if let Ok(r) = o.http.get(&url).timeout(Duration::from_secs(15)).send().await {
+            if r.status().is_success() {
+                if let Ok(v) = r.json::<Value>().await {
+                    pts = parse_trace(&v);
+                    if !pts.is_empty() {
+                        source = "takeoff";
+                    }
+                }
+            }
+        }
+        if pts.is_empty() {
+            pts = local;
+        } else if let Some(t_end) = pts.last().map(|p| p[3]) {
+            // the archive lags a little: append what we've seen since
+            pts.extend(local.into_iter().filter(|p| p[3] > t_end));
+        }
+        let coords: Vec<Value> = pts.iter().map(|p| json!([p[0], p[1]])).collect();
+        let alts: Vec<Value> = pts.iter().map(|p| json!(p[2])).collect();
+        Ok(json!({"type": "Feature", "geometry": {"type": "LineString", "coordinates": coords}, "properties": {"hex": hex, "source": source, "alts": alts, "start": pts.first().map(|p| p[3])}}))
+    }
+}
+
+/// readsb/tar1090 trace: {"timestamp": base s, "trace": [[dt s, lat, lon, alt|"ground", gs, track, ...]]}.
+/// Returns the points since the aircraft last left the ground.
+fn parse_trace(v: &Value) -> Vec<[f64; 4]> {
+    let base = v["timestamp"].as_f64().unwrap_or(0.0);
+    let tr = match v["trace"].as_array() {
+        Some(t) => t,
+        None => return vec![],
+    };
+    let mut out: Vec<[f64; 4]> = vec![];
+    for p in tr {
+        let (Some(dt), Some(la), Some(lo)) = (p[0].as_f64(), p[1].as_f64(), p[2].as_f64()) else { continue };
+        let ground = p[3].as_str() == Some("ground");
+        if ground {
+            // a new flight starts after the last time on the ground
+            out.clear();
+            continue;
+        }
+        out.push([super::round(lo), super::round(la), p[3].as_f64().unwrap_or(-1.0), (base + dt) * 1000.0]);
+    }
+    out
 }
 
 // ---------- recon (Hurricane Hunters) ----------
@@ -272,6 +441,15 @@ pub fn parse_hdob(text: &str) -> Option<(String, String, String, Vec<Hdob>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn trace_since_takeoff() {
+        let v = serde_json::json!({"timestamp": 1000.0, "trace": [[0, 30.0, -97.0, "ground"], [10, 30.01, -97.0, 500], [20, 30.1, -97.1, 3000], [30, 30.2, -97.2, "ground"], [40, 30.3, -97.3, 800], [50, 30.4, -97.4, 5000]]});
+        let p = super::parse_trace(&v);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0][1], 30.3);
+        assert_eq!(p[1][3], 1_050_000.0);
+    }
+
     #[test]
     fn hdob() {
         let t = "URNT15 KNHC 081741\nAF305 0709A ISAIAS             HDOB 49 20261008\n173100 2557N 09021W 4594 06492 0300 -080 -097 069008 011 /// /// 03\n173130 2558N 09020W 4594 06492 0302 -080 -097 070010 012 045 /// 03\n";

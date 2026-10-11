@@ -410,10 +410,12 @@ struct FramesQ {
     n: Option<usize>,
     run: Option<String>,
     storm: Option<String>,
+    /// history: newest frame time (unix ms) for observation layers
+    end: Option<i64>,
 }
 
 async fn grid_frames(State(st): St, Query(q): Query<FramesQ>) -> Result<Json<Value>, ApiError> {
-    let r = st.grids.frames(&q.layer, q.n.unwrap_or(12).clamp(1, 120), q.run.as_deref(), q.storm.as_deref()).await?;
+    let r = st.grids.frames(&q.layer, q.n.unwrap_or(12).clamp(1, 240), q.run.as_deref(), q.storm.as_deref(), q.end).await?;
     Ok(Json(json!(r)))
 }
 

@@ -3,6 +3,7 @@
 import { signal, computed, effect, batch } from "@preact/signals";
 import { api, lastHello } from "../api";
 import { settings, update } from "../store";
+import { framesToRequest, trimToSpan, historyEnd } from "../anim";
 import { frameIndex, playing, frameCount, setFrameReady } from "../anim";
 import { parseRaster, type Raster } from "./raster";
 import { GridLayer } from "./GridLayer";
@@ -70,7 +71,7 @@ function storeRaster(key: string, r: Raster, view: string) {
 }
 
 function clearRasters() {
-  layer?.set(null, null, 0, false);
+  layer?.set(null, null, 0, 0);
   for (const v of rasters.values()) layer?.release(v.r);
   rasters.clear();
   rasterBytes = 0;
@@ -146,7 +147,7 @@ function push() {
   if (!layer) return;
   const w = settings.value.weather;
   if (w.kind !== "grid") {
-    layer.set(null, null, 0, false);
+    layer.set(null, null, 0, 0);
     gridRaster.value = null;
     return;
   }
@@ -196,12 +197,15 @@ export async function loadGridFrames(keepIndex = false) {
   gridLoading.value = true;
   gridError.value = null;
   try {
-    const q = new URLSearchParams({ layer: w.id, n: String(settings.value.grid.frames) });
+    const d0 = gridDef(w.id);
+    const obs0 = d0?.source !== "model" && d0?.source !== "ndfd" && d0?.source !== "future";
+    const q = new URLSearchParams({ layer: w.id, n: String(obs0 ? framesToRequest(settings.value.grid.frames, cadence(w.id)) : settings.value.grid.frames) });
     if (w.run) q.set("run", w.run);
     if (w.storm) q.set("storm", w.storm);
+    if (obs0 && historyEnd.value) q.set("end", String(historyEnd.value));
     const res = await api.get(`/api/grid/frames?${q}`);
     if (gen !== loadGen) return;
-    const fs: GridFrame[] = res.frames;
+    const fs: GridFrame[] = obs0 ? trimToSpan(res.frames) : res.frames;
     const prevLen = gridFrames.value.length;
     batch(() => {
       gridFrames.value = fs;
@@ -242,13 +246,24 @@ export function attachGrid(l: GridLayer, m: MLMap) {
   push();
 }
 
+/** minutes between frames of an observation layer */
+function cadence(id: string): number {
+  const d = gridDef(id);
+  if (d?.source === "mrms") return 2;
+  if (d?.source === "metar") return 60;
+  if (d?.source === "goes") return id.includes("/meso") ? 1 : id.includes("/full") ? 10 : 5;
+  return 10;
+}
+
 // react to layer selection
 let lastSig = "";
 effect(() => {
   const w = settings.value.weather;
   const n = settings.value.grid.frames;
+  const a = settings.value.anim;
+  const h = historyEnd.value;
   void api.base;
-  const sig = w.kind === "grid" ? `${w.id}|${w.run ?? ""}|${w.storm ?? ""}|${n}` : "";
+  const sig = w.kind === "grid" ? `${w.id}|${w.run ?? ""}|${w.storm ?? ""}|${n}|${a.mode}|${a.minutes}|${h ?? ""}` : "";
   if (sig === lastSig) return;
   const layerChanged = lastSig.split("|")[0] !== sig.split("|")[0];
   lastSig = sig;
@@ -300,7 +315,7 @@ api.on("connected", () => {
 // refresh observation layers periodically (new MRMS / satellite / METAR frames)
 setInterval(() => {
   const w = settings.value.weather;
-  if (w.kind !== "grid" || playing.value) return;
+  if (w.kind !== "grid" || playing.value || historyEnd.value) return;
   const d = gridDef(w.id);
   if (d && d.source !== "model" && d.source !== "ndfd" && d.source !== "future") loadGridFrames(true);
 }, 90_000);
