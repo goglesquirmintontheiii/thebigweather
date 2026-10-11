@@ -122,7 +122,7 @@ impl GridService {
     pub fn catalog(&self) -> serde_json::Value {
         serde_json::json!({
             "layers": self.layers,
-            "models": sources::MODELS,
+            "models": sources::MODELS.iter().filter(|m| m.group != "Hidden").collect::<Vec<_>>(),
         })
     }
 
@@ -207,6 +207,7 @@ impl GridService {
             "ndfd" => self.ndfd_frames(&l).await,
             "metar" => Ok(self.metar_frames(&l, n)),
             "goes" => self.goes_frames(&l, n).await,
+            "future" => self.future_frames(&l).await,
             _ => bail!("unknown source"),
         };
         let name = match l.source {
@@ -214,6 +215,7 @@ impl GridService {
             "model" => "Models",
             "ndfd" => "NDFD",
             "metar" => "METAR analysis",
+            "future" => "Future radar / snow",
             _ => "GOES satellite",
         };
         match &res {
@@ -280,13 +282,18 @@ impl GridService {
     }
 
     async fn model_runs(&self, m: &sources::ModelDef) -> Result<Vec<(String, i64, Vec<u32>, Vec<String>)>> {
+        self.runs_for(m, m.cycles, 3).await
+    }
+
+    /// Recent runs of a model restricted to `cycles`, newest first: (id, run time, forecast hours, storms).
+    async fn runs_for(&self, m: &sources::ModelDef, cycles: &[u32], max: usize) -> Result<Vec<(String, i64, Vec<u32>, Vec<String>)>> {
         let now = Utc::now();
         let mut out = vec![];
         let mut tried = 0;
         'outer: for back_h in 0..48 {
             let t = now - chrono::Duration::hours(back_h);
             let hh = t.hour();
-            if !m.cycles.contains(&hh) {
+            if !m.cycles.contains(&hh) || !cycles.contains(&hh) {
                 continue;
             }
             tried += 1;
@@ -355,7 +362,7 @@ impl GridService {
             }
             let run_t = Utc.with_ymd_and_hms(t.year(), t.month(), t.day(), hh, 0, 0).single().map(|x| x.timestamp_millis()).unwrap_or(0);
             out.push((format!("{d}{hh:02}"), run_t, fhs, storms));
-            if out.len() >= 3 {
+            if out.len() >= max {
                 break 'outer;
             }
         }
@@ -393,6 +400,80 @@ impl GridService {
             storms: chosen.3.clone(),
             storm: if storm.is_empty() { None } else { Some(storm) },
         })
+    }
+
+    /// Frames from now to now+horizon from the freshest run that reaches furthest, walking the
+    /// model chain until one has the field.
+    async fn future_frames(&self, l: &LayerDef) -> Result<FramesResp> {
+        let f = sources::future_def(&l.product).ok_or_else(|| anyhow!("unknown future layer"))?;
+        let v = sources::var_def(f.var).ok_or_else(|| anyhow!("unknown variable"))?;
+        let now = Utc::now().timestamp_millis();
+        let end = now + f.horizon_h as i64 * 3_600_000;
+        let mut errors = vec![];
+        let _ = v.accum;
+        for src in f.chain {
+            let Some(m) = sources::model_def(src.model) else { continue };
+            let sub = src.model == "hrrrsub";
+            let runs = match self.runs_for(m, src.cycles, 3).await {
+                Ok(r) => r,
+                Err(e) => {
+                    errors.push(format!("{}: {e}", m.name));
+                    continue;
+                }
+            };
+            // furthest-reaching run (ties → newest); in-progress runs count only what's published
+            let best = runs.iter().filter(|r| !r.2.is_empty()).max_by_key(|r| ((r.1 + *r.2.iter().max().unwrap() as i64 * 3_600_000).min(end), r.1));
+            let Some((run, run_t, fhs, _)) = best else { continue };
+            let mut frames = vec![];
+            let mut first_fh: Option<u32> = None;
+            for (t, key_fh) in sources::future_steps(now, *run_t, fhs, src.step_min, f.horizon_h, sub) {
+                let label = {
+                    let ahead = (t - now).max(0) as f64 / 3_600_000.0;
+                    if ahead < 0.99 { format!("+{}m", (ahead * 60.0).round() as i64) } else { format!("+{}h", ahead.round() as i64) }
+                };
+                let key = if f.accum_from_now {
+                    let fh0 = *first_fh.get_or_insert(key_fh.saturating_sub(1));
+                    format!("fdiff|{}|{run}|{key_fh}|{fh0}|{}", m.id, f.var)
+                } else {
+                    format!("model|{}|{run}|{key_fh}|{}|", m.id, f.var)
+                };
+                frames.push(FrameInfo { key, time: t, label: format!("{} {label}", m.name) });
+            }
+            if frames.is_empty() {
+                errors.push(format!("{}: run {run} has no hours ahead yet", m.name));
+                continue;
+            }
+            // make sure this model actually carries the field before committing to it
+            let probe = frames.last().map(|fr| fr.key.clone()).unwrap_or_default();
+            let parts: Vec<&str> = probe.split('|').collect();
+            let fh: u32 = parts[3].parse().unwrap_or(0);
+            let file_fh = if sub { fh.div_ceil(60) } else { fh };
+            let file = sources::fill_template(m.file, &run[..8], run[8..].parse().unwrap_or(0), file_fh, "");
+            let idx = match self.text_cached(&format!("{}.idx", s3::object_url(m.bucket, &file)), 3600).await {
+                Ok(i) => i,
+                Err(e) => {
+                    errors.push(format!("{}: {e}", m.name));
+                    continue;
+                }
+            };
+            let rows = sources::parse_ncep_idx(&idx);
+            let found = match &v.ncep {
+                Match::Ncep(pats) => pats.iter().any(|p| if sub { sources::find_ncep_minutes(&rows, p, fh).is_some() } else { sources::find_ncep(&rows, p, fh, v.accum).is_some() }),
+                _ => true,
+            };
+            if !found {
+                errors.push(format!("{} has no {}", m.name, v.name));
+                continue;
+            }
+            return Ok(FramesResp {
+                frames,
+                runs: vec![RunInfo { id: run.clone(), time: *run_t, fhs: fhs.clone() }],
+                run: Some(run.clone()),
+                storms: vec![],
+                storm: None,
+            });
+        }
+        bail!("no model run available ({})", errors.join("; "))
     }
 
     async fn ndfd_file(&self, elem: &str, vp: &str) -> Result<(i64, Bytes, Vec<MessageInfo>)> {
@@ -519,6 +600,33 @@ impl GridService {
                 })
                 .await
             }
+            Some("fdiff") if parts.len() == 6 => {
+                // accumulation between two forecast hours of one run (e.g. snowfall from now)
+                let fh: u32 = parts[3].parse()?;
+                let fh0: u32 = parts[4].parse()?;
+                let a = Box::pin(self.grid(&format!("model|{}|{}|{fh}|{}|", parts[1], parts[2], parts[5]))).await?;
+                let b = if fh0 == 0 { None } else { Some(Box::pin(self.grid(&format!("model|{}|{}|{fh0}|{}|", parts[1], parts[2], parts[5]))).await?) };
+                self.blocking(move || {
+                    let vals: Vec<f32> = (0..a.data.len())
+                        .map(|i| {
+                            let ra = a.data[i];
+                            if ra == 0 {
+                                return f32::NAN;
+                            }
+                            let va = a.value_raw(ra);
+                            let vb = match &b {
+                                Some(b) if b.data.len() == a.data.len() && b.data[i] != 0 => b.value_raw(b.data[i]),
+                                _ => 0.0,
+                            };
+                            let d = va - vb;
+                            // hide trace amounts so bare ground stays clear
+                            if d < 0.05 { f32::NAN } else { d }
+                        })
+                        .collect();
+                    Ok(Grid::from_values(a.nx, a.ny, a.proj.clone(), &vals, a.valid_ms, a.ref_ms))
+                })
+                .await
+            }
             Some("model") if parts.len() >= 5 => self.load_model(parts[1], parts[2], parts[3].parse()?, parts[4], parts.get(5).copied().unwrap_or("")).await,
             Some("ndfd") if parts.len() == 5 => {
                 let l = self.layer(parts[1])?.clone();
@@ -575,7 +683,9 @@ impl GridService {
             bail!("bad run");
         }
         let (d, hh) = (&run[..8], run[8..].parse::<u32>()?);
-        let file = sources::fill_template(m.file, d, hh, fh, storm);
+        // sub-hourly HRRR: `fh` is minutes; the file is the hour that step ends in
+        let sub = m.id == "hrrrsub";
+        let file = sources::fill_template(m.file, d, hh, if sub { fh.div_ceil(60) } else { fh }, storm);
         let (url, idx_url) = if m.index == "ecmwf" {
             let u = format!("{}/{}", m.bucket, file);
             let i = u.replace(".grib2", ".index");
@@ -586,13 +696,17 @@ impl GridService {
         };
         let idx = self.text_cached(&idx_url, 3600).await.with_context(|| format!("{} index", m.name))?;
         let opts = DecodeOpts { nodata: vec![], min_valid: None, transform: v.transform, max_dim: 0 };
-        let valid = Utc.with_ymd_and_hms(d[..4].parse()?, d[4..6].parse()?, d[6..8].parse()?, hh, 0, 0).single().map(|t| t.timestamp_millis()).unwrap_or(0) + fh as i64 * 3_600_000;
-        let run_ms = valid - fh as i64 * 3_600_000;
+        let step_ms: i64 = if sub { 60_000 } else { 3_600_000 };
+        let run_ms = Utc.with_ymd_and_hms(d[..4].parse()?, d[4..6].parse()?, d[6..8].parse()?, hh, 0, 0).single().map(|t| t.timestamp_millis()).unwrap_or(0);
+        let valid = run_ms + fh as i64 * step_ms;
         let matcher = if m.index == "ecmwf" { v.ecmwf.clone().ok_or_else(|| anyhow!("{} not in {}", v.name, m.name))? } else { v.ncep.clone() };
         let mut g = match matcher {
             Match::Ncep(pats) => {
                 let rows = sources::parse_ncep_idx(&idx);
-                let range = pats.iter().find_map(|p| sources::find_ncep(&rows, p, fh, v.accum)).ok_or_else(|| anyhow!("{} not found in {} F{fh:03}", v.name, m.name))?;
+                let range = pats
+                    .iter()
+                    .find_map(|p| if sub { sources::find_ncep_minutes(&rows, p, fh) } else { sources::find_ncep(&rows, p, fh, v.accum) })
+                    .ok_or_else(|| anyhow!("{} not found in {} F{fh:03}", v.name, m.name))?;
                 let b = self.fetch(&url, Some(range), true).await?;
                 self.blocking(move || decode::decode(&b, 0, &opts)).await?
             }

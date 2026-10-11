@@ -29,6 +29,15 @@ My build box can't reach NOAA, ECMWF, NASA or the tile servers, so I tested ever
 - [ ] Surface analysis: temperature and dewpoint look reasonable near you; refreshes every few minutes.
 - [ ] Units: Settings → Temp °C/°F and Precip in/mm change the legend and hover values.
 
+## Future radar and snowfall (layer menu → Future, or Radar → Future radar)
+
+- [ ] 6 hr future radar: 15-minute frames from now to +6 h; the header chip reads like "HRRR +2h".
+- [ ] 24 hr future radar: hourly frames to +24 h (uses the latest HRRR 00/06/12/18Z run, which runs 48 h).
+- [ ] 72 hr future radar: hourly frames to +72 h from RRFS (NAM 12 km or GFS if RRFS is missing).
+- [ ] 48 hr future snowfall: total snow from now, growing frame by frame; bare ground stays clear; inches/cm follow Settings. (Needs snow somewhere in the US.)
+- [ ] Leave one open for 15+ minutes: it moves forward and picks up newer model runs.
+- [ ] If a layer shows an error, send me the message text: it lists which models it tried.
+
 ## Performance (please note numbers)
 
 - [ ] Time for the first MRMS frame and a full 12-frame loop.

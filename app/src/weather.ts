@@ -11,7 +11,7 @@ export interface GridLayerDef {
   name: string;
   units: string;
   cmap: string;
-  source: "mrms" | "model" | "ndfd" | "metar" | "goes";
+  source: "mrms" | "model" | "ndfd" | "metar" | "goes" | "future";
   model?: string;
   step_min: number;
 }

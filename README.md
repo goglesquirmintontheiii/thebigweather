@@ -23,8 +23,8 @@ Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted
 ### 2. Desktop app
 
 ```bash
-chmod +x TheBigWeather-0.2.0-x86_64.AppImage
-./TheBigWeather-0.2.0-x86_64.AppImage
+chmod +x TheBigWeather-0.2.1-x86_64.AppImage
+./TheBigWeather-0.2.1-x86_64.AppImage
 ```
 
 On first launch, paste the server URL and token. If the server runs on the same computer, click **Use the server on this computer** — no token needed (turn this off with `local_no_auth = false` under `[server]` in the config).
@@ -36,6 +36,7 @@ The UI also works in a browser at the server URL (phones too, until the Android 
 **Layer menu** (top left of the header) switches the weather layer without opening a panel. Search, or browse by category:
 
 - **Radar:** Level II, Level III, and MRMS radar mosaics
+- **Future:** 6 hr future radar (HRRR, every 15 min), 24 hr future radar (HRRR), 72 hr future radar (RRFS), and 48 hr future snowfall (total from now). Each picks the freshest run that reaches the full time span and falls back to another model if one is late.
 - **MRMS:** reflectivity, precip type and rate, hail (MESH, POSH), rotation tracks, azimuthal shear, lightning probability, VIL, echo tops, QPE 1–72 h
 - **Satellite:** GOES-19/18 all 16 bands for CONUS, Full Disk, Meso 1 and 2 (values on hover); GeoColor, Air Mass, Dust and Fire RGB; Himawari-9
 - **Models:** HRRR, RRFS, NAM 3 km, NAM 12 km, RAP, NBM, GFS, ECMWF IFS, HAFS-A/B. Fields include reflectivity, precip, snow, temperature, dewpoint, RH, wind, gusts, pressure, visibility, clouds, CAPE, helicity, updraft helicity, PWAT, 850 mb temperature, 500 mb height and 250 mb wind. Pick the run, plus the storm for HAFS.

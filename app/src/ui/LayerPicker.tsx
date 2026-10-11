@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { settings, update } from "../store";
 import { gridLayers, GIBS, activeLabel, selectWeather, gridDef, type GridLayerDef } from "../weather";
 import { currentSite } from "../radar/controller";
-import { Layers, ChevronDown, Search, Radar, Satellite, Grid3x3, CloudSun, Thermometer, CalendarClock } from "lucide-preact";
+import { Layers, ChevronDown, Search, Radar, Satellite, Grid3x3, CloudSun, Thermometer, CalendarClock, FastForward } from "lucide-preact";
 
-type Cat = "radar" | "mrms" | "sat" | "models" | "ndfd" | "obs";
+type Cat = "radar" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs";
 const CATS: { id: Cat; name: string; icon: any }[] = [
   { id: "radar", name: "Radar", icon: Radar },
+  { id: "future", name: "Future", icon: FastForward },
   { id: "mrms", name: "MRMS", icon: Grid3x3 },
   { id: "sat", name: "Satellite", icon: Satellite },
   { id: "models", name: "Models", icon: CloudSun },
@@ -17,7 +18,7 @@ const CATS: { id: Cat; name: string; icon: any }[] = [
 ];
 
 function catOf(d: GridLayerDef): Cat {
-  return ({ mrms: "mrms", goes: "sat", model: "models", ndfd: "ndfd", metar: "obs" } as const)[d.source];
+  return ({ mrms: "mrms", goes: "sat", model: "models", ndfd: "ndfd", metar: "obs", future: "future" } as const)[d.source];
 }
 
 function currentCat(): Cat {
@@ -89,6 +90,7 @@ export function LayerPicker() {
                 {cat === "sat" && <SatList pick={pick} />}
                 {cat === "models" && <ModelList pick={pick} />}
                 {(cat === "mrms" || cat === "ndfd" || cat === "obs") && <GroupedList cat={cat} pick={pick} />}
+                {cat === "future" && <FutureList pick={pick} />}
               </div>
             </div>
           )}
@@ -133,11 +135,37 @@ function RadarList({ pick }: { pick: Pick }) {
       <label class="lbl">Single-site radar · {r.site}</label>
       <Item on={w.kind === "radar" && r.source === "L2"} name="Level II" sub="Full resolution · all tilts · RapidSweep" onClick={() => set("L2")} />
       <Item on={w.kind === "radar" && r.source === "L3"} name="Level III" sub="Derived products · precip · hydro class" onClick={() => set("L3")} />
+      <label class="lbl">Future radar</label>
+      {gridLayers.value
+        .filter((d) => d.source === "future" && d.cmap === "REF")
+        .map((d) => (
+          <Item key={d.id} on={isGrid(d.id)} name={d.name.replace("Future Radar · ", "") + " future radar"} sub="Model-simulated" onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />
+        ))}
       <label class="lbl">Radar mosaics</label>
       {["mrms/cref", "mrms/bref", "mrms/lowalt", "mrms/seamless"].map((id) => {
         const d = gridDef(id);
         return d ? <Item key={id} on={isGrid(id)} name={d.name} sub="MRMS · CONUS" onClick={() => pick(() => selectWeather({ kind: "grid", id }))} /> : null;
       })}
+    </>
+  );
+}
+
+const FUTURE_SUB: Record<string, string> = {
+  "future/radar6": "HRRR every 15 min",
+  "future/radar24": "HRRR hourly (RRFS / NAM backup)",
+  "future/radar72": "RRFS hourly (NAM / GFS backup)",
+  "future/snow48": "Total from now · RRFS (HRRR backup)",
+};
+
+function FutureList({ pick }: { pick: Pick }) {
+  const defs = gridLayers.value.filter((d) => d.source === "future");
+  if (!defs.length) return <div class="muted small">Connect to a server to list layers.</div>;
+  return (
+    <>
+      <label class="lbl">From now forward · model forecasts</label>
+      {defs.map((d) => (
+        <Item key={d.id} on={isGrid(d.id)} name={d.name} sub={FUTURE_SUB[d.id]} onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />
+      ))}
     </>
   );
 }

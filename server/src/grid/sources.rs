@@ -125,6 +125,9 @@ pub const MODELS: &[ModelDef] = &[
     ModelDef { id: "gfs", name: "GFS", group: "Global", bucket: "noaa-gfs-bdp-pds", file: "gfs.{ymd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f{fh3}", run_prefix: "gfs.{ymd}/{hh}/atmos/gfs.t{hh}z.pgrb2.0p25.f", cycles: &[0, 6, 12, 18], index: "ncep", resolution: "0.25°" },
     ModelDef { id: "ecmwf", name: "ECMWF IFS", group: "Global", bucket: "https://data.ecmwf.int/forecasts", file: "{ymd}/{hh}z/ifs/0p25/oper/{ymd}{hh}0000-{fh}h-oper-fc.grib2", run_prefix: "{ymd}/{hh}z/ifs/0p25/oper/", cycles: &[0, 12], index: "ecmwf", resolution: "0.25°" },
     ModelDef { id: "hafsa", name: "HAFS-A", group: "Tropical", bucket: "noaa-nws-hafs-pds", file: "hfsa/{ymd}/{hh}/{storm}.{ymd}{hh}.hfsa.parent.atm.f{fh3}.grb2", run_prefix: "hfsa/{ymd}/{hh}/", cycles: &[0, 6, 12, 18], index: "ncep", resolution: "6 km" },
+    // HRRR sub-hourly (15-minute) output; used by the 6-hour future radar, not listed as its own model.
+    // Forecast "hours" in keys for this model are minutes.
+    ModelDef { id: "hrrrsub", name: "HRRR", group: "Hidden", bucket: "noaa-hrrr-bdp-pds", file: "hrrr.{ymd}/conus/hrrr.t{hh}z.wrfsubhf{fh2}.grib2", run_prefix: "hrrr.{ymd}/conus/hrrr.t{hh}z.wrfsubhf", cycles: &[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23], index: "ncep", resolution: "3 km" },
     ModelDef { id: "hafsb", name: "HAFS-B", group: "Tropical", bucket: "noaa-nws-hafs-pds", file: "hfsb/{ymd}/{hh}/{storm}.{ymd}{hh}.hfsb.parent.atm.f{fh3}.grb2", run_prefix: "hfsb/{ymd}/{hh}/", cycles: &[0, 6, 12, 18], index: "ncep", resolution: "6 km" },
 ];
 
@@ -427,12 +430,143 @@ pub fn model_layers() -> Vec<LayerDef> {
     out
 }
 
+// ---------------- Future radar / snowfall ----------------
+
+pub const SYNOPTIC: &[u32] = &[0, 6, 12, 18];
+pub const ALL_CYCLES: &[u32] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23];
+
+/// One model option for a future layer: model id, which cycles to consider, frame step (minutes).
+pub struct FutureSrc {
+    pub model: &'static str,
+    pub cycles: &'static [u32],
+    pub step_min: u32,
+}
+
+/// "Future" layers: a model field shown from now forward, picking the freshest run that reaches
+/// the horizon (falling back down the list when a model is missing or late).
+pub struct FutureDef {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub var: &'static str,
+    pub horizon_h: u32,
+    /// accumulate from "now" (snowfall) instead of showing the field as-is
+    pub accum_from_now: bool,
+    pub chain: &'static [FutureSrc],
+}
+
+pub const FUTURE: &[FutureDef] = &[
+    FutureDef {
+        id: "radar6",
+        name: "Future Radar · 6 hr",
+        var: "refc",
+        horizon_h: 6,
+        accum_from_now: false,
+        chain: &[
+            FutureSrc { model: "hrrrsub", cycles: ALL_CYCLES, step_min: 15 },
+            FutureSrc { model: "hrrr", cycles: ALL_CYCLES, step_min: 60 },
+            FutureSrc { model: "rrfs", cycles: ALL_CYCLES, step_min: 60 },
+        ],
+    },
+    FutureDef {
+        id: "radar24",
+        name: "Future Radar · 24 hr",
+        var: "refc",
+        horizon_h: 24,
+        accum_from_now: false,
+        chain: &[
+            FutureSrc { model: "hrrr", cycles: SYNOPTIC, step_min: 60 },
+            FutureSrc { model: "rrfs", cycles: SYNOPTIC, step_min: 60 },
+            FutureSrc { model: "nam3", cycles: SYNOPTIC, step_min: 60 },
+        ],
+    },
+    FutureDef {
+        id: "radar72",
+        name: "Future Radar · 72 hr",
+        var: "refc",
+        horizon_h: 72,
+        accum_from_now: false,
+        chain: &[
+            FutureSrc { model: "rrfs", cycles: SYNOPTIC, step_min: 60 },
+            FutureSrc { model: "nam12", cycles: SYNOPTIC, step_min: 60 },
+            FutureSrc { model: "gfs", cycles: SYNOPTIC, step_min: 60 },
+        ],
+    },
+    FutureDef {
+        id: "snow48",
+        name: "Future Snowfall · 48 hr",
+        var: "snow",
+        horizon_h: 48,
+        accum_from_now: true,
+        chain: &[
+            FutureSrc { model: "rrfs", cycles: SYNOPTIC, step_min: 60 },
+            FutureSrc { model: "hrrr", cycles: SYNOPTIC, step_min: 60 },
+        ],
+    },
+];
+
+pub fn future_def(id: &str) -> Option<&'static FutureDef> {
+    FUTURE.iter().find(|f| f.id == id)
+}
+
+pub fn future_layers() -> Vec<LayerDef> {
+    FUTURE
+        .iter()
+        .map(|f| {
+            let v = var_def(f.var).expect("future var");
+            LayerDef {
+                id: format!("future/{}", f.id),
+                group: "Future".into(),
+                name: f.name.into(),
+                units: v.units,
+                cmap: v.cmap,
+                product: f.id.into(),
+                transform: v.transform,
+                nodata: vec![],
+                min_valid: None,
+                source: "future",
+                model: None,
+                step_min: f.chain[0].step_min,
+            }
+        })
+        .collect()
+}
+
+/// Valid times (ms) and the forecast step to load for a future layer: every `step_min` from the
+/// current step up to now + horizon, limited to hours the run has published. For sub-hourly runs
+/// the step value is minutes (files hold the steps ending in that hour); otherwise hours.
+pub fn future_steps(now: i64, run_t: i64, fhs: &[u32], step_min: u32, horizon_h: u32, sub: bool) -> Vec<(i64, u32)> {
+    let step = step_min as i64 * 60_000;
+    let end = now + horizon_h as i64 * 3_600_000;
+    let mut t = (now - now.rem_euclid(step)).max(run_t + step);
+    let mut out = vec![];
+    while t <= end {
+        let mins = ((t - run_t) / 60_000) as u32;
+        let (file_h, key) = if sub { (mins.div_ceil(60), mins) } else { (mins / 60, mins / 60) };
+        if (sub || mins % 60 == 0) && file_h > 0 && fhs.contains(&file_h) {
+            out.push((t, key));
+        }
+        t += step;
+    }
+    out
+}
+
+/// Find a field in an HRRR sub-hourly index: rows are labelled "<minutes> min fcst".
+pub fn find_ncep_minutes(idx: &[(u64, Option<u64>, Vec<String>)], pattern: &str, minutes: u32) -> Option<(u64, Option<u64>)> {
+    let (var, level) = pattern.split_once(':')?;
+    let want = format!("{minutes} min fcst");
+    let alt = if minutes % 60 == 0 { format!("{} hour fcst", minutes / 60) } else { want.clone() };
+    idx.iter()
+        .find(|(_, _, f)| f.len() >= 6 && f[3] == var && f[4].starts_with(level) && (f[5] == want || f[5] == alt))
+        .map(|c| (c.0, c.1))
+}
+
 pub fn all_layers() -> Vec<LayerDef> {
     let mut v = mrms_layers();
     v.extend(goes_layers());
     v.extend(model_layers());
     v.extend(metar_layers());
     v.extend(ndfd_layers());
+    v.extend(future_layers());
     v
 }
 
@@ -446,6 +580,28 @@ mod tests {
         assert_eq!(find_ncep(&p, "APCP:surface", 6, true), Some((200, Some(300))));
         assert_eq!(find_ncep(&p, "TMP:2 m above ground", 6, false), Some((300, Some(400))));
         assert_eq!(find_ncep(&p, "REFC:entire atmosphere", 6, false), Some((0, Some(100))));
+    }
+
+    #[test]
+    fn subhourly_minutes() {
+        let idx = "1:0:d=2026101000:REFC:entire atmosphere:75 min fcst:\n2:100:d=2026101000:TMP:2 m above ground:75 min fcst:\n50:900:d=2026101000:REFC:entire atmosphere:90 min fcst:\n51:1000:d=2026101000:TMP:2 m above ground:90 min fcst:\n";
+        let rows = parse_ncep_idx(idx);
+        assert_eq!(find_ncep_minutes(&rows, "REFC:entire atmosphere", 90), Some((900, Some(1000))));
+        assert_eq!(find_ncep_minutes(&rows, "REFC:entire atmosphere", 75), Some((0, Some(100))));
+        assert_eq!(find_ncep_minutes(&rows, "REFC:entire atmosphere", 105), None);
+        assert!(future_layers().iter().all(|l| l.id.starts_with("future/")));
+        // run 12Z, now 13:20Z, sub-hourly to f18 → 13:15 .. 19:15 in 15-min steps (minutes 75..435)
+        let h = 3_600_000i64;
+        let run = 1_791_700_000_000i64 - 1_791_700_000_000i64 % (24 * h) + 12 * h;
+        let fhs: Vec<u32> = (0..=18).collect();
+        let st = future_steps(run + h + 20 * 60_000, run, &fhs, 15, 6, true);
+        assert_eq!(st.first().unwrap().1, 75);
+        assert_eq!(st.len(), 25);
+        assert_eq!(st.last().unwrap().1, 435);
+        // hourly, run only published to f05: 13Z..17Z
+        let fhs: Vec<u32> = (0..=5).collect();
+        let st = future_steps(run + h + 20 * 60_000, run, &fhs, 60, 24, false);
+        assert_eq!(st.iter().map(|x| x.1).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5]);
     }
 
     #[test]
