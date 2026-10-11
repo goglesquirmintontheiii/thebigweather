@@ -1,6 +1,6 @@
 [package]
 name = "tbw-server"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
@@ -34,4 +34,5 @@ toml = "1.1.8"
 tower-http = { version = "0.7.1", features = ["cors", "compression-full", "trace", "fs"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zip = { version = "9.0.1", default-features = false, features = ["deflate"] }
 zstd = "0.14.2"

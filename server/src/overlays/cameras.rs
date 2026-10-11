@@ -505,6 +505,14 @@ fn index(o: &Overlays, srcs: &[Source]) -> Arc<super::camdb::Index> {
     idx
 }
 
+/// The combined camera index right now (for record-on-alert).
+pub async fn index_now(o: &Arc<Overlays>) -> Arc<super::camdb::Index> {
+    ensure_db(o);
+    let srcs = sources(o);
+    refresh_sources(o, &srcs).await;
+    index(o, &srcs)
+}
+
 /// Cameras. With `bbox` (+ `z`, `off`, `kinds`) answers from the combined live + database index
 /// (clustered when zoomed out); without it, every live camera (older apps).
 pub async fn list(o: &Arc<Overlays>, q: &super::Params) -> Result<Value> {

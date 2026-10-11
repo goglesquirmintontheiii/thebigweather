@@ -120,6 +120,13 @@ if ((${#need[@]})); then
   pkg_install "${need[@]}" -- "${need[@]}" -- "${need[@]}" || die "Please install: ${need[*]}"
 fi
 ok "curl, tar"
+# ffmpeg: needed only to record video camera streams (still-image cameras and radar work without it)
+if ! command -v ffmpeg >/dev/null; then
+  warn "ffmpeg not found — installing it for camera video recording (optional)"
+  pkg_install ffmpeg -- ffmpeg-free -- ffmpeg >/dev/null 2>&1 && ok "ffmpeg" || warn "couldn't install ffmpeg; video camera recording stays off"
+else
+  ok "ffmpeg"
+fi
 
 # ---------- 2. server binary ----------
 step "Preparing the server binary"

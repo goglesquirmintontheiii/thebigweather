@@ -331,6 +331,12 @@ impl RadarService {
         if let Some(name) = key.strip_prefix("file:") {
             return Ok(Bytes::from(tokio::fs::read(self.upload_dir.join(safe_name(name))).await?));
         }
+        if let Some(rest) = key.strip_prefix("rec:") {
+            // recordings: rec:<recording id>/<file>
+            let (id, f) = rest.split_once('/').ok_or_else(|| anyhow!("bad key"))?;
+            let dir = self.upload_dir.parent().map(|p| p.join("recordings")).ok_or_else(|| anyhow!("no recordings"))?;
+            return Ok(Bytes::from(tokio::fs::read(dir.join(safe_name(id)).join(safe_name(f))).await?));
+        }
         bail!("unknown key type")
     }
 
@@ -468,6 +474,21 @@ impl RadarService {
         all.sort_by_key(|e| e.time);
         let k = all.len().saturating_sub(n);
         Ok(all.split_off(k))
+    }
+
+    /// Raw Level III file bytes for any L3 key (used by recordings).
+    pub async fn l3_raw(&self, key: &str) -> Result<Bytes> {
+        if let Some(url) = key.strip_prefix("tgftp:") {
+            if !url.starts_with(&self.tgftp_base) {
+                bail!("url not allowed");
+            }
+            let r = self.http.get(url).send().await?;
+            if !r.status().is_success() {
+                bail!("tgftp HTTP {}", r.status());
+            }
+            return Ok(r.bytes().await?);
+        }
+        self.raw(key).await
     }
 
     pub async fn l3_data(&self, key: &str) -> Result<Bytes> {

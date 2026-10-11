@@ -1,6 +1,12 @@
 import { openPanel, type PanelId, connection } from "../store";
 import { alerts } from "../alerts";
-import { Layers, Radar, TriangleAlert, MapPin, Activity, Settings, Radio, FolderOpen, CloudSun, Search, ArrowLeftRight, X, Map as MapIcon } from "lucide-preact";
+import { Layers, Radar, TriangleAlert, MapPin, Activity, Settings, Radio, FolderOpen, CloudSun, Search, X, Map as MapIcon, CircleDot } from "lucide-preact";
+import { RadioPanel } from "./panels/RadioPanel";
+import { ForecastPanel } from "./panels/ForecastPanel";
+import { SearchPanel } from "./panels/SearchPanel";
+import { RecordPanel, recs } from "./panels/RecordPanel";
+import { FilesPanel } from "./panels/FilesPanel";
+import { nowPlaying } from "../radio";
 import { MapPanel } from "./panels/MapPanel";
 import { LayersPanel } from "./panels/LayersPanel";
 import { RadarPanel } from "./panels/RadarPanel";
@@ -18,12 +24,12 @@ const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "sources", icon: Activity, label: "Data sources" },
 ];
 
-const SOON = [
-  { icon: Radio, label: "Weather radio", phase: 4 },
-  { icon: CloudSun, label: "Forecast", phase: 4 },
-  { icon: FolderOpen, label: "Map files", phase: 3 },
-  { icon: Search, label: "Find on map", phase: 4 },
-  { icon: ArrowLeftRight, label: "Import / export", phase: 4 },
+const MORE: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
+  { id: "forecast", icon: CloudSun, label: "Forecast" },
+  { id: "radio", icon: Radio, label: "Weather radio" },
+  { id: "search", icon: Search, label: "Search" },
+  { id: "record", icon: CircleDot, label: "Recordings" },
+  { id: "files", icon: FolderOpen, label: "Files & backup" },
 ];
 
 export function Rail() {
@@ -39,9 +45,11 @@ export function Rail() {
         </button>
       ))}
       <div class="rail-sep" />
-      {SOON.map(({ icon: Icon, label, phase }) => (
-        <button key={label} class="rail-btn soon" title={`${label} — coming in phase ${phase}`} disabled>
+      {MORE.map(({ id, icon: Icon, label }) => (
+        <button key={id} class={`rail-btn ${openPanel.value === id ? "on" : ""}`} title={label} onClick={() => (openPanel.value = openPanel.value === id ? null : id)}>
           <Icon size={20} />
+          {id === "radio" && nowPlaying.value && <span class="dot online" />}
+          {id === "record" && recs.value.some((r) => r.status === "recording") && <span class="dot rec" />}
         </button>
       ))}
       <div class="rail-fill" />
@@ -52,7 +60,7 @@ export function Rail() {
   );
 }
 
-const TITLES: Record<string, string> = { radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings" };
+const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings" };
 
 export function SidePanel() {
   const p = openPanel.value;
@@ -69,6 +77,11 @@ export function SidePanel() {
         {p === "radar" && <RadarPanel />}
         {p === "layers" && <LayersPanel />}
         {p === "map" && <MapPanel />}
+        {p === "forecast" && <ForecastPanel />}
+        {p === "radio" && <RadioPanel />}
+        {p === "search" && <SearchPanel />}
+        {p === "record" && <RecordPanel />}
+        {p === "files" && <FilesPanel />}
         {p === "alerts" && <AlertsPanel />}
         {p === "points" && <PointsPanel />}
         {p === "sources" && <SourcesPanel />}

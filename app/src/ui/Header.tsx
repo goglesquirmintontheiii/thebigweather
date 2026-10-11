@@ -1,5 +1,5 @@
 import { settings, update, connection } from "../store";
-import { currentFrame, currentSite, tilts, l3Products, L2_MOMENTS, liveSweep, liveState, pinned, backToLatest, frames, frameIndex } from "../radar/controller";
+import { currentFrame, currentSite, tilts, l3Products, L2_MOMENTS, liveSweep, liveState, pinned, backToLatest, frames, frameIndex, playingRec } from "../radar/controller";
 import { gridRuns, gridRun, gridStorms, setRun, setStorm } from "../grid/controller";
 import { activeTime, activeFrame, activeLoading, activeError, isForecast } from "../active";
 import { activeLabel, gridDef } from "../weather";
@@ -110,7 +110,7 @@ function RadarHeader() {
       <TimeBlock t={t} />
       {pinned.value && (
         <button class="chip hist" onClick={backToLatest} title="Back to latest">
-          <History size={12} /> History · latest
+          <History size={12} /> {playingRec.value ? `Recording: ${playingRec.value}` : "History"} · latest
         </button>
       )}
       {liveOn && (

@@ -30,7 +30,7 @@ export interface Popup {
   link?: [string, string];
   text?: string;
   /** special content handled by the popup component */
-  kind?: "metar" | "tide" | "camera" | "iss" | "buoy" | "ship" | "waffle" | "flight" | "storm" | "cluster";
+  kind?: "metar" | "tide" | "camera" | "iss" | "buoy" | "ship" | "waffle" | "flight" | "storm" | "cluster" | "radio";
   props?: any;
   /** accent color in the info panel */
   color?: string;
@@ -59,6 +59,8 @@ export interface OverlayDef {
   source?: Record<string, any>;
   /** area features open in the info panel (with alerts at the same spot) instead of a popup */
   panel?: boolean;
+  /** not listed in the Layers panel (toggled from elsewhere) */
+  hidden?: boolean;
 }
 
 const days = (n: number): [string, string][] => Array.from({ length: n }, (_, i) => [String(i + 1), `Day ${i + 1}`]);
@@ -999,6 +1001,58 @@ export const OVERLAYS: OverlayDef[] = [
     note: "NIFC perimeters and NASA FIRMS VIIRS detections (last 24 h, US).",
   },
 
+  // ---------------- Chasers & reports ----------------
+  {
+    id: "spotters",
+    name: "Spotter Network positions",
+    group: "Chasers & reports",
+    refresh: 60,
+    options: [{ key: "streamers", label: "Show", choices: [["0", "All spotters"], ["1", "Live streamers only"]], def: "0" }],
+    style: { color: "#22d3ee", opacity: 1, size: 1, labels: false },
+    layers: (s, st) => [
+      {
+        id: `${s}-pt`,
+        type: "circle",
+        source: s,
+        paint: {
+          "circle-color": ["case", ["get", "stream"], "#ef4444", ["get", "moving"], st.color, "#94a3b8"],
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 3 * st.size, 9, 5.5 * st.size],
+          "circle-stroke-color": "#000",
+          "circle-stroke-width": 1,
+          "circle-opacity": st.opacity,
+        },
+      } as LayerSpecification,
+      { ...icons(s, "arrow", 0.55 * st.size, { filter: ["get", "moving"], layout: { "icon-rotate": ["get", "hdg"], "icon-rotation-alignment": "map", "icon-offset": [0, -16] }, paint: { "icon-color": st.color, "icon-opacity": st.opacity } }), id: `${s}-dir` } as LayerSpecification,
+      ...(st.labels ? [label(s, ["coalesce", ["get", "name"], ""], 8, [0, 1])] : []),
+    ],
+    click: (p) => ({
+      title: p.name || "Spotter",
+      sub: p.stream ? "Live streaming" : p.moving ? "Moving" : "Stationary",
+      rows: [["Updated", when(p.time)], ...(p.heading ? [["Heading", String(p.heading)] as [string, string]] : []), ...(p.note ? [["Note", String(p.note)] as [string, string]] : [])],
+      link: p.web ? ["Website", String(p.web).startsWith("http") ? p.web : `https://${p.web}`] : ["Spotter Network", "https://www.spotternetwork.org/"],
+    }),
+    note: "Public Spotter Network feed (names left out by default). Personal, non-commercial use; positions older than 48 h are dropped.",
+  },
+  {
+    id: "mping",
+    name: "mPING reports",
+    group: "Chasers & reports",
+    refresh: 120,
+    key: "mping",
+    options: [{ key: "hours", label: "Last", choices: [["1", "1 hour"], ["2", "2 hours"], ["4", "4 hours"]], def: "2" }],
+    style: { opacity: 1, size: 5 },
+    layers: (s, st) => [
+      points(
+        s,
+        st,
+        ["match", ["get", "cat"], "Rain/Snow", ["case", ["in", "Snow", ["get", "desc"]], "#a5b4fc", ["in", "Freezing", ["get", "desc"]], "#f0abfc", ["in", "Ice", ["get", "desc"]], "#c084fc", "#22c55e"], "Hail", "#16a34a", "Wind Damage", "#3b82f6", "Tornado", "#ef4444", "Flooding", "#0f766e", "Mudslide", "#a16207", "Reduced Visibility", "#9ca3af", "#e5e7eb"],
+        ["interpolate", ["linear"], ["zoom"], 3, st.size * 0.6, 9, st.size * 1.2],
+      ),
+    ],
+    click: (p) => ({ title: p.desc || p.cat || "Report", sub: `mPING · ${p.cat ?? ""}`, rows: [["Time", when(p.time)]] }),
+    note: "Needs a free mPING key (Settings → API keys). Their license allows the last 4 hours for display.",
+  },
+
   // ---------------- Fun ----------------
   {
     id: "waffle",
@@ -1013,6 +1067,40 @@ export const OVERLAYS: OverlayDef[] = [
     ],
     click: (p) => ({ title: "Waffle House", sub: [p.addr, p.city, p.state].filter(Boolean).join(", "), kind: "waffle", props: p, rows: [["Hours", p.hours || "—"], ["Status", p._st ?? "not checked"]] }),
     note: "Locations from OpenStreetMap. Status (off by default) checks the official locator pages for closure notices — best effort.",
+  },
+  // ---------------- not in the layer list ----------------
+  {
+    id: "nwr",
+    name: "Weather radio stations",
+    group: "Hidden",
+    hidden: true,
+    feed: "radiomap",
+    refresh: 600,
+    style: { opacity: 1, size: 1, labels: true },
+    layers: (s, st) => [
+      points(s, st, "#f59e0b", ["interpolate", ["linear"], ["zoom"], 3, 4, 8, 7]),
+      ...(st.labels ? [label(s, ["get", "call"], 5, [0, 1])] : []),
+    ],
+    click: (p) => ({ title: `${p.call} · ${p.city}, ${p.state}`, sub: "NOAA Weather Radio stream (placed at its city)", kind: "radio", props: p }),
+  },
+  {
+    id: "search",
+    name: "Search results",
+    group: "Hidden",
+    hidden: true,
+    feed: "client",
+    refresh: 0,
+    style: { opacity: 1, size: 1, labels: true },
+    layers: (s, st) => [
+      points(s, st, "#f472b6", 6),
+      ...(st.labels ? [label(s, ["get", "name"], 10, [0, 1.1])] : []),
+    ],
+    click: (p) => ({
+      title: p.name,
+      sub: p.kind,
+      rows: [...(p.addr ? [["Address", p.addr] as [string, string]] : []), ...(p.hours ? [["Hours", String(p.hours)] as [string, string]] : []), ...(p.phone ? [["Phone", String(p.phone)] as [string, string]] : [])],
+      link: p.web ? ["Website", p.web] : ["OpenStreetMap", p.osm],
+    }),
   },
 ];
 

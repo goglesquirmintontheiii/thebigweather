@@ -6,6 +6,7 @@ import { signal, effect } from "@preact/signals";
 import { settings, update, tool, crosshair, toast, uid, details, type DetailItem } from "../store";
 import { buildStyle, googleSession, isDarkBasemap } from "./basemaps";
 import { attachOverlays, pickOverlay, popup } from "../overlays/manager";
+import { attachDraw } from "./draw";
 import { RadarLayer } from "../radar/RadarLayer";
 import { attachLayer, sites, currentSite, displaySweep, selectSite, activeTable, liveSweep, frames, liveState, extraFrames, extraLive } from "../radar/controller";
 import { GridLayer } from "../grid/GridLayer";
@@ -445,6 +446,7 @@ export function createMap(container: HTMLElement): MLMap {
   attachGibs(map, () => (map.getLayer("grid") ? "grid" : firstTopLayer(map)));
   mapRef.value = map;
   attachOverlays(map);
+  attachDraw(map);
   (window as any).__tbw = { map, radarLayer, gridLayer, liveSweep, frames, liveState, extraFrames };
 
   // FPS: count rendered map frames per second
@@ -511,6 +513,7 @@ export function createMap(container: HTMLElement): MLMap {
   map.on("click", (e) => {
     contextMenu.value = null;
     popup.value = null;
+    if (tool.value === "draw") return;
     if (tool.value === "measure") {
       measurePts.value = [...measurePts.value, [e.lngLat.lng, e.lngLat.lat]];
       return;
@@ -600,7 +603,7 @@ export function createMap(container: HTMLElement): MLMap {
   });
   effect(() => {
     const t = tool.value;
-    map.getCanvas().style.cursor = t === "measure" ? "crosshair" : "";
+    if (t !== "draw") map.getCanvas().style.cursor = t === "measure" ? "crosshair" : "";
     if (t !== "measure") measurePts.value = [];
   });
   return map;

@@ -256,6 +256,11 @@ export function AlertConfig() {
               ))}
             </div>
           </div>
+          <label class="toggle">
+            <span>Read new warnings aloud</span>
+            <input type="checkbox" checked={settings.value.speak} onChange={(e) => update((s) => (s.speak = (e.target as HTMLInputElement).checked))} />
+            <i />
+          </label>
           <div class="row">
             <span>Volume</span>
             <input type="range" min={0} max={1} step={0.05} value={settings.value.audio.volume} onInput={(e) => update((s) => (s.audio.volume = +(e.target as HTMLInputElement).value))} />

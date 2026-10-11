@@ -126,6 +126,42 @@ ipcMain.handle("capture", async () => {
   return file;
 });
 
+// downloads (recording exports): saved to ~/Downloads/TheBigWeather without a dialog
+const pendingDownloads = new Map();
+ipcMain.handle("download", async (_e, url, name) => {
+  if (!win || !/^https?:\/\//.test(url)) return null;
+  const dir = path.join(app.getPath("downloads"), "TheBigWeather");
+  fs.mkdirSync(dir, { recursive: true });
+  return new Promise((resolve) => {
+    pendingDownloads.set(url, { file: path.join(dir, name || "download"), resolve });
+    win.webContents.downloadURL(url);
+  });
+});
+
+// pop-out windows: a camera, the radio, or a second map, in its own OS window
+const popouts = new Set();
+ipcMain.handle("popout", (_e, spec) => {
+  const w = new BrowserWindow({
+    width: spec.width || 640,
+    height: spec.height || 420,
+    title: spec.title || "TheBigWeather",
+    backgroundColor: "#07090c",
+    autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: false },
+  });
+  w.setMenuBarVisibility(false);
+  const hash = "#popout=" + encodeURIComponent(JSON.stringify(spec));
+  if (isDev) w.loadURL(process.env.TBW_DEV_URL + hash);
+  else w.loadURL("app://tbw/index.html" + hash);
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  popouts.add(w);
+  w.on("closed", () => popouts.delete(w));
+  return true;
+});
+
 ipcMain.handle("app-info", () => ({ version: app.getVersion(), platform: process.platform, displays: screen.getAllDisplays().length }));
 
 app.on("second-instance", () => {
@@ -138,6 +174,14 @@ app.on("second-instance", () => {
  * need an http(s) referrer, which an app:// page doesn't have. */
 function setupMediaHeaders() {
   const ses = session.defaultSession;
+  ses.on("will-download", (_e, item) => {
+    const url = item.getURL();
+    const p = pendingDownloads.get(url);
+    if (!p) return;
+    pendingDownloads.delete(url);
+    item.setSavePath(p.file);
+    item.once("done", (_ev, state) => p.resolve(state === "completed" ? p.file : null));
+  });
   ses.webRequest.onBeforeSendHeaders({ urls: ["*://*.youtube.com/*", "*://*.youtube-nocookie.com/*", "*://*.googlevideo.com/*"] }, (d, cb) => {
     const h = d.requestHeaders;
     if (!h.Referer && !h.referer) h.Referer = "https://thebigweather.app/";

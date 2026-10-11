@@ -129,9 +129,24 @@ function typeSounds(fs: any[]) {
   return false;
 }
 
+/** Read new warnings aloud (Settings → alerts gear → "Read aloud"). */
+function speak(fs: any[]) {
+  if (!settings.value.speak || !("speechSynthesis" in window)) return;
+  for (const f of fs.slice(0, 3)) {
+    const p = f.properties;
+    if (!String(p.event).endsWith("Warning") || !alertVisible(p.event)) continue;
+    if (p.messageType && p.messageType !== "Alert") continue;
+    const area = String(p.areaDesc ?? "").split(";").slice(0, 4).join(",");
+    const u = new SpeechSynthesisUtterance(`${p.tag ? p.tag.toLowerCase() + ", " : ""}${p.event} for ${area}`);
+    u.volume = settings.value.audio.volume;
+    speechSynthesis.speak(u);
+  }
+}
+
 function notifyNew(fs: any[]) {
   const s = settings.value;
   const played = typeSounds(fs);
+  setTimeout(() => speak(fs), played ? 2600 : 0);
   if (s.notify.mode === "off") return;
   for (const f of fs) {
     const p = f.properties;

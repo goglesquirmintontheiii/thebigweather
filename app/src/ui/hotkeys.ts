@@ -57,6 +57,9 @@ export function useHotkeys() {
         case "c":
           crosshair.value = !crosshair.value;
           break;
+        case "d":
+          tool.value = tool.value === "draw" ? "none" : "draw";
+          break;
         case "v":
           update((s) => (s.ui.cursorValue = !s.ui.cursorValue));
           break;

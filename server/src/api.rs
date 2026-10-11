@@ -14,7 +14,7 @@ use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use parking_lot::RwLock;
 use serde::Deserialize;
@@ -40,6 +40,7 @@ pub struct AppState {
     pub started: Instant,
     pub grids: Arc<crate::grid::service::GridService>,
     pub overlays: Arc<crate::overlays::Overlays>,
+    pub rec: Arc<crate::recorder::Recorder>,
 }
 
 type St = State<Arc<AppState>>;
@@ -145,6 +146,15 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/metars", get(metars))
         .route("/ovl/{id}", get(overlay))
         .route("/camimg", get(camimg))
+        .route("/rec", get(rec_list).post(rec_create))
+        .route("/rec/rules", put(rec_rules))
+        .route("/rec/export", get(rec_export))
+        .route("/rec/import", post(rec_import).layer(DefaultBodyLimit::disable()))
+        .route("/rec/{id}", delete(rec_delete))
+        .route("/rec/{id}/stop", post(rec_stop))
+        .route("/rec/{id}/frames", get(rec_frames))
+        .route("/rec/{id}/file/{name}", get(rec_file))
+        .route("/rec/{id}/timelapse", get(rec_timelapse))
         .route("/ws", get(ws))
         .layer(DefaultBodyLimit::max(400 * 1024 * 1024))
         .route_layer(middleware::from_fn_with_state(st.clone(), auth));
@@ -377,8 +387,8 @@ async fn local_check(State(st): St, req: Request) -> Json<Value> {
 async fn overlay(State(st): St, Path(id): Path<String>, Query(q): Query<std::collections::BTreeMap<String, String>>) -> Result<Response, ApiError> {
     let mut q = q;
     q.remove("token");
-    let key = st.cfg.read().keys.get("aisstream").cloned().unwrap_or_default();
-    let b = st.overlays.get(&id, &q, &key).await?;
+    let keys = st.cfg.read().keys.clone();
+    let b = st.overlays.get(&id, &q, &keys).await?;
     let mut r = Response::new(Body::from(b));
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -449,4 +459,158 @@ async fn grid_value(State(st): St, Query(q): Query<ValueQ>) -> Result<Json<Value
 
 async fn metars(State(st): St) -> Json<Value> {
     Json(json!(st.grids.latest_metars().map(|v| v.as_ref().clone()).unwrap_or_default()))
+}
+
+// ---------- recordings ----------
+
+async fn rec_list(State(st): St) -> Json<Value> {
+    Json(json!({"recs": st.rec.list(), "rules": *st.rec.rules.lock(), "ffmpeg": st.rec.has_ffmpeg()}))
+}
+
+async fn rec_create(State(st): St, Json(r): Json<crate::recorder::Rec>) -> Result<Json<Value>, ApiError> {
+    let r = st.rec.create(r)?;
+    st.hub.send(json!({"type": "recording", "id": r.id}));
+    Ok(Json(json!(r)))
+}
+
+async fn rec_rules(State(st): St, Json(r): Json<crate::recorder::Rules>) -> Json<Value> {
+    st.rec.save_rules(r);
+    Json(json!({"ok": true}))
+}
+
+async fn rec_stop(State(st): St, Path(id): Path<String>) -> Json<Value> {
+    st.rec.stop(&id);
+    st.hub.send(json!({"type": "recording", "id": id}));
+    Json(json!({"ok": true}))
+}
+
+async fn rec_delete(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
+    st.rec.delete(&id)?;
+    st.hub.send(json!({"type": "recording", "id": id}));
+    Ok(Json(json!({"ok": true})))
+}
+
+async fn rec_frames(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({"frames": st.rec.frames(&id)?, "rec": st.rec.get(&id)})))
+}
+
+async fn serve_file(p: std::path::PathBuf, headers: &HeaderMap) -> Result<Response, ApiError> {
+    let ct = match p.extension().and_then(|e| e.to_str()).unwrap_or("") {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "mp4" => "video/mp4",
+        "zip" => "application/zip",
+        _ => "application/octet-stream",
+    };
+    let len = tokio::fs::metadata(&p).await.map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))?.len();
+    // byte ranges so video players can seek
+    if let Some(r) = headers.get(header::RANGE).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("bytes=")) {
+        let (a, b) = r.split_once('-').unwrap_or((r, ""));
+        let start: u64 = a.parse().unwrap_or(0);
+        let end: u64 = b.parse().unwrap_or(len.saturating_sub(1)).min(len.saturating_sub(1));
+        if start <= end && start < len {
+            use tokio::io::{AsyncReadExt, AsyncSeekExt};
+            let mut f = tokio::fs::File::open(&p).await.map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))?;
+            f.seek(std::io::SeekFrom::Start(start)).await.ok();
+            let n = (end - start + 1).min(8 * 1024 * 1024);
+            let mut buf = vec![0u8; n as usize];
+            f.read_exact(&mut buf).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            let mut resp = Response::new(Body::from(buf));
+            *resp.status_mut() = StatusCode::PARTIAL_CONTENT;
+            let h = resp.headers_mut();
+            h.insert(header::CONTENT_TYPE, HeaderValue::from_static(ct));
+            h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+            h.insert(header::CONTENT_RANGE, HeaderValue::from_str(&format!("bytes {start}-{}/{len}", start + n - 1)).unwrap());
+            return Ok(resp);
+        }
+    }
+    let f = tokio::fs::File::open(&p).await.map_err(|e| ApiError(StatusCode::NOT_FOUND, e.to_string()))?;
+    let mut resp = Response::new(Body::from_stream(tokio_util_stream(f)));
+    let h = resp.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(ct));
+    h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from_str(&len.to_string()).unwrap());
+    Ok(resp)
+}
+
+/// File → body stream in 256 KB chunks.
+fn tokio_util_stream(f: tokio::fs::File) -> impl futures::Stream<Item = Result<Vec<u8>, std::io::Error>> {
+    futures::stream::unfold(f, |mut f| async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 256 * 1024];
+        match f.read(&mut buf).await {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok(buf), f))
+            }
+            Err(e) => Some((Err(e), f)),
+        }
+    })
+}
+
+async fn rec_file(State(st): St, headers: HeaderMap, Path((id, name)): Path<(String, String)>) -> Result<Response, ApiError> {
+    let p = st.rec.file_path(&id, &name)?;
+    serve_file(p, &headers).await
+}
+
+#[derive(Deserialize)]
+struct FpsQ {
+    fps: Option<u32>,
+}
+
+async fn rec_timelapse(State(st): St, headers: HeaderMap, Path(id): Path<String>, Query(q): Query<FpsQ>) -> Result<Response, ApiError> {
+    let p = st.rec.timelapse(&id, q.fps.unwrap_or(10)).await?;
+    serve_file(p, &headers).await
+}
+
+#[derive(Deserialize)]
+struct IdsQ {
+    ids: Option<String>,
+}
+
+async fn rec_export(State(st): St, headers: HeaderMap, Query(q): Query<IdsQ>) -> Result<Response, ApiError> {
+    let ids: Vec<String> = q.ids.unwrap_or_default().split(',').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+    let out = st.rec.dir.join(format!(".export-{}.zip", rand::random::<u32>()));
+    let rec = st.rec.clone();
+    let o2 = out.clone();
+    tokio::task::spawn_blocking(move || rec.export(&ids, &o2)).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let mut resp = serve_file(out.clone(), &headers).await?;
+    resp.headers_mut().insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("attachment; filename=\"TheBigWeather-recordings.zip\""));
+    // the stream holds the file open; remove it a little later
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        tokio::fs::remove_file(out).await.ok();
+    });
+    Ok(resp)
+}
+
+async fn rec_import(State(st): St, body: Body) -> Result<Json<Value>, ApiError> {
+    use futures::StreamExt;
+    use tokio::io::AsyncWriteExt;
+    // stream to disk: exports can be many GB
+    let tmp = st.rec.dir.join(format!(".import-{}.zip", rand::random::<u32>()));
+    let ie = |e: String| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e);
+    let mut f = tokio::fs::File::create(&tmp).await.map_err(|e| ie(e.to_string()))?;
+    let mut s = body.into_data_stream();
+    let mut total = 0usize;
+    while let Some(chunk) = s.next().await {
+        let c = chunk.map_err(|e| ie(e.to_string()))?;
+        total += c.len();
+        f.write_all(&c).await.map_err(|e| ie(e.to_string()))?;
+    }
+    f.flush().await.ok();
+    drop(f);
+    if total < 22 {
+        tokio::fs::remove_file(&tmp).await.ok();
+        return Err(bad("empty file"));
+    }
+    let rec = st.rec.clone();
+    let t2 = tmp.clone();
+    let res = tokio::task::spawn_blocking(move || rec.import(&t2)).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    tokio::fs::remove_file(&tmp).await.ok();
+    let ids = res?;
+    st.hub.send(json!({"type": "recording", "id": "import"}));
+    Ok(Json(json!({"imported": ids})))
 }

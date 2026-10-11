@@ -4,6 +4,8 @@ import { mapRef, measureTotal, measurePts, describeBearing, bearingInfo } from "
 import { fmtDist } from "../util";
 import { Play, Pause, LocateFixed, Camera, Compass, Crosshair, Ruler, RadioTower, PenTool, MousePointer2 } from "lucide-preact";
 import * as maplibregl from "maplibre-gl";
+import { DrawBar } from "./DrawBar";
+import { PaneButton } from "./Panes";
 
 let locMarker: maplibregl.Marker | null = null;
 
@@ -75,6 +77,7 @@ export function Toolbar() {
           {measurePts.value.length < 2 ? "Click points to measure · right-click to finish" : `Total ${fmtDist(measureTotal())}`}
         </div>
       )}
+      {t === "draw" && <DrawBar />}
       {t === "bearing" && bearingInfo.value && <div class="tool-readout glass">From {settings.value.radar.site}: {describeBearing()}</div>}
       <div class="toolbar glass">
         {btn(playing.value, "Play / pause loop (Space)", togglePlay, playing.value ? <Pause size={19} /> : <Play size={19} />, frameCount.value < 2)}
@@ -85,7 +88,8 @@ export function Toolbar() {
         {btn(settings.value.ui.cursorValue, "Show the value under the mouse (V) · or hold Shift", () => update((s) => (s.ui.cursorValue = !s.ui.cursorValue)), <MousePointer2 size={19} />)}
         {btn(t === "measure", "Measure distance (M)", () => (tool.value = t === "measure" ? "none" : "measure"), <Ruler size={19} />)}
         {btn(settings.value.overlays.sites, "Show/hide radar sites (R)", () => update((s) => (s.overlays.sites = !s.overlays.sites)), <RadioTower size={19} />)}
-        {btn(false, "Drawing mode — coming in phase 4", () => toast("Drawing mode arrives in phase 4"), <PenTool size={19} />, false)}
+        <PaneButton />
+        {btn(t === "draw", "Drawing mode (D)", () => (tool.value = t === "draw" ? "none" : "draw"), <PenTool size={19} />)}
       </div>
     </div>
   );

@@ -80,6 +80,16 @@ export interface AlertCfg {
   types: Record<string, AlertTypeCfg>;
 }
 
+/** An extra map pane (multi-pane view). */
+export interface PaneCfg {
+  weather: WeatherSel;
+  /** radar settings for this pane (radar layers) */
+  site?: string;
+  source?: "L2" | "L3";
+  product?: string;
+  tilt?: number;
+}
+
 /** The single visible weather layer. */
 export type WeatherSel =
   | { kind: "radar" }
@@ -127,6 +137,15 @@ export interface Settings {
   /** weather alert display, sounds and flashing (see alertstyle.ts) */
   alertCfg: AlertCfg;
   ui: { cursorValue: boolean; legendTop: boolean; loadBars: boolean };
+  radio: { volume: number; favorites: string[]; custom: { name: string; url: string }[] };
+  forecast: { point: string };
+  /** speak new warnings aloud */
+  speak: boolean;
+  /** extra map panes: layout and what each shows */
+  panes: { layout: "1" | "2" | "2v" | "3" | "4"; sync: boolean; list: PaneCfg[] };
+  /** keep drawings after leaving drawing mode */
+  drawKeep: boolean;
+  drawings: import("./map/draw").Drawing[];
   audio: { alerts: boolean; sweeps: boolean; volume: number };
   notify: { mode: "points" | "all" | "off"; warningsOnly: boolean; desktop: boolean };
   points: SavedPoint[];
@@ -157,6 +176,12 @@ const DEFAULTS: Settings = {
   anim: { fps: 6, dwellMs: 1500, mode: "count", minutes: 60 },
   alertCfg: { hiddenCats: [], hidden: [], cats: {}, types: {} },
   ui: { cursorValue: false, legendTop: false, loadBars: true },
+  drawKeep: false,
+  drawings: [],
+  radio: { volume: 0.8, favorites: [], custom: [] },
+  forecast: { point: "center" },
+  speak: false,
+  panes: { layout: "1", sync: true, list: [] },
   audio: { alerts: true, sweeps: false, volume: 0.6 },
   notify: { mode: "points", warningsOnly: true, desktop: true },
   points: [],
@@ -166,7 +191,25 @@ const DEFAULTS: Settings = {
 
 const KEY = "tbw.settings.v1";
 
+/** pop-out windows don't write settings back (they'd overwrite the main window's) */
+const POPOUT = typeof location !== "undefined" && location.hash.includes("popout=");
+
+function popoutOverrides(out: any) {
+  if (!POPOUT) return out;
+  try {
+    const spec = JSON.parse(decodeURIComponent(location.hash.match(/popout=([^&]+)/)![1]));
+    if (spec.kind === "map" && spec.data) for (const [k, v] of Object.entries(spec.data)) out[k] = v;
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
 function load(): Settings {
+  return popoutOverrides(load0());
+}
+
+function load0(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return structuredClone(DEFAULTS);
@@ -198,6 +241,7 @@ let saveTimer: number | undefined;
 effect(() => {
   const v = settings.value;
   clearTimeout(saveTimer);
+  if (POPOUT) return;
   saveTimer = window.setTimeout(() => {
     try {
       localStorage.setItem(KEY, JSON.stringify(v));
@@ -219,7 +263,7 @@ export const activeServer = computed(() => settings.value.servers.find((s) => s.
 // ---------- transient UI state ----------
 export type PanelId = "layers" | "map" | "radar" | "alerts" | "points" | "sources" | "settings" | "radio" | "forecast" | "search" | "files" | "draw" | "record" | null;
 export const openPanel = signal<PanelId>("radar");
-export const tool = signal<"none" | "measure" | "bearing">("none");
+export const tool = signal<"none" | "measure" | "bearing" | "draw">("none");
 export const crosshair = signal(false);
 export const connection = signal<"connecting" | "online" | "offline" | "unauthorized" | "none">("none");
 /** Info panel: alerts and area features (watches, storms, MDs) under a click, most urgent first. */

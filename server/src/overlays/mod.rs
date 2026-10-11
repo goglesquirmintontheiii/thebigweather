@@ -7,6 +7,7 @@
 pub mod aviation;
 pub mod cameras;
 pub mod camdb;
+pub mod extra;
 pub mod misc;
 pub mod noaa;
 pub mod obs;
@@ -84,6 +85,13 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("cameras", 0),
     ("tle", 7200),
     ("storms", 300),
+    ("radio", 3600),
+    ("radiomap", 600),
+    ("spotters", 60),
+    ("mping", 120),
+    ("forecast", 0),
+    ("geocode", 3600),
+    ("overpass", 600),
 ];
 
 pub fn ttl(id: &str) -> Option<u64> {
@@ -203,7 +211,7 @@ impl Overlays {
     // ---------- dispatch ----------
 
     /// GeoJSON (or JSON for detail endpoints) for an overlay.
-    pub async fn get(self: &Arc<Self>, id: &str, q: &Params, aisstream_key: &str) -> Result<Bytes> {
+    pub async fn get(self: &Arc<Self>, id: &str, q: &Params, keys: &crate::config::Keys) -> Result<Bytes> {
         let ttl = ttl(id).ok_or_else(|| anyhow!("unknown overlay {id}"))?;
         let fixture = self.fixtures.read().as_ref().map(|d| d.join(format!("{id}.json")));
         if let Some(f) = fixture.filter(|f| f.exists()) {
@@ -212,7 +220,7 @@ impl Overlays {
         let ck = format!("{id}?{}", q.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&"));
         if ttl == 0 {
             // cheap in-memory queries (camera index): no response cache
-            let v = self.build(id, q, aisstream_key).await?;
+            let v = self.build(id, q, keys).await?;
             return Ok(Bytes::from(serde_json::to_vec(&v)?));
         }
         if let Some((t, b)) = self.cache.lock().get(&ck) {
@@ -227,7 +235,7 @@ impl Overlays {
                 return Ok(b.clone());
             }
         }
-        let res = self.build(id, q, aisstream_key).await;
+        let res = self.build(id, q, keys).await;
         self.inflight.lock().remove(&ck);
         let name = format!("ovl-{id}");
         match res {
@@ -253,7 +261,8 @@ impl Overlays {
         }
     }
 
-    async fn build(self: &Arc<Self>, id: &str, q: &Params, ais_key: &str) -> Result<Value> {
+    async fn build(self: &Arc<Self>, id: &str, q: &Params, keys: &crate::config::Keys) -> Result<Value> {
+        let ais_key = keys.aisstream.as_str();
         let p = |k: &str| q.get(k).map(|s| s.as_str()).unwrap_or("");
         match id {
             "spc" => noaa::spc(self, p("day"), p("kind")).await,
@@ -311,6 +320,17 @@ impl Overlays {
             }
             "cameras" => cameras::list(self, q).await,
             "tle" => misc::tle(self, p("group")).await,
+            "radio" => extra::radio(self).await,
+            "radiomap" => extra::radio_map(self).await,
+            "spotters" => extra::spotters(self, p("streamers") == "1").await,
+            "mping" => extra::mping(self, &keys.mping, p("hours")).await,
+            "forecast" => {
+                let lat: f64 = p("lat").parse().map_err(|_| anyhow!("lat"))?;
+                let lon: f64 = p("lon").parse().map_err(|_| anyhow!("lon"))?;
+                extra::forecast(self, lat, lon).await
+            }
+            "geocode" => extra::geocode(self, p("q")).await,
+            "overpass" => extra::overpass(self, p("q"), p("bbox")).await,
             _ => bail!("unknown overlay {id}"),
         }
     }
@@ -351,6 +371,12 @@ fn label(id: &str) -> String {
         "ships" => "Ships (AIS)",
         "cameras" => "Cameras",
         "tle" => "CelesTrak",
+        "radio" | "radiomap" => "Weather radio (wxradio.org)",
+        "spotters" => "Spotter Network",
+        "mping" => "mPING",
+        "forecast" => "Forecast (NWS / Open-Meteo)",
+        "geocode" => "Place search (Nominatim)",
+        "overpass" => "Map search (Overpass)",
         _ => id,
     };
     n.to_string()

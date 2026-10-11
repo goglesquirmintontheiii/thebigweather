@@ -360,13 +360,11 @@ function FileRow({ id, name, count }: { id: string; name: string; count: number 
 }
 
 export function OverlayGroups({ filter = "" }: { filter?: string }) {
-  const groups = [...new Set(OVERLAYS.map((o) => o.group))];
+  const groups = [...new Set(OVERLAYS.filter((o) => !o.hidden).map((o) => o.group))];
   const [shut, setShut] = useState<Record<string, boolean>>({});
-  const fileRef = useRef<HTMLInputElement>(null);
   const q = filter.trim().toLowerCase();
-  const match = (o: OverlayDef) => !q || o.name.toLowerCase().includes(q) || o.group.toLowerCase().includes(q);
+  const match = (o: OverlayDef) => !o.hidden && (!q || o.name.toLowerCase().includes(q) || o.group.toLowerCase().includes(q));
   const count = (g: string) => OVERLAYS.filter((o) => o.group === g && settings.value.ovl[o.id]?.on).length;
-  const importing = Object.entries(fileImports.value);
   return (
     <>
       {groups
@@ -384,35 +382,44 @@ export function OverlayGroups({ filter = "" }: { filter?: string }) {
               ))}
           </section>
         ))}
-      <section class="ovl-group">
-        <div class="ovl-ghead static">
-          <span>My files</span>
-          <button class="btn sm" onClick={() => fileRef.current?.click()} title="GeoJSON, KML, KMZ or GPX (or drop on the map)">
-            <Upload size={13} /> Import
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".geojson,.json,.kml,.kmz,.gpx"
-            multiple
-            hidden
-            onChange={async (e) => {
-              const fs = [...((e.target as HTMLInputElement).files ?? [])];
-              (e.target as HTMLInputElement).value = "";
-              for (const f of fs) await importFile(f);
-            }}
-          />
-        </div>
-        {importing.map(([n, note]) => (
-          <div key={n} class="ovl-row importing">
-            <Loader size={12} class="spin muted" /> <span>{n}</span> <small class="muted">{note}</small>
-          </div>
-        ))}
-        {fileOverlays.value.length === 0 && !importing.length && <div class="muted small">No files yet. GeoJSON, KML, KMZ or GPX.</div>}
-        {fileOverlays.value.map((f) => (
-          <FileRow key={f.id} {...f} />
-        ))}
-      </section>
+      <MyFiles />
     </>
+  );
+}
+
+/** Imported map files (GeoJSON, KML, KMZ, GPX). */
+export function MyFiles() {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const importing = Object.entries(fileImports.value);
+  return (
+      <section class="ovl-group">
+      <div class="ovl-ghead static">
+        <span>My files</span>
+        <button class="btn sm" onClick={() => fileRef.current?.click()} title="GeoJSON, KML, KMZ or GPX (or drop on the map)">
+          <Upload size={13} /> Import
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".geojson,.json,.kml,.kmz,.gpx"
+          multiple
+          hidden
+          onChange={async (e) => {
+            const fs = [...((e.target as HTMLInputElement).files ?? [])];
+            (e.target as HTMLInputElement).value = "";
+            for (const f of fs) await importFile(f);
+          }}
+        />
+      </div>
+      {importing.map(([n, note]) => (
+        <div key={n} class="ovl-row importing">
+          <Loader size={12} class="spin muted" /> <span>{n}</span> <small class="muted">{note}</small>
+        </div>
+      ))}
+      {fileOverlays.value.length === 0 && !importing.length && <div class="muted small">No files yet. GeoJSON, KML, KMZ or GPX.</div>}
+      {fileOverlays.value.map((f) => (
+        <FileRow key={f.id} {...f} />
+      ))}
+    </section>
   );
 }

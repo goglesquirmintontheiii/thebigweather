@@ -10,6 +10,7 @@ mod config;
 mod health;
 mod hub;
 mod radar;
+mod recorder;
 mod s3;
 mod sites;
 mod stats;
@@ -210,12 +211,15 @@ async fn main() -> anyhow::Result<()> {
         stats: stats_latest,
         started: std::time::Instant::now(),
         grids: grids.clone(),
+        rec: recorder::Recorder::new(&data_dir, profile_full),
         overlays: {
             let o = overlays::Overlays::new(http.clone(), health.clone(), &data_dir, grids, profile_full);
             *o.fixtures.write() = cli.overlay_fixtures.clone();
             o
         },
     });
+
+    recorder::spawn(state.clone());
 
     {
         let st = state.clone();

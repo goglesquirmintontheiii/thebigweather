@@ -17,6 +17,9 @@ import { openLocalFile } from "../radar/controller";
 import { OverlayPopup } from "./OverlayPopup";
 import { CameraPanels } from "./CameraPanels";
 import { ConfigModal } from "./OverlayList";
+import { PaneGrid } from "./Panes";
+import { NowPlaying } from "./panels/RadioPanel";
+import { openPanel } from "../store";
 import { importFile, isMapFile, loadFiles } from "../overlays/files";
 import "../overlays/iss";
 import "../overlays/mycams";
@@ -44,7 +47,7 @@ export function App() {
         }
       }}
     >
-      <div ref={mapEl} class="map" />
+      <PaneGrid mapEl={mapEl} />
       <Crosshair />
       <CursorValue />
       <TopBar />
@@ -62,6 +65,7 @@ export function App() {
       <OverlayPopup />
       <CameraPanels />
       <ConfigModal />
+      {openPanel.value !== "radio" && <NowPlaying compact />}
       <AddCameraDialog />
       <ContextMenu />
       <Toasts />

@@ -88,7 +88,9 @@ export interface LiveMsg {
 export const extraLive = signal<Record<string, { state: LiveMsg; sweep: Sweep | null }>>({});
 export const showRadar = signal(true);
 /** Explicit frames (history browsing / opened files). null = follow latest. */
-export const pinned = signal<{ key: string; time: number }[] | null>(null);
+export const pinned = signal<{ key: string; time: number; product?: string }[] | null>(null);
+/** title of the recording being played (shown in the header) */
+export const playingRec = signal<string | null>(null);
 
 export const currentSite = computed(() => sites.value.find((s) => s.id === settings.value.radar.site));
 /** The frame on screen: if the selected one has no data (still loading, or this volume lacks the
@@ -288,8 +290,8 @@ export async function reload(opts: { keepIndex?: boolean } = {}) {
   radarError.value = null;
   try {
     let list: Frame[] = [];
-    if (pinned.value && r.source === "L2") {
-      list = pinned.value.map((p) => ({ key: p.key, time: p.time }));
+    if (pinned.value && (r.source === "L2" || pinned.value.some((p) => p.product))) {
+      list = pinned.value.filter((p) => r.source === "L2" || !p.product || p.product === r.product).map((p) => ({ key: p.key, time: p.time }));
       liveKey = null;
     } else if (r.source === "L2") {
       const n = framesToRequest(r.frames, 4, 200);
@@ -612,6 +614,7 @@ export async function loadHistory(date: string, endMs?: number) {
 
 export function backToLatest() {
   pinned.value = null;
+  playingRec.value = null;
   historyEnd.value = null;
 }
 
@@ -730,4 +733,9 @@ export async function openLocalFile(file: File) {
   } catch (e: any) {
     toast(`Couldn't open file: ${e.message}`, "error");
   }
+}
+
+/** Sweep for any volume key (used by the extra map panes). */
+export async function fetchSweep(key: string, source: "L2" | "L3", product: string, tilt: number): Promise<Sweep | undefined> {
+  return source === "L2" ? loadL2Sweep(key, product, tilt) : loadL3(key);
 }

@@ -4,14 +4,18 @@ import { signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 import Hls from "hls.js";
 import { api } from "../api";
-import { activeServer } from "../store";
-import { X, ExternalLink, RefreshCw } from "lucide-preact";
+import { activeServer, settings } from "../store";
+import { X, ExternalLink, RefreshCw, Pause, Play as PlayIcon, PictureInPicture2 } from "lucide-preact";
+import { activeTime } from "../active";
+import { fileUrl } from "./panels/RecordPanel";
+import { popout, canPopout } from "../popout";
 
 export interface CamView {
   id: string;
   name: string;
   source?: string;
-  type: "img" | "hls" | "yt" | "page";
+  type: "img" | "hls" | "yt" | "page" | "rec";
+  rec?: { id: string; frames: { name: string; time: number; video: boolean }[] };
   img?: string | null;
   video?: string | null;
   page?: string | null;
@@ -40,6 +44,7 @@ export function openCamera(p: any) {
     refresh: p.r,
     attribution: p.a ?? (String(p.s ?? "").startsWith("db:") ? `Camera database · ${String(p.s).slice(3)}` : undefined),
     nobust: !!p.nb,
+    rec: p.rec,
     x: 80 + ((n * 36) % 300),
     y: 90 + ((n * 36) % 240),
   };
@@ -169,6 +174,51 @@ function HlsVideo({ url }: { url: string }) {
   );
 }
 
+/** Recorded camera: image sequence (or video pieces) with a scrubber, optionally following the
+ * radar/satellite time on screen. */
+function RecPlayer({ c }: { c: CamView }) {
+  const fr = c.rec!.frames;
+  const [i, setI] = useState(fr.length - 1);
+  const [play, setPlay] = useState(false);
+  const [sync, setSync] = useState(false);
+  const vref = useRef<HTMLVideoElement>(null);
+  const vids = fr.some((f) => f.video);
+  useEffect(() => {
+    if (!play || sync) return;
+    const t = setInterval(() => setI((x) => (x + 1) % fr.length), vids ? 0 : 1000 / Math.max(1, settings.value.anim.fps));
+    return () => clearInterval(t);
+  }, [play, sync, fr.length]);
+  // follow the time of the weather layer on screen
+  const at = activeTime.value;
+  useEffect(() => {
+    if (!sync || !at) return;
+    let best = 0;
+    for (let k = 0; k < fr.length; k++) if (fr[k].time <= at) best = k;
+    setI(best);
+    if (vids && vref.current) {
+      const off = (at - fr[best].time) / 1000;
+      if (off >= 0 && Math.abs(vref.current.currentTime - off) > 2) vref.current.currentTime = off;
+    }
+  }, [sync, at]);
+  const f = fr[Math.min(i, fr.length - 1)];
+  const url = fileUrl(`/api/rec/${c.rec!.id}/file/${encodeURIComponent(f.name)}`);
+  return (
+    <div class="cam-media">
+      {f.video ? <video ref={vref} key={url} src={url} controls autoplay muted playsinline /> : <img src={url} alt={c.name} />}
+      <div class="cam-bar">
+        <button class="icon-btn" title={play ? "Pause" : "Play"} onClick={() => setPlay(!play)} disabled={sync}>
+          {play ? <Pause size={12} /> : <PlayIcon size={12} />}
+        </button>
+        <input type="range" min={0} max={fr.length - 1} value={i} onInput={(e) => (setSync(false), setI(+(e.target as HTMLInputElement).value))} />
+        <span>{new Date(f.time).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: vids ? undefined : "2-digit", timeZone: settings.value.utc ? "UTC" : undefined })}</span>
+        <label class="rec-sync" title="Follow the time of the radar/satellite loop">
+          <input type="checkbox" checked={sync} onChange={(e) => setSync((e.target as HTMLInputElement).checked)} /> Sync
+        </label>
+      </div>
+    </div>
+  );
+}
+
 function Panel({ c }: { c: CamView }) {
   const ref = useRef<HTMLDivElement>(null);
   const [zi, setZ] = useState(++z);
@@ -196,6 +246,11 @@ function Panel({ c }: { c: CamView }) {
           {c.name}
           {c.source && <small> · {c.source}</small>}
         </span>
+        {canPopout() && c.type !== "rec" && (
+          <button class="icon-btn" title="Pop out to its own window" onPointerDown={(e) => e.stopPropagation()} onClick={() => (popout({ kind: "camera", title: c.name, width: 720, height: 480, data: { ...c, x: 0, y: 0 } }), close(c.id))}>
+            <PictureInPicture2 size={13} />
+          </button>
+        )}
         {link && link !== "proxy" && (
           <button class="icon-btn" title="Open in browser" onPointerDown={(e) => e.stopPropagation()} onClick={() => window.open(link, "_blank")}>
             <ExternalLink size={13} />
@@ -205,7 +260,9 @@ function Panel({ c }: { c: CamView }) {
           <X size={14} />
         </button>
       </div>
-      {c.type === "yt" && c.video ? (
+      {c.type === "rec" && c.rec ? (
+        <RecPlayer c={c} />
+      ) : c.type === "yt" && c.video ? (
         <div class="cam-media yt">
           <iframe src={youtubeEmbed(c.video)} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerpolicy="strict-origin-when-cross-origin" />
         </div>
@@ -228,6 +285,26 @@ function Panel({ c }: { c: CamView }) {
       <div class="cam-note">
         {c.attribution ? `${c.attribution}. ` : ""}Feeds belong to their owners; recording or sharing some may need permission.
       </div>
+    </div>
+  );
+}
+
+/** A single camera filling a pop-out window. */
+export function CameraFull({ c }: { c: CamView }) {
+  return (
+    <div class="cam-full">
+      {c.type === "yt" && c.video ? (
+        <div class="cam-media yt">
+          <iframe src={youtubeEmbed(c.video)} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerpolicy="strict-origin-when-cross-origin" />
+        </div>
+      ) : c.type === "hls" && c.video ? (
+        <HlsVideo url={c.video} />
+      ) : c.type === "img" ? (
+        <Snapshot c={c} />
+      ) : (
+        <div class="cam-empty">This camera opens on its own website.</div>
+      )}
+      <div class="cam-note">{c.attribution ? `${c.attribution}. ` : ""}Feeds belong to their owners.</div>
     </div>
   );
 }
