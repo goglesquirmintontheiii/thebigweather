@@ -36,6 +36,16 @@ Every feed is public and keyless unless marked **key**. The server caches each o
 | ISS / satellites | CelesTrak elements | One download per 2-hour update, cached on disk |
 | Waffle House | OpenStreetMap via Overpass, refreshed weekly | Store status (off by default) reads closure notices on the official store pages. There's no status API, so this is best effort |
 | Cameras | `server/data/camera_sources.json` | Edit to add or fix sources. Each camera shows its source's attribution |
+| Camera database | Your file in `server/data/uploads/` (`filtereddb*.json`, `*camera*.json`) | Stream-parsed; inactive, ignored and marked-duplicate records are skipped. Repeats of live-source cameras are dropped |
+| Flight tracks | adsb.lol trace files (`globe.adsb.lol`), falling back to positions seen by the server | |
+| NWS office positions | IEM list, moved onto the office building from OpenStreetMap where one is mapped | |
+| Weather radio | wxradio.org Icecast directory (`status-json.xsl`) | Volunteer-run. One stream at a time, for direct listening only |
+| Radio station map | Stream cities geocoded once with Nominatim | NOAA publishes no transmitter coordinate list |
+| Spotter Network | Public placefiles (`gr-no.txt`, `gr-stream-no.txt`) | Personal, non-commercial use. Names are left out, and nothing older than 48 h is kept |
+| mPING | mping.ou.edu API v2 (**key**) | General license: last 4 hours |
+| Forecast | api.weather.gov (US); Open-Meteo elsewhere or as backup | Open-Meteo is CC BY 4.0, non-commercial |
+| Place search | Nominatim (OpenStreetMap) | Max 1 request per second; results are cached |
+| Map search | Overpass API (overpass-api.de, overpass.private.coffee) | |
 
 ## Not used, and why
 
@@ -44,4 +54,5 @@ Every feed is public and keyless unless marked **key**. The server caches each o
 - **IBI "511" platforms** (Ontario, Alberta, Georgia, Idaho, Utah, Alaska, 511PA, and likely NY/FL/AZ/NV/WI/NB/NS), plus **OHGO**, **TfNSW API**, **Statens vegvesen**, **Traffic Scotland** and **National Highways**: these need registration or keys. They can go in `camera_sources.json` once you have keys.
 - **Cruise ship cameras:** most lines discontinued public cams. Add any you find as ship cameras. Check each site's terms before using it.
 - **FAA WeatherCams:** no public API.
-- **NOAA Weather Radio transmitter locations:** there's no official machine-readable list with coordinates. Planned with the Phase 4 radio menu.
+- **NOAA Weather Radio transmitter locations:** there's no official machine-readable list with coordinates. Stations are shown at their stream's city instead.
+- **Live chaser video maps** (Severe Studios, ChaserTV and others): no public APIs.

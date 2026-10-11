@@ -143,9 +143,14 @@ Each phase ends with a working AppImage + server and a test checklist.
 ## Status
 - Phase 1: done, user-tested; fixes from testing shipped with Phase 2.
 - Phase 2: done, user-tested; fixes shipped with Phase 3.
-- Phase 3: done (this build). Test with `docs/PHASE3_CHECKLIST.md`.
+- Phase 3: done, user-tested; fixes and requested changes shipped with Phase 4.
+- Phase 4: done (this build). Test with `docs/PHASE4_CHECKLIST.md`.
 - Deferred from Phase 3: Blitzortung (its terms forbid third-party apps without approval; GOES GLM is used instead); NOAA Weather Radio transmitter map (no official machine-readable list with coordinates; revisit with the Phase 4 radio menu); Spotter Network / chasers and mPING (need accounts, so they move to Phase 4 with the account-based features).
-- Next: Phase 4 (power features).
+- Phase 4 notes:
+  - NWR transmitter coordinates aren't published in a machine-readable list, so stations are mapped at their stream's city (geocoded once, cached).
+  - Live chaser video aggregators have no public APIs. Spotter Network's public streamer feed is used instead.
+  - mPING needs a free key; its general license allows the last 4 hours.
+- Next: Phase 5 (international & niche radars).
 
 ---
 

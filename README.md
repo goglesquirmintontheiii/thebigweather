@@ -31,6 +31,30 @@ On first launch, paste the server URL and token. If the server runs on the same 
 
 The UI also works in a browser at the server URL (phones too, until the Android app exists).
 
+## Phase 4 features
+
+- **Panes:** 1, 2 (side by side or stacked), 3 or 4 maps. Each extra pane shows a radar product or any gridded layer, follows the main timeline, and can move with the main map or on its own. A second full map window can be opened for another monitor.
+- **Drawing:** freehand, line, arrow, rectangle, circle, polygon and text, with colors, size, fill, undo/redo and clear. Drawings can be kept on the map, each with an × to delete it.
+- **Recordings (server side):**
+  - Radar: Level II volumes, or up to 4 Level III products.
+  - Cameras: stills saved each refresh; video streams copied with ffmpeg, no re-encoding. YouTube is watch-only.
+  - Start them now, on a schedule, or automatically when chosen warnings come in (nearest radar plus cameras inside the polygon).
+  - Play back as a radar loop or a camera player that can follow the radar time. Make a timelapse MP4 from stills.
+  - Export any or all as .zip and import on any server. Recordings are never deleted automatically.
+- **Pop-out windows** for cameras and the radio player.
+- **Forecast:** 24-hour chart and 7 days (NWS, or Open-Meteo outside the US).
+- **Weather radio:** NOAA Weather Radio streams from wxradio.org, favorites, your own stream URLs, and a station map.
+- **Search:** go to a place, or find hospitals, shelters, gas and more in view (OpenStreetMap).
+- **Chasers & reports:** Spotter Network positions (public feed) and mPING reports (key).
+- **Alerts:** settings per category and type: show/hide, colors, border style, striped/checkered fills, sound when new, flashing, and read-aloud. Clicking overlapping alerts steps through all of them.
+- **Timeline:** history picker, frames by count or by time span, drag/scroll scrubbing, 0.25–16 fps, loading bars.
+- **Also:**
+  - Centered layer settings windows and a separate Basemap tab.
+  - Adjustable smoothing, value under the cursor (V or hold Shift), and a movable legend.
+  - Multi-radar RapidSweep.
+  - Camera database import (`server/data/uploads/filtereddb.json`, de-duplicated against the live sources).
+  - Files & settings backup.
+
 ## Phase 3 features
 
 **Overlays** (Layers panel, grouped; each has a gear for color, opacity, size, labels and its own options):
@@ -155,3 +179,4 @@ tbw-server -c data/config.toml \
 - NASA GIBS (GeoColor and RGB composites, Himawari)
 - National Weather Service API (alerts)
 - Map tiles: © OpenStreetMap contributors, CARTO, Esri, OpenFreeMap
+- Overlays, forecast, radio and search: see `docs/DATA_SOURCES.md`
