@@ -1,0 +1,74 @@
+{
+  "name": "thebigweather",
+  "productName": "TheBigWeather",
+  "version": "0.1.0",
+  "description": "Radar and weather workstation",
+  "author": "TheBigWeather",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "prep-geo": "node scripts/prep-geo.mjs",
+    "electron": "electron .",
+    "dist": "npm run build && electron-builder --linux AppImage"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.11.3",
+    "lucide-preact": "^1.55.0",
+    "maplibre-gl": "^6.13.0",
+    "preact": "^11.0.1",
+    "topojson-client": "^3.1.0"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@types/topojson-client": "^3.1.5",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^7.0.2",
+    "us-atlas": "^3.0.1",
+    "vite": "^8.3.4",
+    "world-atlas": "^2.0.2"
+  },
+  "build": {
+    "appId": "app.thebigweather.desktop",
+    "productName": "TheBigWeather",
+    "artifactName": "TheBigWeather-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "asar": true,
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Science",
+      "icon": "build/icon.png",
+      "synopsis": "Radar and weather workstation",
+      "executableName": "thebigweather",
+      "syncDesktopName": true
+    },
+    "appImage": {
+      "artifactName": "TheBigWeather-${version}-x86_64.AppImage"
+    },
+    "publish": null
+  },
+  "desktopName": "thebigweather.desktop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/goglesquirmintontheiii/thebigweather.git"
+  }
+}

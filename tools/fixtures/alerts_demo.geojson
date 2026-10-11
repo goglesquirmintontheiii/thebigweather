@@ -1,0 +1,257 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  {
+   "type": "Feature",
+   "id": "demo-tor",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -89.55,
+       40.62
+      ],
+      [
+       -89.05,
+       40.7
+      ],
+      [
+       -88.95,
+       40.42
+      ],
+      [
+       -89.4,
+       40.33
+      ],
+      [
+       -89.55,
+       40.62
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "id": "demo-tor",
+    "event": "Tornado Warning",
+    "severity": "Severe",
+    "urgency": "Immediate",
+    "certainty": "Observed",
+    "headline": "Tornado Warning (DEMO FIXTURE)",
+    "description": "At 1105 PM CDT, a severe thunderstorm capable of producing a tornado was located near Bloomington, moving east at 35 mph.\n\nHAZARD...Tornado.\nSOURCE...Radar indicated rotation.",
+    "instruction": "This is a test alert used for offline development. It is not a real warning.",
+    "areaDesc": "McLean, IL; Tazewell, IL",
+    "sent": "2020-07-15T23:00:00-05:00",
+    "effective": "2020-07-15T23:00:00-05:00",
+    "expires": "2099-01-01T00:00:00Z",
+    "ends": "2099-01-01T00:00:00Z",
+    "senderName": "TEST FIXTURE (offline demo)",
+    "messageType": "Alert",
+    "vtec": null,
+    "nws_headline": null,
+    "from_zones": false,
+    "flags": {
+     "tornado_emergency": false,
+     "flash_flood_emergency": false,
+     "pds": false,
+     "tornado_detection": "RADAR INDICATED",
+     "tornado_damage_threat": "",
+     "thunderstorm_damage_threat": "",
+     "flash_flood_damage_threat": "",
+     "max_hail": "1.00",
+     "max_wind": "",
+     "warning": true
+    }
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "demo-svr",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -88.05,
+       41.2
+      ],
+      [
+       -87.45,
+       41.22
+      ],
+      [
+       -87.4,
+       40.8
+      ],
+      [
+       -88.0,
+       40.78
+      ],
+      [
+       -88.05,
+       41.2
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "id": "demo-svr",
+    "event": "Severe Thunderstorm Warning",
+    "severity": "Severe",
+    "urgency": "Immediate",
+    "certainty": "Observed",
+    "headline": "Severe Thunderstorm Warning (DEMO FIXTURE)",
+    "description": "At 1105 PM CDT, severe thunderstorms were located along a line from Kankakee to Watseka, moving east at 40 mph.\n\nHAZARD...70 mph wind gusts and quarter size hail.",
+    "instruction": "This is a test alert used for offline development. It is not a real warning.",
+    "areaDesc": "Kankakee, IL; Iroquois, IL; Newton, IN",
+    "sent": "2020-07-15T23:00:00-05:00",
+    "effective": "2020-07-15T23:00:00-05:00",
+    "expires": "2099-01-01T00:00:00Z",
+    "ends": "2099-01-01T00:00:00Z",
+    "senderName": "TEST FIXTURE (offline demo)",
+    "messageType": "Alert",
+    "vtec": null,
+    "nws_headline": null,
+    "from_zones": false,
+    "flags": {
+     "tornado_emergency": false,
+     "flash_flood_emergency": false,
+     "pds": false,
+     "tornado_detection": "",
+     "tornado_damage_threat": "",
+     "thunderstorm_damage_threat": "CONSIDERABLE",
+     "flash_flood_damage_threat": "",
+     "max_hail": "1.00",
+     "max_wind": "70 MPH",
+     "warning": true
+    }
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "demo-ffw",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -89.0,
+       39.45
+      ],
+      [
+       -88.5,
+       39.45
+      ],
+      [
+       -88.5,
+       39.05
+      ],
+      [
+       -89.0,
+       39.05
+      ],
+      [
+       -89.0,
+       39.45
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "id": "demo-ffw",
+    "event": "Flash Flood Warning",
+    "severity": "Severe",
+    "urgency": "Immediate",
+    "certainty": "Observed",
+    "headline": "Flash Flood Warning (DEMO FIXTURE)",
+    "description": "Flash flooding is ongoing or expected to begin shortly. Between 2 and 3 inches of rain have fallen.",
+    "instruction": "This is a test alert used for offline development. It is not a real warning.",
+    "areaDesc": "Shelby, IL; Moultrie, IL",
+    "sent": "2020-07-15T23:00:00-05:00",
+    "effective": "2020-07-15T23:00:00-05:00",
+    "expires": "2099-01-01T00:00:00Z",
+    "ends": "2099-01-01T00:00:00Z",
+    "senderName": "TEST FIXTURE (offline demo)",
+    "messageType": "Alert",
+    "vtec": null,
+    "nws_headline": null,
+    "from_zones": false,
+    "flags": {
+     "tornado_emergency": false,
+     "flash_flood_emergency": false,
+     "pds": false,
+     "tornado_detection": "",
+     "tornado_damage_threat": "",
+     "thunderstorm_damage_threat": "",
+     "flash_flood_damage_threat": "",
+     "max_hail": "",
+     "max_wind": "",
+     "warning": true
+    }
+   }
+  },
+  {
+   "type": "Feature",
+   "id": "demo-toa",
+   "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+     [
+      [
+       -90.3,
+       41.6
+      ],
+      [
+       -87.2,
+       41.6
+      ],
+      [
+       -87.0,
+       39.6
+      ],
+      [
+       -90.2,
+       39.6
+      ],
+      [
+       -90.3,
+       41.6
+      ]
+     ]
+    ]
+   },
+   "properties": {
+    "id": "demo-toa",
+    "event": "Tornado Watch",
+    "severity": "Severe",
+    "urgency": "Immediate",
+    "certainty": "Observed",
+    "headline": "Tornado Watch (DEMO FIXTURE)",
+    "description": "Tornado Watch 400 remains valid until 3 AM CDT.",
+    "instruction": "This is a test alert used for offline development. It is not a real warning.",
+    "areaDesc": "Large part of central and northern Illinois",
+    "sent": "2020-07-15T23:00:00-05:00",
+    "effective": "2020-07-15T23:00:00-05:00",
+    "expires": "2099-01-01T00:00:00Z",
+    "ends": "2099-01-01T00:00:00Z",
+    "senderName": "TEST FIXTURE (offline demo)",
+    "messageType": "Alert",
+    "vtec": null,
+    "nws_headline": null,
+    "from_zones": false,
+    "flags": {
+     "tornado_emergency": false,
+     "flash_flood_emergency": false,
+     "pds": false,
+     "tornado_detection": "",
+     "tornado_damage_threat": "",
+     "thunderstorm_damage_threat": "",
+     "flash_flood_damage_threat": "",
+     "max_hail": "",
+     "max_wind": "",
+     "warning": false
+    }
+   }
+  }
+ ]
+}

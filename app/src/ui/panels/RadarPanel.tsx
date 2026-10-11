@@ -1,0 +1,276 @@
+import { useMemo, useState, useRef } from "preact/hooks";
+import { settings, update, toast } from "../../store";
+import { sites, tilts, l3Products, L2_MOMENTS, selectSite, currentSite, tableKeyFor, loadHistory, backToLatest, pinned, openLocalFile } from "../../radar/controller";
+import { BUILTIN, COLORBLIND, parsePal } from "../../radar/colormaps";
+import { mapRef, flyToSite } from "../../map/mapview";
+import { distance, fmtDist } from "../../util";
+import { Search, Upload, History, Crosshair } from "lucide-preact";
+
+export function RadarPanel() {
+  const r = settings.value.radar;
+  return (
+    <div class="stack">
+      <SitePicker />
+      <section>
+        <div class="seg">
+          {(["L2", "L3"] as const).map((src) => (
+            <button
+              key={src}
+              class={r.source === src ? "on" : ""}
+              onClick={() =>
+                update((s) => {
+                  s.radar.source = src;
+                  const tdwr = currentSite.value?.type === "TDWR";
+                  if (src === "L3") s.radar.product = tdwr ? "TZL" : "N0B";
+                  else s.radar.product = "REF";
+                })
+              }
+            >
+              {src === "L2" ? "Level II" : "Level III"}
+            </button>
+          ))}
+        </div>
+      </section>
+      {r.source === "L2" ? <L2Products /> : <L3ProductList />}
+      {r.source === "L2" && <TiltPicker />}
+      <DisplayOptions />
+      <ColorTablePicker />
+      <HistoryBox />
+    </div>
+  );
+}
+
+function SitePicker() {
+  const [q, setQ] = useState("");
+  const list = sites.value;
+  const center = mapRef.value?.getCenter();
+  const shown = useMemo(() => {
+    const qq = q.trim().toUpperCase();
+    let l = list.map((s) => ({ s, d: center ? distance(center.lat, center.lng, s.lat, s.lon) : 0 }));
+    if (qq) l = l.filter(({ s }) => s.id.includes(qq) || s.name?.toUpperCase().includes(qq) || s.state === qq);
+    l.sort((a, b) => a.d - b.d);
+    return l.slice(0, qq ? 30 : 6);
+  }, [q, list, center?.lat, center?.lng]);
+  return (
+    <section>
+      <label class="lbl">Radar site</label>
+      <div class="search">
+        <Search size={14} />
+        <input value={q} placeholder="ID, city or state" onInput={(e) => setQ((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === "Enter" && shown[0] && (selectSite(shown[0].s.id), setQ(""))} />
+        <button class="icon-btn" title="Center map on radar" onClick={flyToSite}>
+          <Crosshair size={14} />
+        </button>
+      </div>
+      <div class="site-list">
+        {shown.map(({ s, d }) => (
+          <button key={s.id} class={`site-row ${s.id === settings.value.radar.site ? "on" : ""}`} onClick={() => (selectSite(s.id), setQ(""))}>
+            <span class="sid">{s.id}</span>
+            <span class="sname">{[s.name, s.state].filter(Boolean).join(", ")}</span>
+            {s.type === "TDWR" && <span class="tag tdwr">TDWR</span>}
+            <span class="sdist">{fmtDist(d)}</span>
+          </button>
+        ))}
+        {!list.length && <div class="muted">Connect to a server to list radars.</div>}
+      </div>
+    </section>
+  );
+}
+
+function L2Products() {
+  const r = settings.value.radar;
+  const avail = new Set(tilts.value.flatMap((t) => t.moments));
+  return (
+    <section>
+      <label class="lbl">Product</label>
+      <div class="grid2">
+        {L2_MOMENTS.map((m) => (
+          <button key={m.id} class={`opt ${r.product === m.id ? "on" : ""} ${avail.size && !avail.has(m.id) ? "na" : ""}`} onClick={() => update((s) => (s.radar.product = m.id))}>
+            {m.name}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function L3ProductList() {
+  const r = settings.value.radar;
+  const tdwr = currentSite.value?.type === "TDWR";
+  const prods = l3Products.value.filter((p) => !!p.tdwr === tdwr);
+  const groups = [...new Set(prods.map((p) => p.group))];
+  return (
+    <section>
+      {groups.map((g) => (
+        <div key={g}>
+          <label class="lbl">{g}</label>
+          <div class="grid2">
+            {prods
+              .filter((p) => p.group === g)
+              .map((p) => (
+                <button key={p.id} class={`opt ${r.product === p.id ? "on" : ""}`} onClick={() => update((s) => (s.radar.product = p.id))} title={p.id}>
+                  {p.name}
+                  {p.tilt > 0 || ["Base", "Dual-pol", "TDWR"].includes(g) ? <span class="sub"> T{p.tilt + 1}</span> : null}
+                </button>
+              ))}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function TiltPicker() {
+  const r = settings.value.radar;
+  const ts = tilts.value.filter((t) => t.moments.includes(r.product));
+  const angles = [...new Map(ts.map((t) => [t.angle.toFixed(1), t])).values()];
+  if (!angles.length) return null;
+  let best = angles[0];
+  for (const t of angles) if (Math.abs(t.angle - r.tiltAngle) < Math.abs(best.angle - r.tiltAngle)) best = t;
+  return (
+    <section>
+      <label class="lbl">Tilt</label>
+      <div class="tilts">
+        {angles.map((t) => (
+          <button key={t.angle} class={`tilt ${t === best ? "on" : ""}`} onClick={() => update((s) => (s.radar.tiltAngle = t.angle))}>
+            {t.angle.toFixed(1)}°
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function DisplayOptions() {
+  const r = settings.value.radar;
+  return (
+    <section class="opts">
+      <div class="row">
+        <span>Frames</span>
+        <input type="range" min={1} max={60} value={r.frames} onChange={(e) => update((s) => (s.radar.frames = +(e.target as HTMLInputElement).value))} />
+        <span class="val">{r.frames}</span>
+      </div>
+      <div class="row">
+        <span>Opacity</span>
+        <input type="range" min={10} max={100} value={Math.round(r.opacity * 100)} onInput={(e) => update((s) => (s.radar.opacity = +(e.target as HTMLInputElement).value / 100))} />
+        <span class="val">{Math.round(r.opacity * 100)}%</span>
+      </div>
+      <Toggle label="Smoothing" on={r.smooth} set={(v) => update((s) => (s.radar.smooth = v))} />
+      {r.source === "L2" && <Toggle label="RapidSweep (live chunks)" on={r.live} set={(v) => update((s) => (s.radar.live = v))} />}
+    </section>
+  );
+}
+
+export function Toggle({ label, on, set, hint }: { label: string; on: boolean; set: (v: boolean) => void; hint?: string }) {
+  return (
+    <label class="toggle" title={hint}>
+      <span>{label}</span>
+      <input type="checkbox" checked={on} onChange={(e) => set((e.target as HTMLInputElement).checked)} />
+      <i />
+    </label>
+  );
+}
+
+function ColorTablePicker() {
+  const r = settings.value.radar;
+  const base = tableKeyFor(r.product);
+  const chosen = settings.value.tables[base] ?? base;
+  const fileRef = useRef<HTMLInputElement>(null);
+  const customs = Object.keys(settings.value.customPals);
+  const options = [{ id: base, name: BUILTIN[base]?.name ?? base }];
+  if (COLORBLIND[base]) options.push({ id: base, name: "" });
+  return (
+    <section>
+      <label class="lbl">Color table</label>
+      <div class="row">
+        <select
+          value={chosen}
+          onChange={(e) =>
+            update((s) => {
+              const v = (e.target as HTMLSelectElement).value;
+              if (v === base) delete s.tables[base];
+              else s.tables[base] = v;
+            })
+          }
+        >
+          <option value={base}>Default{settings.value.colorblind && COLORBLIND[base] ? " (colorblind)" : ""}</option>
+          {customs.map((c) => (
+            <option key={c} value={`custom:${c}`}>
+              {c}
+            </option>
+          ))}
+        </select>
+        <button class="btn sm" onClick={() => fileRef.current?.click()} title="Import a .pal color table">
+          <Upload size={13} /> .pal
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".pal,.txt"
+          hidden
+          onChange={async (e) => {
+            const f = (e.target as HTMLInputElement).files?.[0];
+            if (!f) return;
+            const text = await f.text();
+            const name = f.name.replace(/\.(pal|txt)$/i, "");
+            try {
+              parsePal(text, name);
+              update((s) => {
+                s.customPals[name] = text;
+                s.tables[base] = `custom:${name}`;
+              });
+              toast(`Imported ${name}`);
+            } catch (err: any) {
+              toast(`Bad palette: ${err.message}`, "error");
+            }
+            (e.target as HTMLInputElement).value = "";
+          }}
+        />
+      </div>
+    </section>
+  );
+}
+
+function HistoryBox() {
+  const today = new Date().toISOString().slice(0, 10);
+  const [date, setDate] = useState(today);
+  const [time, setTime] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  return (
+    <section>
+      <label class="lbl">History (UTC)</label>
+      <div class="row">
+        <input type="date" value={date} max={today} min="1991-06-01" onChange={(e) => setDate((e.target as HTMLInputElement).value)} />
+        <input type="time" value={time} onChange={(e) => setTime((e.target as HTMLInputElement).value)} />
+        <button
+          class="btn sm"
+          onClick={() => {
+            const end = time ? Date.parse(`${date}T${time}:59Z`) : undefined;
+            loadHistory(date, end);
+          }}
+        >
+          <History size={13} /> Load
+        </button>
+      </div>
+      <div class="row">
+        {pinned.value && (
+          <button class="btn sm ghost" onClick={backToLatest}>
+            Back to latest
+          </button>
+        )}
+        <button class="btn sm ghost" onClick={() => fileRef.current?.click()} title="Open a Level II file from disk (or drop it on the map)">
+          <Upload size={13} /> Open Level II file
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          hidden
+          onChange={(e) => {
+            const f = (e.target as HTMLInputElement).files?.[0];
+            if (f) openLocalFile(f);
+            (e.target as HTMLInputElement).value = "";
+          }}
+        />
+      </div>
+    </section>
+  );
+}

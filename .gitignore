@@ -1,0 +1,6 @@
+server/target/
+server/data/
+server/bin/
+app/node_modules/
+app/release/
+*.log
