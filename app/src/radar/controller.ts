@@ -65,7 +65,8 @@ export const L2_MOMENTS = [
 export const sites = signal<Site[]>([]);
 export const l3Products = signal<L3Product[]>([]);
 export const frames = signal<Frame[]>([]);
-import { frameIndex, playing, frameCount, setFrameReady, framesToRequest, trimToSpan, historyEnd } from "../anim";
+import { frameIndex, playing, frameCount, setFrameReady, framesToRequest, trimToSpan, historyEnd, histRange, setHistory, HIST_CAP } from "../anim";
+import { matchVolumes, nearestWithin, thinEven, utcDays, type TimedVol } from "../timematch";
 export { frameIndex, playing };
 export const loading = signal(false);
 export const radarError = signal<string | null>(null);
@@ -171,6 +172,11 @@ export function attachLayer(l: RadarLayer) {
   pushToLayer();
 }
 
+/** An extra radar is drawn with its volume nearest the main frame time, up to this far apart. */
+const EXTRA_DRAW_TOL = 12 * 60_000;
+/** Extra radar volumes are matched to the main radar's frame times within this tolerance. */
+const EXTRA_MATCH_TOL = 8 * 60_000;
+
 function pushToLayer() {
   if (!layer) return;
   const items = [];
@@ -183,12 +189,13 @@ function pushToLayer() {
     for (const site of settings.value.extraSites) {
       const fs = extraFrames.value[site];
       if (!fs?.length) continue;
-      let best: Frame | undefined;
-      for (const x of fs) if (x.sweep && (!best || Math.abs(x.sweep.start - tMain) < Math.abs(best.sweep!.start - tMain))) best = x;
-      if (best?.sweep && (!tMain || Math.abs(best.sweep.start - tMain) < 15 * 60_000)) items.push({ sweep: best.sweep, table: t, opacity: op });
+      // the extra's loaded volume nearest the main frame's time; if it has none close enough the
+      // main radar fills that area (better than showing a picture from another time)
+      const best = tMain ? nearestWithin(fs, tMain, (x) => x.sweep?.start, EXTRA_DRAW_TOL) : fs.filter((x) => x.sweep).pop();
+      if (best?.sweep) items.push({ sweep: best.sweep, table: t, opacity: op });
       // RapidSweep partial for this radar, drawn over its last complete frame while on the newest frame
       const lv = extraLive.value[site]?.sweep;
-      if (lv && frameIndex.value >= frames.value.length - 1 && settings.value.radar.live) items.push({ sweep: lv, table: t, opacity: op });
+      if (lv && frameIndex.value >= frames.value.length - 1 && settings.value.radar.live && !histRange.value) items.push({ sweep: lv, table: t, opacity: op });
     }
     if (f?.sweep) items.push({ sweep: f.sweep, table: t, opacity: op });
     if (liveSweep.value && frameIndex.value === frames.value.length - 1) items.push({ sweep: liveSweep.value, table: t, opacity: op });
@@ -293,6 +300,20 @@ export async function reload(opts: { keepIndex?: boolean } = {}) {
     if (pinned.value && (r.source === "L2" || pinned.value.some((p) => p.product))) {
       list = pinned.value.filter((p) => r.source === "L2" || !p.product || p.product === r.product).map((p) => ({ key: p.key, time: p.time }));
       liveKey = null;
+    } else if (histRange.value) {
+      // history mode: Level II archive over the chosen window (Level III has no archive)
+      liveKey = null;
+      if (r.source !== "L2") {
+        if (gen !== generation) return;
+        batch(() => {
+          frames.value = [];
+          liveSweep.value = null;
+          radarError.value = "Level III has no archive. Switch to Level II for history.";
+        });
+        return;
+      }
+      const h = histRange.value;
+      list = thinEven(await listL2Range(r.site, h.start, h.end), HIST_CAP);
     } else if (r.source === "L2") {
       const n = framesToRequest(r.frames, 4, 200);
       const res = await api.get(`/api/radar/${r.site}/latest?n=${n}`);
@@ -328,7 +349,7 @@ export async function reload(opts: { keepIndex?: boolean } = {}) {
       batch(() => {
         frames.value = [];
         liveSweep.value = null;
-        radarError.value = r.source === "L2" ? `No recent Level II data from ${r.site} — the radar may be offline` : `${r.site} isn't publishing ${productName(r.product)} right now`;
+        radarError.value = histRange.value ? `No archived Level II data from ${r.site} in that window` : r.source === "L2" ? `No recent Level II data from ${r.site} — the radar may be offline` : `${r.site} isn't publishing ${productName(r.product)} right now`;
       });
       return;
     }
@@ -477,7 +498,7 @@ async function refreshExtraLive(site: string) {
 
 api.on("live", (m) => {
   const r = settings.value.radar;
-  if (r.source !== "L2" || !r.live) return;
+  if (r.source !== "L2" || !r.live || histRange.value) return;
   if (m.site !== r.site) {
     // an extra (ctrl+clicked) radar
     if (!settings.value.extraSites.includes(m.site)) return;
@@ -509,6 +530,7 @@ api.on("live", (m) => {
   }, 600);
 });
 api.on("live_volume", (m) => {
+  if (histRange.value) return;
   if (m.site === settings.value.radar.site) setTimeout(() => reload({ keepIndex: true }), 500);
   else if (settings.value.extraSites.includes(m.site)) setTimeout(() => reloadExtras(), 800);
 });
@@ -534,10 +556,13 @@ let lastSig = "";
 effect(() => {
   const r = settings.value.radar;
   const a = settings.value.anim;
-  const sig = `${r.site}|${r.source}|${r.product}|${r.tiltAngle}|${r.frames}|${r.live}|${pinned.value?.map((p) => p.key).join(",") ?? ""}|${settings.value.weather.kind === "radar"}|${a.mode}|${a.minutes}`;
+  const h = histRange.value;
+  const sig = `${r.site}|${r.source}|${r.product}|${r.tiltAngle}|${r.frames}|${r.live}|${pinned.value?.map((p) => p.key).join(",") ?? ""}|${settings.value.weather.kind === "radar"}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}`;
   void api.base;
   if (sig === lastSig) return;
   const siteChanged = lastSig.split("|")[0] !== r.site;
+  // only the window changed: keep loaded sweeps (frames are reused by key)
+  const sameProduct = lastSig.split("|").slice(1, 4).join("|") === sig.split("|").slice(1, 4).join("|");
   lastSig = sig;
   clearTimeout(reloadTimer);
   if (siteChanged) {
@@ -548,7 +573,7 @@ effect(() => {
       tilts.value = [];
       liveState.value = null;
     });
-  } else {
+  } else if (!sameProduct) {
     // product/tilt changed: drop loaded sweeps but keep the frame times
     frames.value = frames.value.map((f) => ({ key: f.key, time: f.time, live: f.live }));
     liveSweep.value = null;
@@ -577,61 +602,51 @@ api.on("connected", async () => {
 
 // periodic refresh (archive frames + L3), live handles the fast path
 setInterval(() => {
-  if (!playing.value && api.base && !pinned.value) {
+  if (!playing.value && api.base && !pinned.value && !histRange.value) {
     reload({ keepIndex: true });
     reloadExtras();
   }
 }, 60000);
 
-/** Show history: up to `frames` volumes from a UTC day ending at `endMs` (or end of day). */
+// ---------- Level II archive listings (history mode, extra radars) ----------
+const dayCache = new Map<string, { at: number; v: TimedVol[] }>();
+
+async function dayList(site: string, day: string): Promise<TimedVol[]> {
+  const k = `${site}|${day}`;
+  const c = dayCache.get(k);
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  // past days don't change; today's listing grows
+  if (c && (day < today || Date.now() - c.at < 120_000)) return c.v;
+  const res = await api.get(`/api/radar/${site}/day/${day}`);
+  const v: TimedVol[] = (res.volumes ?? []).map((x: any) => ({ key: x.key, time: x.time }));
+  dayCache.set(k, { at: Date.now(), v });
+  if (dayCache.size > 64) dayCache.delete(dayCache.keys().next().value!);
+  return v;
+}
+
+/** Every archived Level II volume of `site` in [start, end], oldest first. */
+export async function listL2Range(site: string, start: number, end: number): Promise<TimedVol[]> {
+  const days = utcDays(start, end, 9);
+  const lists = await Promise.all(days.map((d) => dayList(site, d).catch(() => [] as TimedVol[])));
+  const seen = new Set<string>();
+  const out: TimedVol[] = [];
+  for (const l of lists) for (const v of l) if (v.time >= start - 30_000 && v.time <= end + 30_000 && !seen.has(v.key)) (seen.add(v.key), out.push(v));
+  return out.sort((a, b) => a.time - b.time);
+}
+
+/** Show history: volumes from a UTC day ending at `endMs` (enters history mode). */
 export async function loadHistory(date: string, endMs?: number) {
-  const r = settings.value.radar;
-  try {
-    const res = await api.get(`/api/radar/${r.site}/day/${date.replace(/-/g, "")}`);
-    let v: { key: string; time: number }[] = res.volumes;
-    if (endMs) v = v.filter((x) => x.time <= endMs);
-    // time spans can reach back into the previous day
-    if (settings.value.anim.mode === "time" && v.length && v[0].time > (endMs ?? v[v.length - 1].time) - settings.value.anim.minutes * 60_000) {
-      try {
-        const prev = new Date(Date.parse(`${date}T00:00:00Z`) - 86400_000).toISOString().slice(0, 10).replace(/-/g, "");
-        const r2 = await api.get(`/api/radar/${r.site}/day/${prev}`);
-        v = [...r2.volumes, ...v];
-      } catch {
-        /* no earlier day */
-      }
-    }
-    v = settings.value.anim.mode === "time" ? trimToSpan(v) : v.slice(-r.frames);
-    if (!v.length) {
-      toast("No volumes for that time", "warn");
-      return;
-    }
-    update((s) => (s.radar.source = "L2"));
-    pinned.value = v.map((x) => ({ key: x.key, time: x.time }));
-  } catch (e: any) {
-    toast(`History: ${e.message}`, "error");
-  }
+  const end = endMs ?? Date.parse(`${date}T23:59:59Z`);
+  setHistory(end - settings.value.anim.minutes * 60_000, Math.min(end, Date.now()));
 }
 
 export function backToLatest() {
-  pinned.value = null;
-  playingRec.value = null;
-  historyEnd.value = null;
+  batch(() => {
+    pinned.value = null;
+    playingRec.value = null;
+    setHistory(null, null);
+  });
 }
-
-// the timeline's history picker drives radar history too
-let lastHist: number | null = null;
-effect(() => {
-  const end = historyEnd.value;
-  const a = settings.value.anim;
-  const sig = `${a.mode}|${a.minutes}|${settings.value.radar.frames}|${settings.value.radar.site}`;
-  const radar = settings.value.weather.kind === "radar";
-  const was = lastHist;
-  lastHist = end;
-  if (!radar) return;
-  if (end) loadHistory(new Date(end).toISOString().slice(0, 10), end);
-  else if (was) pinned.value = null;
-  void sig;
-});
 
 /** Plain click: show only this radar. Ctrl/Cmd+click: add/remove it as an extra radar. */
 export function selectSite(id: string, additive = false) {
@@ -649,32 +664,73 @@ export function selectSite(id: string, additive = false) {
 }
 
 // ---------- extra radars ----------
+// Extra radars load the volumes nearest each main frame's time (same window, live or history), so
+// every frame shows all radars at (nearly) the same time and the seams between them stay put.
 let extraGen = 0;
+
+/** Candidate volumes of an extra radar covering [start, end]. */
+async function listSite(site: string, product: string, start: number, end: number): Promise<TimedVol[]> {
+  const r = settings.value.radar;
+  const live = !histRange.value && Date.now() - end < 3 * 3600_000;
+  if (r.source === "L2") {
+    if (!live) return listL2Range(site, start, end);
+    // live: the archive's latest volumes, plus completed live volumes not archived yet
+    const n = Math.max(2, Math.min(200, Math.ceil((Date.now() - start) / 240_000) + 3));
+    const res = await api.get(`/api/radar/${site}/latest?n=${n}`);
+    const list: TimedVol[] = res.volumes.map((v: any) => ({ key: v.key, time: v.time }));
+    for (const k of res.live?.complete ?? []) {
+      try {
+        const m = await getMeta(k);
+        if (!list.some((f) => Math.abs(f.time - m.time) < 15000)) list.push({ key: k, time: m.time });
+      } catch {
+        /* expired */
+      }
+    }
+    return list;
+  }
+  const tdwr = sites.value.find((x) => x.id === site)?.type === "TDWR";
+  const n = Math.max(2, Math.min(120, Math.ceil((Date.now() - start) / (tdwr ? 60_000 : 120_000)) + 3));
+  const res = await api.get(`/api/l3/${site}/${product}/list?n=${n}`);
+  return res.volumes.map((v: any) => ({ key: v.key, time: v.time }));
+}
+
 async function loadSiteFrames(site: string, gen: number): Promise<Frame[]> {
   const r = settings.value.radar;
-  const n = Math.min(framesToRequest(r.frames, 4, 200), 30);
-  let list: Frame[];
-  let product = r.product;
-  if (r.source === "L2") {
-    const res = await api.get(`/api/radar/${site}/latest?n=${n}`);
-    list = res.volumes.map((v: any) => ({ key: v.key, time: v.time }));
-  } else {
-    product = l3For(r.product, sites.value.find((x) => x.id === site)?.type === "TDWR");
-    const res = await api.get(`/api/l3/${site}/${product}/list?n=${n}`);
-    list = res.volumes.map((v: any) => ({ key: v.key, time: v.time }));
-  }
-  const out: Frame[] = [];
-  for (const f of list.reverse()) {
-    if (gen !== extraGen) break;
-    try {
-      const s = r.source === "L2" ? await loadL2Sweep(f.key, product, r.tiltAngle) : await loadL3(f.key);
-      if (s) out.unshift({ ...f, sweep: s, time: s.start });
-    } catch {
-      /* skip */
+  const main = frames.value;
+  if (!main.length) return [];
+  const product = r.source === "L2" ? r.product : l3For(r.product, sites.value.find((x) => x.id === site)?.type === "TDWR");
+  const targets = main.map((f) => f.time);
+  const cands = await listSite(site, product, targets[0] - EXTRA_MATCH_TOL, targets[targets.length - 1] + EXTRA_MATCH_TOL);
+  if (gen !== extraGen) return [];
+  const want = matchVolumes(targets, cands, EXTRA_MATCH_TOL);
+  // reuse what's already loaded for this radar
+  const old = new Map((extraFrames.value[site] ?? []).map((f) => [f.key, f]));
+  const out: Frame[] = want.map((v) => old.get(v.key) ?? { key: v.key, time: v.time });
+  const publish = () => gen === extraGen && (extraFrames.value = { ...extraFrames.value, [site]: out.slice() });
+  publish();
+  // newest first, so the picture on screen (usually the newest frame) completes first
+  const order = out.map((f, i) => i).filter((i) => !out[i].sweep).reverse();
+  let k = 0;
+  let since = 0;
+  const worker = async () => {
+    while (k < order.length && gen === extraGen) {
+      const i = order[k++];
+      const f = out[i];
+      try {
+        const s = r.source === "L2" ? await loadL2Sweep(f.key, product, r.tiltAngle) : await loadL3(f.key);
+        out[i] = s ? { ...f, sweep: s, time: s.start } : { ...f, error: "product not in this volume" };
+      } catch (e: any) {
+        out[i] = { ...f, error: e.message };
+      }
+      // publish progressively: the first one right away, then every few
+      if (++since >= 3 || k === 1) {
+        since = 0;
+        publish();
+      }
     }
-    // publish progressively so the newest picture shows quickly
-    if (gen === extraGen && (out.length === 1 || out.length === list.length)) extraFrames.value = { ...extraFrames.value, [site]: out.slice() };
-  }
+  };
+  await Promise.all([worker(), worker()]);
+  publish();
   return out;
 }
 
@@ -684,17 +740,28 @@ export async function reloadExtras() {
   const keep: Record<string, Frame[]> = {};
   for (const k of extra) if (extraFrames.value[k]) keep[k] = extraFrames.value[k];
   extraFrames.value = keep;
-  if (!api.base || settings.value.weather.kind !== "radar") return;
-  for (const site of extra) {
-    try {
-      const fs = await loadSiteFrames(site, gen);
-      if (gen !== extraGen) return;
-      extraFrames.value = { ...extraFrames.value, [site]: fs };
-    } catch {
-      /* site offline */
-    }
-  }
+  if (!api.base || settings.value.weather.kind !== "radar" || !extra.length) return;
+  await Promise.all(
+    extra.map((site) =>
+      loadSiteFrames(site, gen).catch(() => {
+        /* site offline */
+      }),
+    ),
+  );
 }
+
+// the main radar's frame window changed (new volume, span, history window): re-match the extras
+let mainWinSig = "";
+let mainWinTimer: number | undefined;
+effect(() => {
+  const fs = frames.value;
+  const sig = fs.length ? `${fs.length}|${fs[0].key}|${fs[fs.length - 1].key}` : "";
+  if (sig === mainWinSig) return;
+  mainWinSig = sig;
+  if (!sig || !settings.value.extraSites.length) return;
+  clearTimeout(mainWinTimer);
+  mainWinTimer = window.setTimeout(reloadExtras, 250);
+});
 
 let extraSig = "";
 effect(() => {

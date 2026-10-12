@@ -6,6 +6,7 @@ import { Rail, SidePanel } from "./Sidebar";
 import { TopBar } from "./Header";
 import { Toolbar } from "./Toolbar";
 import { Timeline } from "./Timeline";
+import { HistoryBar } from "./HistoryBar"; // history
 import { Legend } from "./Legend";
 import { StatusBar, Crosshair, FpsMeter, CursorValue } from "./Readouts";
 import { StatsPanel } from "./StatsPanel";
@@ -24,12 +25,17 @@ import { importFile, isMapFile, loadFiles } from "../overlays/files";
 import "../overlays/iss";
 import "../overlays/mycams";
 import { View3D } from "./View3D"; // 3D
+import { ShortcutsDialog } from "./Shortcuts"; // legend, panes, keys
 // center modals (forecast, radio, seismograph) + radio players
 import { ForecastCenter } from "./ForecastCenter";
 import { RadioCenter } from "./RadioCenter";
 import { RadioPlayers } from "./RadioPlayer";
 import { ShakeCenter } from "./ShakeCenter";
 import "../shake";
+// layers 0.5: more overlays, rotation scan bar, storm table
+import "../overlays/moredefs";
+import { ScanBar } from "./ScanBar";
+import { StormTable } from "./LayerExtras";
 
 export function App() {
   const mapEl = useRef<HTMLDivElement>(null);
@@ -58,12 +64,15 @@ export function App() {
       <Crosshair />
       <CursorValue />
       <TopBar />
+      <ScanBar /> {/* layers 0.5 */}
+      <StormTable /> {/* layers 0.5 */}
       <FpsMeter />
       <Rail />
       <SidePanel />
       <Legend />
       <View3D /> {/* 3D */}
       <div class="bottom-dock">
+        <HistoryBar />
         <Timeline />
         <Toolbar />
       </div>
@@ -80,6 +89,7 @@ export function App() {
       {openPanel.value !== "radio" && <NowPlaying compact />}
       <AddCameraDialog />
       <ContextMenu />
+      <ShortcutsDialog />
       <Toasts />
       {noServer && <ConnectDialog />}
     </div>

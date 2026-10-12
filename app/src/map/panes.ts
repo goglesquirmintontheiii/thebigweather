@@ -10,7 +10,8 @@ import { settings, type PaneCfg } from "../store";
 import { buildStyle, isDarkBasemap } from "./basemaps";
 import { RadarLayer } from "../radar/RadarLayer";
 import { GridLayer } from "../grid/GridLayer";
-import { fetchSweep, tableById, tableKeyFor, sites, l3For } from "../radar/controller";
+import { fetchSweep, tableById, tableKeyFor, sites, l3For, selectSite } from "../radar/controller";
+import { gridGateKey } from "../gate";
 import { gridDef, gridTable } from "../weather";
 import { parseRaster, type Raster } from "../grid/raster";
 import type { Sweep } from "../radar/sweep";
@@ -52,6 +53,7 @@ class PaneView {
   rasters = new Map<string, { r: Raster; sig: string }>();
   gen = 0;
   timer: number | undefined;
+  siteMarkers = new Map<string, maplibregl.Marker>();
 
   constructor(public idx: number, el: HTMLElement) {
     const s = settings.value;
@@ -77,6 +79,7 @@ class PaneView {
       for (const p of panes.values()) if (p !== this) p.map.jumpTo({ center: c, zoom: this.map.getZoom() });
       syncing = false;
     });
+    this.map.on("zoom", () => this.siteDensity());
     this.map.on("moveend", () => {
       clearTimeout(this.timer);
       this.timer = window.setTimeout(() => this.show(), 200);
@@ -98,7 +101,48 @@ class PaneView {
       m.addLayer({ id: "p-alerts", type: "line", source: "alerts", paint: { "line-color": ["get", "color"], "line-width": ["match", ["get", "kind"], "warning", 2.2, 1.2] } });
     }
     this.refreshAlerts();
+    this.refreshSites();
     this.show();
+  }
+
+  /** radar site markers (same look and click behaviour as the main map) */
+  refreshSites() {
+    const show = settings.value.overlays.sites && this.cfg?.weather.kind === "radar";
+    if (!show) {
+      for (const m of this.siteMarkers.values()) m.remove();
+      this.siteMarkers.clear();
+      return;
+    }
+    const sel = this.cfg?.site ?? settings.value.radar.site;
+    const extra = this.cfg?.site ? [] : settings.value.extraSites;
+    const list = sites.value;
+    const ids = new Set(list.map((x) => x.id));
+    for (const [id, m] of this.siteMarkers) if (!ids.has(id)) (m.remove(), this.siteMarkers.delete(id));
+    for (const st of list) {
+      let m = this.siteMarkers.get(st.id);
+      if (!m) {
+        const el = document.createElement("button");
+        el.className = `site-marker ${st.type === "TDWR" ? "tdwr" : "nexrad"}`;
+        el.textContent = st.id;
+        el.title = `${st.id} — click to view · Ctrl+click to add/remove alongside the current radar`;
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selectSite(st.id, e.ctrlKey || e.metaKey);
+        });
+        m = new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat([st.lon, st.lat]).addTo(this.map);
+        this.siteMarkers.set(st.id, m);
+      }
+      m.getElement().classList.toggle("selected", st.id === sel);
+      m.getElement().classList.toggle("extra", extra.includes(st.id));
+    }
+    this.siteDensity();
+  }
+
+  siteDensity() {
+    const z = this.map.getZoom();
+    const root = this.map.getContainer();
+    root.classList.toggle("sites-dots", z < 4.6);
+    root.classList.toggle("sites-hide-tdwr", z < 5.6);
   }
 
   refreshAlerts() {
@@ -110,6 +154,8 @@ class PaneView {
 
   async configure(cfg: PaneCfg) {
     this.cfg = cfg;
+    this.grid.gateKey = cfg.weather.kind === "grid" ? gridGateKey(cfg.weather.id) : "";
+    this.refreshSites();
     const gen = ++this.gen;
     this.frames = [];
     this.radar.setItems([]);
@@ -213,6 +259,7 @@ class PaneView {
 
 export function label(cfg: PaneCfg): string {
   if (cfg.weather.kind === "grid") return gridDef(cfg.weather.id)?.name ?? cfg.weather.id;
+  if (cfg.weather.kind === "gibs") return cfg.weather.id;
   return `${cfg.site ?? settings.value.radar.site} ${cfg.product ?? "REF"}`;
 }
 
@@ -268,6 +315,14 @@ effect(() => {
   if (site === lastSite) return;
   lastSite = site;
   settings.value.panes.list.forEach((c, i) => c && c.weather.kind === "radar" && !c.site && panes.get(i + 1)?.configure(c));
+});
+// site markers follow the radar list, the selected radar and the Sites toggle
+effect(() => {
+  void sites.value;
+  void settings.value.radar.site;
+  void settings.value.overlays.sites;
+  void settings.value.extraSites;
+  for (const p of panes.values()) p.refreshSites();
 });
 let lastBase = "";
 effect(() => {

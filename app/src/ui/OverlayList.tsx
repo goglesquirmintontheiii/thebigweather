@@ -6,10 +6,15 @@ import { settings, update, type OvlSettings } from "../store";
 import { OVERLAYS, optsFor, overlayDef, type OverlayDef } from "../overlays/defs";
 import { ovlStatus, ovlMeta, refreshOverlay } from "../overlays/manager";
 import { fileOverlays, fileImports, importFile, removeFile } from "../overlays/files";
-import { Settings2, ChevronRight, Upload, Trash2, Loader, AlertTriangle, X, RefreshCw } from "lucide-preact";
+import { Settings2, ChevronRight, Upload, Trash2, Loader, AlertTriangle, X, RefreshCw, Keyboard } from "lucide-preact";
+import { KbdBadge, KeyCapture } from "./Shortcuts";
+
+/** layer whose shortcut is being captured (right-click a row, or the keyboard button in its settings) */
+const captureFor = signal<string | null>(null);
 import { camDialog } from "./Overlays";
 import { AlertConfig } from "./AlertConfig";
 import { Toggle } from "./panels/RadarPanel";
+import { LayerExtra } from "./LayerExtras"; // layers 0.5
 
 /** Layer whose settings window is open: overlay id, "file:<id>" or "base:<name>". */
 export const configModal = signal<string | null>(null);
@@ -222,6 +227,7 @@ function OverlayConfig({ d }: { d: OverlayDef }) {
           <CameraSources />
         </section>
       )}
+      <LayerExtra id={d.id} /> {/* layers 0.5: storm table, Kp, traffic key */}
       {d.id === "mycams" && (
         <section>
           <label class="lbl">My cameras</label>
@@ -307,6 +313,10 @@ export function ConfigModal() {
               <i />
             </label>
           )}
+          <KbdBadge id={id} />
+          <button class={`icon-btn ${captureFor.value === id ? "on" : ""}`} title="Keyboard shortcut to toggle this layer" onClick={() => (captureFor.value = captureFor.value === id ? null : id)}>
+            <Keyboard size={14} />
+          </button>
           {reload && (
             <button class="icon-btn" title="Reload now" onClick={reload}>
               <RefreshCw size={14} />
@@ -316,6 +326,7 @@ export function ConfigModal() {
             <X size={16} />
           </button>
         </div>
+        {captureFor.value === id && <KeyCapture id={id} onClose={() => (captureFor.value = null)} />}
         <div class="ovl-modal-body">{body}</div>
       </div>
     </div>
@@ -325,17 +336,19 @@ export function ConfigModal() {
 function Row({ d }: { d: OverlayDef }) {
   const on = !!settings.value.ovl[d.id]?.on;
   return (
-    <div class="ovl-row">
+    <div class="ovl-row" onContextMenu={(e) => (e.preventDefault(), (captureFor.value = d.id))} title="Right-click to set a keyboard shortcut">
       <div class="ovl-line">
         <label class="ovl-toggle">
           <input type="checkbox" checked={on} onChange={(e) => setOvl(d.id, (x) => (x.on = (e.target as HTMLInputElement).checked))} />
           <span>{d.name}</span>
         </label>
+        <KbdBadge id={d.id} />
         <Status id={d.id} />
         <button class={`icon-btn gear ${configModal.value === d.id ? "on" : ""}`} title="Settings" onClick={() => (configModal.value = d.id)}>
           <Settings2 size={13} />
         </button>
       </div>
+      {captureFor.value === d.id && !configModal.value && <KeyCapture id={d.id} onClose={() => (captureFor.value = null)} />}
     </div>
   );
 }
@@ -344,17 +357,19 @@ function FileRow({ id, name, count }: { id: string; name: string; count: number 
   const key = `file:${id}`;
   const on = !!settings.value.ovl[key]?.on;
   return (
-    <div class="ovl-row">
+    <div class="ovl-row" onContextMenu={(e) => (e.preventDefault(), (captureFor.value = key))}>
       <div class="ovl-line">
         <label class="ovl-toggle">
           <input type="checkbox" checked={on} onChange={(e) => setOvl(key, (x) => (x.on = (e.target as HTMLInputElement).checked))} />
           <span title={name}>{name}</span>
         </label>
+        <KbdBadge id={key} />
         <span class="ovl-count muted">{count.toLocaleString()}</span>
         <button class="icon-btn gear" title="Settings" onClick={() => (configModal.value = key)}>
           <Settings2 size={13} />
         </button>
       </div>
+      {captureFor.value === key && !configModal.value && <KeyCapture id={key} onClose={() => (captureFor.value = null)} />}
     </div>
   );
 }

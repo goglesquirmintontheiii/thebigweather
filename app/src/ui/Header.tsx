@@ -1,5 +1,5 @@
 import { settings, update, connection } from "../store";
-import { currentFrame, currentSite, tilts, l3Products, L2_MOMENTS, liveSweep, liveState, pinned, backToLatest, frames, frameIndex, playingRec } from "../radar/controller";
+import { currentFrame, currentSite, liveSweep, liveState, pinned, backToLatest, frames, frameIndex, playingRec } from "../radar/controller";
 import { gridRuns, gridRun, gridStorms, setRun, setStorm } from "../grid/controller";
 import { activeTime, activeFrame, activeLoading, activeError, isForecast } from "../active";
 import { activeLabel, gridDef } from "../weather";
@@ -7,8 +7,7 @@ import { fmtTime, fmtAge } from "../util";
 import { Zap, History, Loader, X } from "lucide-preact";
 import { LayerPicker } from "./LayerPicker";
 
-const QUICK_L2 = ["REF", "VEL", "SW", "ZDR", "RHO", "PHI"];
-const LABEL: Record<string, string> = { REF: "REF", VEL: "VEL", SW: "SW", ZDR: "ZDR", RHO: "CC", PHI: "PHI", CFP: "CFP" };
+// the radar product is picked from the dropdown on the map (ui/Panes.tsx MainPaneHead)
 
 export function TopBar() {
   return (
@@ -83,8 +82,6 @@ function RadarHeader() {
   const f = currentFrame.value;
   const sweep = liveSweep.value && frameIndex.value === frames.value.length - 1 ? liveSweep.value : f?.sweep;
   const t = sweep?.start ?? f?.time ?? 0;
-  const prodName = r.source === "L2" ? L2_MOMENTS.find((m) => m.id === r.product)?.name : l3Products.value.find((p) => p.id === r.product)?.name;
-  const available = new Set(tilts.value.flatMap((t) => t.moments));
   const liveOn = r.source === "L2" && r.live && !pinned.value;
   const ls = liveState.value;
   const expected = sweep ? (sweep.nrad > 400 ? 720 : 360) : 720;
@@ -102,11 +99,12 @@ function RadarHeader() {
           </button>
         )}
       </div>
-      <div class="hdr-prod">
-        <span class="hdr-pname">{prodName ?? r.product}</span>
-        {sweep && <span class="hdr-tilt">{sweep.elevation.toFixed(1)}°</span>}
-        {sweep?.vcp ? <span class="hdr-vcp">VCP {sweep.vcp}</span> : null}
-      </div>
+      {sweep && (
+        <div class="hdr-prod">
+          <span class="hdr-tilt">{sweep.elevation.toFixed(1)}°</span>
+          {sweep.vcp ? <span class="hdr-vcp">VCP {sweep.vcp}</span> : null}
+        </div>
+      )}
       <TimeBlock t={t} />
       {pinned.value && (
         <button class="chip hist" onClick={backToLatest} title="Back to latest">
@@ -117,20 +115,6 @@ function RadarHeader() {
         <span class={`live-dot ${connection.value === "online" ? "on" : ""}`} title={pct !== null ? `RapidSweep: ${ls!.elev.toFixed(1)}° tilt ${Math.round(pct)}% scanned` : "RapidSweep live data"}>
           <Zap size={11} /> {pct !== null ? `${ls!.elev.toFixed(1)}° ${Math.round(pct)}%` : "LIVE"}
         </span>
-      )}
-      {r.source === "L2" && (
-        <div class="quick-products">
-          {QUICK_L2.map((m) => (
-            <button
-              key={m}
-              class={`qp ${r.product === m ? "on" : ""} ${available.size && !available.has(m) ? "na" : ""}`}
-              onClick={() => update((s) => (s.radar.product = m))}
-              title={L2_MOMENTS.find((x) => x.id === m)?.name}
-            >
-              {LABEL[m]}
-            </button>
-          ))}
-        </div>
       )}
       {activeError.value && <div class="hdr-err">{activeError.value}</div>}
       {pct !== null && <div class="sweep-prog" style={{ width: `${pct}%` }} />}

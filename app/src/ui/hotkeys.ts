@@ -7,14 +7,45 @@ import { locate, screenshot } from "./Toolbar";
 import { settings } from "../store";
 import { toggle3D } from "./View3D"; // 3D
 
+import { handleKeybind, shortcutsOpen } from "../keybinds";
+
 const PRODUCTS = ["REF", "VEL", "SW", "ZDR", "RHO", "PHI"];
+
+/** Built-in keys, in keybinds.ts step notation (for the shortcuts list and conflict warnings). */
+export const BUILTIN_HOTKEYS: [string, string][] = [
+  ["Space", "Play / pause"],
+  ["ArrowLeft", "Previous frame"],
+  ["ArrowRight", "Next frame"],
+  ["ArrowUp", "Tilt up"],
+  ["ArrowDown", "Tilt down"],
+  ...PRODUCTS.map((p, i): [string, string] => [String(i + 1), `Radar product ${p}`]),
+  ["Shift+3", "3D view"],
+  ["L", "Locate me"],
+  ["S", "Screenshot"],
+  ["C", "Crosshair"],
+  ["D", "Draw"],
+  ["V", "Value under cursor"],
+  ["M", "Measure"],
+  ["B", "Bearing"],
+  ["R", "Radar sites"],
+  ["Escape", "Close / cancel"],
+  ["?", "Keyboard shortcuts"],
+  [",", "Legend filter down (legend hovered)"],
+  [".", "Legend filter up (legend hovered)"],
+];
 
 export function useHotkeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      if (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA") return;
+      if (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
+      // user layer shortcuts first (they may use modifiers or two-key chords)
+      if (handleKeybind(e)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "?") {
+        shortcutsOpen.value = !shortcutsOpen.value;
+        return;
+      }
       // 3D: Shift+3 (plain digits pick radar products)
       if (e.shiftKey && e.code === "Digit3") {
         toggle3D();

@@ -67,6 +67,18 @@ export interface OverlayDef {
   panel?: boolean;
   /** not listed in the Layers panel (toggled from elsewhere) */
   hidden?: boolean;
+  /* ---------- layers 0.5 hooks (used by moredefs.ts) ---------- */
+  /** transform fetched data before drawing (adds derived features) */
+  prepare?: (fc: any, opts: Record<string, string>) => any;
+  /** fixed query parameters sent with the feed request */
+  params?: Record<string, string>;
+  /** fetch from this API path instead of /api/ovl/<feed> */
+  path?: string;
+  /** a view bbox larger than this (km²) is cut down around the map center */
+  maxKm2?: number;
+  /** raster tile source (tiles, tileSize…) instead of GeoJSON */
+  raster?: (opts: Record<string, string>) => Record<string, any>;
+  /* ---------- end layers 0.5 hooks ---------- */
 }
 
 const days = (n: number): [string, string][] => Array.from({ length: n }, (_, i) => [String(i + 1), `Day ${i + 1}`]);

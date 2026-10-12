@@ -41,6 +41,7 @@ pub struct AppState {
     pub grids: Arc<crate::grid::service::GridService>,
     pub overlays: Arc<crate::overlays::Overlays>,
     pub rec: Arc<crate::recorder::Recorder>,
+    pub intl: Arc<crate::intlradar::IntlRadar>,
 }
 
 type St = State<Arc<AppState>>;
@@ -132,6 +133,8 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/radar/meta", get(radar_meta))
         .route("/radar/sweep", get(radar_sweep))
         .route("/radar/upload", post(radar_upload))
+        .route("/radar/rotation", get(radar_rotation))
+        .route("/radar/volume3d", get(radar_volume3d))
         .route("/live/{site}", get(live_status))
         .route("/l3/{site}/{prod}/list", get(l3_list))
         .route("/l3/data", get(l3_data))
@@ -143,9 +146,12 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/grid/frames", get(grid_frames))
         .route("/grid/render", get(grid_render))
         .route("/grid/value", get(grid_value))
+        .route("/grid/volume3d", get(grid_volume3d))
         .route("/metars", get(metars))
         .route("/ovl/{id}", get(overlay))
         .route("/camimg", get(camimg))
+        .route("/intlradar", get(intl_list))
+        .route("/intlradar/img", get(intl_img))
         .route("/shake/channels", get(shake_channels))
         .route("/shake/data", get(shake_data))
         .route("/traffic/incidents", get(traffic_incidents))
@@ -261,6 +267,77 @@ async fn radar_sweep(State(st): St, headers: HeaderMap, Query(q): Query<SweepQ>)
     }
     let b = st.radar.sweep(&q.key, q.tilt, &q.moment).await?;
     Ok(sweep_response(&headers, b, true))
+}
+
+#[derive(Deserialize)]
+struct RotQ {
+    key: Option<String>,
+    site: Option<String>,
+}
+
+/// Rotation (TVS / mesocyclone) detections for a Level II volume, or the newest volume of a site.
+async fn radar_rotation(State(st): St, Query(q): Query<RotQ>) -> Result<Response, ApiError> {
+    let key = match (q.key.filter(|k| !k.is_empty()), q.site) {
+        (Some(k), _) => k,
+        (None, Some(site)) => {
+            let site = valid_site(&site)?;
+            let v = st.radar.latest(&site, 1).await?;
+            v.last().map(|e| e.key.clone()).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no volumes found for {site}")))?
+        }
+        _ => return Err(bad("key or site required")),
+    };
+    let body = if key.starts_with("live:") {
+        let live = st.live.clone();
+        let k = key.clone();
+        Bytes::from(
+            tokio::task::spawn_blocking(move || live.with_volume(&k, |v| Ok(serde_json::to_vec(&crate::radar::rotation::geojson(v, &k))?)))
+                .await
+                .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??,
+        )
+    } else {
+        st.radar.rotation(&key).await?
+    };
+    let mut r = Response::new(Body::from(body));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(r)
+}
+
+#[derive(Deserialize)]
+struct Vol3dQ {
+    key: String,
+    moment: Option<String>,
+    res: Option<String>,
+}
+
+/// Level II volume resampled to a 3D grid (u32 header length, JSON header, u8 voxels).
+async fn radar_volume3d(State(st): St, Query(q): Query<Vol3dQ>) -> Result<Response, ApiError> {
+    let moment = q.moment.unwrap_or_else(|| "REF".into());
+    if crate::radar::volume3d::Kind::parse(&moment).is_none() {
+        return Err(bad("moment must be REF|VEL|ZDR|CC|SW|KDP|PHI"));
+    }
+    let res = q.res.unwrap_or_else(|| "lo".into());
+    let live = q.key.starts_with("live:");
+    let body = if live {
+        let lm = st.live.clone();
+        let k = q.key.clone();
+        Bytes::from(
+            tokio::task::spawn_blocking(move || lm.with_volume(&k, |v| crate::radar::volume3d::encode(v, &moment, &res)))
+                .await
+                .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??,
+        )
+    } else {
+        st.radar.volume3d(&q.key, &moment, &res).await?
+    };
+    Ok(volume_response(body, !live))
+}
+
+fn volume_response(body: Bytes, cacheable: bool) -> Response {
+    let mut r = Response::new(Body::from(body));
+    let h = r.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static(if cacheable { "private, max-age=86400, immutable" } else { "no-store" }));
+    r
 }
 
 #[derive(Deserialize)]
@@ -400,6 +477,33 @@ async fn overlay(State(st): St, Path(id): Path<String>, Query(q): Query<std::col
 }
 
 #[derive(Deserialize)]
+struct IntlQ {
+    id: Option<String>,
+}
+
+/// International radar sources drawn as raster frames (tiles / images / WMS).
+async fn intl_list(State(st): St, Query(q): Query<IntlQ>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(st.intl.list(q.id.as_deref().filter(|s| !s.is_empty())).await?))
+}
+
+#[derive(Deserialize)]
+struct ImgQ {
+    u: String,
+}
+
+/// Allowlisted image proxy for international radar frames (same-origin textures for WebGL).
+async fn intl_img(State(st): St, Query(q): Query<ImgQ>) -> Result<Response, ApiError> {
+    if !crate::intlradar::allowed(&q.u) {
+        return Err(ApiError(StatusCode::FORBIDDEN, "host not allowed".into()));
+    }
+    let (b, ct) = st.intl.img(&q.u).await?;
+    let mut r = Response::new(Body::from(b));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_str(&ct).unwrap_or(HeaderValue::from_static("image/png")));
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"));
+    Ok(r)
+}
+
+#[derive(Deserialize)]
 struct CamQ {
     id: String,
 }
@@ -523,6 +627,28 @@ struct ValueQ {
 
 async fn grid_value(State(st): St, Query(q): Query<ValueQ>) -> Result<Json<Value>, ApiError> {
     Ok(Json(json!({"value": st.grids.value(&q.key, q.lat, q.lon).await?})))
+}
+
+#[derive(Deserialize)]
+struct Cube3dQ {
+    time: Option<i64>,
+    bbox: String,
+    probe: Option<String>,
+}
+
+/// MRMS 3D reflectivity cube for a map area (`bbox=w,s,e,n`, `time` ms optional).
+async fn grid_volume3d(State(st): St, Query(q): Query<Cube3dQ>) -> Result<Response, ApiError> {
+    let b: Vec<f64> = q.bbox.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    if b.len() != 4 || b[0] >= b[2] || b[1] >= b[3] {
+        return Err(bad("bbox=w,s,e,n required"));
+    }
+    if q.probe.is_some() {
+        return Ok(Json(json!({"ok": true, "levels": crate::grid::service::GridService::MRMS_3D_LEVELS.len()})).into_response());
+    }
+    let body = st.grids.mrms_volume3d(q.time, [b[0], b[1], b[2], b[3]]).await?;
+    // a cube from the last few minutes may still be missing levels: don't let browsers keep it
+    let settled = q.time.map(|t| chrono::Utc::now().timestamp_millis() - t > 15 * 60_000).unwrap_or(false);
+    Ok(volume_response(body, settled))
 }
 
 async fn metars(State(st): St) -> Json<Value> {

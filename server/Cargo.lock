@@ -923,6 +923,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hdf5-writer"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a292270e76950c2160cc2ea996cb0a4511299b3cc1481b59e40828a4dc9fcf82"
+dependencies = [
+ "flate2",
+ "hdf5-core",
+ "thiserror",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2478,6 +2489,8 @@ dependencies = [
  "flate2",
  "futures",
  "grib",
+ "hdf5-reader",
+ "hdf5-writer",
  "hex",
  "lru 0.18.5",
  "mimalloc",

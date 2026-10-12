@@ -1,14 +1,109 @@
 // Multi-pane layout: the main map plus up to three extra panes, and the layout picker.
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { settings, update, type PaneCfg } from "../store";
+import { settings, update, openPanel, type PaneCfg } from "../store";
 import { mountPane, paneConfigured, paneStatus, resizePanes } from "../map/panes";
-import { L2_MOMENTS } from "../radar/controller";
-import { gridLayers } from "../weather";
+import { L2_MOMENTS, l3Products, sites } from "../radar/controller";
+import { gridLayers, GIBS, selectWeather } from "../weather";
 import { fmtTime } from "../util";
-import { LayoutGrid, Columns2, Rows2, Square, Grid2x2, Link2, Link2Off, AppWindow } from "lucide-preact";
+import { LayoutGrid, Columns2, Rows2, Square, Grid2x2, Link2, Link2Off, AppWindow, MonitorSmartphone } from "lucide-preact";
 import { popout, canPopout } from "../popout";
 import { mapRef } from "../map/mapview";
+import { linkOn, linkLayers, peers, isSecondWindow, setLink } from "../linkwin";
+
+/** Product dropdown options: Level II moments, Level III families (for the site's radar type), gridded layers. */
+function ProductOptions({ site, current }: { site: string; current?: string }) {
+  const tdwr = sites.value.find((x) => x.id === site)?.type === "TDWR";
+  const l3 = l3Products.value.filter((p) => !!p.tdwr === tdwr);
+  const cur = l3Products.value.find((p) => p.id === current);
+  const fams = new Map<string, typeof l3>();
+  for (const p of l3) {
+    const k = `${p.code}|${p.name}`;
+    fams.set(k, [...(fams.get(k) ?? []), p].sort((a, b) => a.tilt - b.tilt));
+  }
+  const groups = [...new Set(gridLayers.value.map((l) => l.group))];
+  return (
+    <>
+      <optgroup label={`Level II · ${site}`}>
+        {L2_MOMENTS.map((m, i) => (
+          <option key={m.id} value={`r:L2:${m.id}`}>
+            {m.name}
+            {i < 6 ? `  (${i + 1})` : ""}
+          </option>
+        ))}
+      </optgroup>
+      {fams.size > 0 && (
+        <optgroup label={`Level III · ${site}`}>
+          {[...fams.values()].map((f) => {
+            const pick = f.find((p) => p.id === current) ?? f.find((p) => p.tilt === cur?.tilt) ?? f[0];
+            return (
+              <option key={pick.id} value={`r:L3:${pick.id}`}>
+                {f[0].name}
+                {f.length > 1 ? ` ${pick.tilt.toFixed(1)}°` : ""}
+              </option>
+            );
+          })}
+        </optgroup>
+      )}
+      {groups.map((g) => (
+        <optgroup key={g} label={g}>
+          {gridLayers.value
+            .filter((l) => l.group === g)
+            .map((l) => (
+              <option key={l.id} value={`g:${l.id}`}>
+                {l.name}
+              </option>
+            ))}
+        </optgroup>
+      ))}
+    </>
+  );
+}
+
+/** Link toggle for a second map window (shown when another map window is open). */
+function LinkControls() {
+  if (!(peers.value > 0 || isSecondWindow || linkOn.value)) return null;
+  return (
+    <>
+      <button class={`ph-btn ${linkOn.value ? "on" : ""}`} title={linkOn.value ? "Linked with the other window: view, time, radar site (click to unlink)" : "Link with the other map window (view, time, radar site)"} onClick={() => setLink(!linkOn.value)}>
+        {linkOn.value ? <Link2 size={13} /> : <Link2Off size={13} />}
+        <span>Link</span>
+      </button>
+      {linkOn.value && (
+        <label class="ph-chk" title="Also sync overlay layers (Layers menu)">
+          <input type="checkbox" checked={linkLayers.value} onChange={(e) => setLink(true, (e.target as HTMLInputElement).checked)} />
+          Sync layers
+        </label>
+      )}
+    </>
+  );
+}
+
+/** Product dropdown for the main map (top-left), replacing the header's product buttons. */
+export function MainPaneHead() {
+  const s = settings.value;
+  const w = s.weather;
+  const value = w.kind === "radar" ? `r:${s.radar.source}:${s.radar.product}` : w.kind === "grid" ? `g:${w.id}` : `x:${w.id}`;
+  const pick = (v: string) => {
+    if (v.startsWith("g:")) return selectWeather({ kind: "grid", id: v.slice(2) });
+    if (!v.startsWith("r:")) return;
+    const [, src, prod] = v.split(":");
+    update((x) => {
+      x.weather = { kind: "radar" };
+      x.radar.source = src as "L2" | "L3";
+      x.radar.product = prod;
+    });
+  };
+  return (
+    <div class={`pane-head main-head glass ${openPanel.value ? "shift" : ""}`}>
+      <select value={value} onChange={(e) => pick((e.target as HTMLSelectElement).value)} title="Product (1–6 for Level II)">
+        {w.kind === "gibs" && <option value={value}>{GIBS.find((g) => g.id === w.id)?.name ?? w.id}</option>}
+        <ProductOptions site={s.radar.site} current={s.radar.product} />
+      </select>
+      <LinkControls />
+    </div>
+  );
+}
 
 export const PANE_COUNT: Record<string, number> = { "1": 0, "2": 1, "2v": 1, "3": 2, "4": 3 };
 
@@ -22,41 +117,24 @@ function PaneBox({ idx }: { idx: number }) {
   useEffect(() => mountPane(idx, ref.current!), [idx]);
   const cfg = settings.value.panes.list[idx - 1] ?? defaultCfg(idx);
   const st = paneStatus.value[idx] ?? {};
-  const value = cfg.weather.kind === "grid" ? `g:${cfg.weather.id}` : `r:${cfg.product ?? "REF"}`;
+  const value = cfg.weather.kind === "grid" ? `g:${cfg.weather.id}` : `r:${cfg.source ?? "L2"}:${cfg.product ?? "REF"}`;
   const set = (v: string) => {
-    const next: PaneCfg = v.startsWith("g:") ? { weather: { kind: "grid", id: v.slice(2) } } : { weather: { kind: "radar" }, source: "L2", product: v.slice(2), tilt: settings.value.radar.tiltAngle };
+    const [, src, prod] = v.split(":");
+    const next: PaneCfg = v.startsWith("g:") ? { weather: { kind: "grid", id: v.slice(2) } } : { weather: { kind: "radar" }, source: src as "L2" | "L3", product: prod, tilt: settings.value.radar.tiltAngle, site: cfg.site };
     update((s) => {
       while (s.panes.list.length < idx) s.panes.list.push(defaultCfg(s.panes.list.length + 1));
       s.panes.list[idx - 1] = next;
     });
     paneConfigured(idx, next);
   };
-  const groups = [...new Set(gridLayers.value.map((l) => l.group))];
   return (
     <div class="pane">
       <div ref={ref} class="pane-map" />
       <div class="pane-head glass">
-        <select value={value} onChange={(e) => set((e.target as HTMLSelectElement).value)}>
-          <optgroup label={`Radar · ${settings.value.radar.site}`}>
-            {L2_MOMENTS.map((m) => (
-              <option key={m.id} value={`r:${m.id}`}>
-                {m.name}
-              </option>
-            ))}
-          </optgroup>
-          {groups.map((g) => (
-            <optgroup key={g} label={g}>
-              {gridLayers.value
-                .filter((l) => l.group === g)
-                .map((l) => (
-                  <option key={l.id} value={`g:${l.id}`}>
-                    {l.name}
-                  </option>
-                ))}
-            </optgroup>
-          ))}
+        <select value={value} onChange={(e) => set((e.target as HTMLSelectElement).value)} title="Product for this pane">
+          <ProductOptions site={cfg.site ?? settings.value.radar.site} current={cfg.product} />
         </select>
-        <span class="pane-time">{st.loading ? "Loading…" : st.error ? st.error : st.time ? fmtTime(st.time, true) : ""}</span>
+        <span class="pane-time" title={st.error ?? ""}>{st.loading ? "Loading…" : st.error ? st.error : st.time ? fmtTime(st.time, true) : ""}</span>
       </div>
     </div>
   );
@@ -78,6 +156,7 @@ export function PaneGrid({ mapEl }: { mapEl: any }) {
     <div class={`panes layout-${layout}`}>
       <div class="pane main">
         <div ref={mapEl} class="map" />
+        <MainPaneHead />
       </div>
       {Array.from({ length: n }, (_, i) => (
         <PaneBox key={`${layout}-${i + 1}`} idx={i + 1} />
@@ -121,6 +200,11 @@ export function PaneButton() {
               }}
             >
               <AppWindow size={16} />
+            </button>
+          )}
+          {(peers.value > 0 || linkOn.value) && (
+            <button class={`tb sm ${linkOn.value ? "on" : ""}`} title={linkOn.value ? "Map windows linked (click to unlink)" : "Link the other map window: view, time, radar site"} onClick={() => setLink(!linkOn.value)}>
+              <MonitorSmartphone size={16} />
             </button>
           )}
           <button class={`tb sm ${p.sync ? "on" : ""}`} title={p.sync ? "Panes move together (click to unlink)" : "Panes move on their own (click to link)"} onClick={() => update((s) => (s.panes.sync = !s.panes.sync))}>

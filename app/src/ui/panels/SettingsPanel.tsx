@@ -17,6 +17,7 @@ const KEY_LABELS: Record<string, string> = {
   trafikverket: "Trafikverket",
   nsw_transport: "Transport for NSW",
   trafficvision: "TrafficVision",
+  tomtom: "TomTom (traffic)",
 };
 
 export function ServerEditor({ onDone }: { onDone?: () => void }) {

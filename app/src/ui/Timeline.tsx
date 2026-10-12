@@ -3,12 +3,13 @@
 
 import { useRef, useState, useEffect } from "preact/hooks";
 import { frameIndex, playing, stepFrame, historyEnd, FPS_STEPS } from "../anim";
+import { histPicker } from "../history";
+import { HistoryBadge } from "./HistoryBar";
 import { liveSweep, pinned, backToLatest } from "../radar/controller";
 import { activeFrames, isForecast, loadProgress } from "../active";
 import { settings, update } from "../store";
 import { fmtTime } from "../util";
-import { gridDef } from "../weather";
-import { SkipBack, SkipForward, History, SlidersHorizontal, X } from "lucide-preact";
+import { SkipBack, SkipForward, CalendarClock, SlidersHorizontal, X } from "lucide-preact";
 import { RadarRecButton } from "./RadarRecButton"; // radar "record now" (cameras & recording)
 
 /** "90" → "1.5 h" style label for a span in minutes. */
@@ -27,58 +28,6 @@ const UNITS: [string, number][] = [
 
 function fpsLabel(f: number) {
   return f < 1 ? `${f} fps` : `${f % 1 ? f.toFixed(1) : f} fps`;
-}
-
-function toLocalInput(ms: number) {
-  const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000);
-  return d.toISOString().slice(0, 16);
-}
-
-function HistoryBox({ close }: { close: () => void }) {
-  const utc = settings.value.utc;
-  const now = Date.now();
-  const cur = historyEnd.value ?? now - 3600_000;
-  const [val, setVal] = useState(utc ? new Date(cur).toISOString().slice(0, 16) : toLocalInput(cur));
-  const w = settings.value.weather;
-  const d = w.kind === "grid" ? gridDef(w.id) : undefined;
-  const forecast = d && (d.source === "model" || d.source === "ndfd" || d.source === "future");
-  const metar = d?.source === "metar";
-  const go = (ms: number) => {
-    historyEnd.value = Math.min(ms, Date.now());
-    playing.value = false;
-    close();
-  };
-  if (forecast) return <p class="muted small">History isn't available for forecasts. Pick an earlier run from the header instead.</p>;
-  return (
-    <div class="tl-hist">
-      <div class="row">
-        <input type="datetime-local" value={val} max={utc ? new Date(now).toISOString().slice(0, 16) : toLocalInput(now)} onInput={(e) => setVal((e.target as HTMLInputElement).value)} />
-        <button class="btn sm" onClick={() => go(utc ? Date.parse(`${val}:00Z`) : Date.parse(val))}>
-          <History size={13} /> Load
-        </button>
-      </div>
-      <div class="chips">
-        {[
-          [1, "−1 h"],
-          [3, "−3 h"],
-          [6, "−6 h"],
-          [24, "−1 day"],
-        ].map(([h, l]) => (
-          <button key={l} class="chip" onClick={() => go((historyEnd.value ?? Date.now()) - +h * 3600_000)}>
-            {l}
-          </button>
-        ))}
-        {historyEnd.value && (
-          <button class="chip" onClick={() => go(historyEnd.value! + 3600_000)}>
-            +1 h
-          </button>
-        )}
-      </div>
-      <p class="muted small">
-        {w.kind === "radar" ? "Level II archive back to 1991." : metar ? "METAR analysis keeps only recent hours." : "Satellite and MRMS archives on AWS."} Times in {utc ? "UTC" : "local time"}.
-      </p>
-    </div>
-  );
 }
 
 function FramesBox() {
@@ -143,7 +92,7 @@ function FramesBox() {
 
 export function Timeline() {
   const fs = activeFrames.value;
-  const [pop, setPop] = useState<null | "frames" | "hist">(null);
+  const [pop, setPop] = useState<null | "frames">(null);
   const track = useRef<HTMLDivElement>(null);
   const drag = useRef(false);
   const wheelAcc = useRef(0);
@@ -168,12 +117,12 @@ export function Timeline() {
       {pop && (
         <div class="tl-pop glass">
           <div class="tl-pop-head">
-            <b>{pop === "hist" ? "History" : "Animation"}</b>
+            <b>Animation</b>
             <button class="icon-btn" onClick={() => setPop(null)}>
               <X size={14} />
             </button>
           </div>
-          {pop === "hist" ? <HistoryBox close={() => setPop(null)} /> : <FramesBox />}
+          <FramesBox />
         </div>
       )}
       <div class={`timeline glass ${hist ? "history" : ""}`}>
@@ -221,15 +170,18 @@ export function Timeline() {
           <SkipForward size={14} />
         </button>
         <span class="tl-sep" />
-        <button class={`tl-btn ${pop === "frames" ? "on" : ""}`} onClick={() => setPop(pop === "frames" ? null : "frames")} title="Frames, time span and speed">
+        <button class={`tl-btn ${pop === "frames" ? "on" : ""}`} onClick={() => (setPop(pop === "frames" ? null : "frames"), (histPicker.value = false))} title="Frames, time span and speed">
           <SlidersHorizontal size={13} />
-          <span>{settings.value.anim.mode === "time" ? spanLabel(settings.value.anim.minutes) : `${n}`}</span>
+          <span>{settings.value.anim.mode === "time" && !hist ? spanLabel(settings.value.anim.minutes) : `${n}`}</span>
           <span class="muted">· {fpsLabel(settings.value.anim.fps)}</span>
         </button>
-        <button class={`tl-btn ${pop === "hist" || hist ? "on" : ""}`} onClick={() => setPop(pop === "hist" ? null : "hist")} title="Load history">
-          <History size={13} />
-          {hist ? <span>{fmtTime(hist, true)}</span> : null}
-        </button>
+        {hist ? (
+          <HistoryBadge />
+        ) : (
+          <button class={`tl-btn ${histPicker.value ? "on" : ""}`} onClick={() => (histPicker.value = !histPicker.value)} title="Historical mode: pick a date and time range">
+            <CalendarClock size={13} />
+          </button>
+        )}
         <RadarRecButton />
         {(hist || (radar && pinned.value)) && (
           <button class="tl-btn live" onClick={() => backToLatest()} title="Back to live data">

@@ -3,7 +3,7 @@
 import { signal, computed, effect, batch } from "@preact/signals";
 import { api, lastHello } from "../api";
 import { settings, update } from "../store";
-import { framesToRequest, trimToSpan, historyEnd } from "../anim";
+import { framesToRequest, trimToSpan, historyEnd, histRange } from "../anim";
 import { frameIndex, playing, frameCount, setFrameReady } from "../anim";
 import { parseRaster, type Raster } from "./raster";
 import { GridLayer } from "./GridLayer";
@@ -204,6 +204,18 @@ export async function loadGridFrames(keepIndex = false) {
     if (w.storm) q.set("storm", w.storm);
     if (obs0 && historyEnd.value) q.set("end", String(historyEnd.value));
     const res = await api.get(`/api/grid/frames?${q}`);
+    // history window longer than one request: page back with earlier `end`s
+    const h = histRange.value;
+    if (obs0 && h && res.frames?.length) {
+      for (let k = 0; k < 6 && res.frames[0].time > h.start + 60_000; k++) {
+        q.set("end", String(res.frames[0].time - 1000));
+        const more = await api.get(`/api/grid/frames?${q}`).catch(() => null);
+        if (gen !== loadGen) return;
+        const older = (more?.frames ?? []).filter((f: GridFrame) => f.time < res.frames[0].time);
+        if (!older.length) break;
+        res.frames = [...older, ...res.frames];
+      }
+    }
     if (gen !== loadGen) return;
     const fs: GridFrame[] = obs0 ? trimToSpan(res.frames) : res.frames;
     const prevLen = gridFrames.value.length;
@@ -261,9 +273,9 @@ effect(() => {
   const w = settings.value.weather;
   const n = settings.value.grid.frames;
   const a = settings.value.anim;
-  const h = historyEnd.value;
+  const h = histRange.value;
   void api.base;
-  const sig = w.kind === "grid" ? `${w.id}|${w.run ?? ""}|${w.storm ?? ""}|${n}|${a.mode}|${a.minutes}|${h ?? ""}` : "";
+  const sig = w.kind === "grid" ? `${w.id}|${w.run ?? ""}|${w.storm ?? ""}|${n}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}` : "";
   if (sig === lastSig) return;
   const layerChanged = lastSig.split("|")[0] !== sig.split("|")[0];
   lastSig = sig;

@@ -436,7 +436,146 @@ const gDot = (c: CanvasRenderingContext2D, s: number) => {
   c.fill();
 };
 
+/* ---------- layers 0.5 ---------- */
+
+/** Saffir-Simpson colors: TD, TS, Cat 1–5. */
+export const TC_CATS: [string, string][] = [
+  ["td", "#5ebaff"],
+  ["ts", "#00faf4"],
+  ["c1", "#ffffcc"],
+  ["c2", "#ffe775"],
+  ["c3", "#ffc140"],
+  ["c4", "#ff8f20"],
+  ["c5", "#ff6060"],
+];
+export const TC_NOW_SIZE = 46;
+
+/** Current-position cyclone symbol: an eye with two curved arms, filled for hurricanes, open
+ * for storms/depressions; `ang` in radians (the animation turns it), mirrored in the south. */
+export function drawTcNow(c: CanvasRenderingContext2D, s: number, cat: string, south: boolean, ang: number) {
+  const color = TC_CATS.find((x) => x[0] === cat)?.[1] ?? "#ffffff";
+  const filled = cat.startsWith("c");
+  c.save();
+  c.translate(s / 2, s / 2);
+  c.rotate(ang);
+  if (south) c.scale(-1, 1);
+  const r = s * 0.15;
+  const arm = (k: number) => {
+    // arms trail clockwise outward (N hemisphere), so the turning symbol spins counter-clockwise
+    c.beginPath();
+    for (let i = 0; i <= 16; i++) {
+      const t = i / 16;
+      const rho = r + t * (s * 0.44 - r);
+      const a = -Math.PI / 2 + k * Math.PI + t * Math.PI * 0.62;
+      if (i === 0) c.moveTo(Math.cos(a) * rho, Math.sin(a) * rho);
+      else c.lineTo(Math.cos(a) * rho, Math.sin(a) * rho);
+    }
+    c.stroke();
+  };
+  c.lineCap = "round";
+  for (const [w, col] of [[filled ? 7 : 6, "rgba(0,0,0,.85)"], [filled ? 4 : 3, color]] as [number, string][]) {
+    c.lineWidth = w;
+    c.strokeStyle = col;
+    arm(0);
+    arm(1);
+  }
+  c.beginPath();
+  c.arc(0, 0, r, 0, Math.PI * 2);
+  if (filled) {
+    c.fillStyle = color;
+    c.fill();
+    c.lineWidth = 1.6;
+    c.strokeStyle = "rgba(0,0,0,.85)";
+    c.stroke();
+    c.beginPath();
+    c.arc(0, 0, r * 0.35, 0, Math.PI * 2);
+    c.fillStyle = "rgba(0,0,0,.7)";
+    c.fill();
+  } else {
+    c.lineWidth = 5;
+    c.strokeStyle = "rgba(0,0,0,.85)";
+    c.stroke();
+    c.lineWidth = 2.6;
+    c.strokeStyle = color;
+    c.stroke();
+  }
+  c.restore();
+}
+
+/** Volcano: triangle colored by the aviation color code. */
+function volcano(fill: string): Draw {
+  return (c, s) => {
+    c.fillStyle = fill;
+    c.strokeStyle = "rgba(0,0,0,.85)";
+    c.lineWidth = 1.5;
+    c.beginPath();
+    c.moveTo(s / 2, 2.5);
+    c.lineTo(s - 2, s - 3);
+    c.lineTo(2, s - 3);
+    c.closePath();
+    c.fill();
+    c.stroke();
+    c.fillStyle = "rgba(0,0,0,.55)";
+    c.beginPath();
+    c.moveTo(s / 2 - 2.2, 4.5);
+    c.lineTo(s / 2 + 2.2, 4.5);
+    c.lineTo(s / 2, 7.5);
+    c.fill();
+  };
+}
+
+/** Storm cell markers: TVS inverted red triangle, hail green triangle. */
+const tvsIcon: Draw = (c, s) => {
+  c.fillStyle = "#ef1b1b";
+  c.strokeStyle = "#fff";
+  c.lineWidth = 1.6;
+  c.beginPath();
+  c.moveTo(2, 3);
+  c.lineTo(s - 2, 3);
+  c.lineTo(s / 2, s - 2);
+  c.closePath();
+  c.fill();
+  c.stroke();
+};
+const hailIcon: Draw = (c, s) => {
+  c.fillStyle = "#22c55e";
+  c.strokeStyle = "rgba(0,0,0,.85)";
+  c.lineWidth = 1.4;
+  c.beginPath();
+  c.moveTo(s / 2, 2);
+  c.lineTo(s - 2, s - 3);
+  c.lineTo(2, s - 3);
+  c.closePath();
+  c.fill();
+  c.stroke();
+};
+/** Arrowhead (SDF) pointing up, rotated to the storm motion. */
+const head: Draw = (c, s) => {
+  c.fillStyle = "#fff";
+  c.beginPath();
+  c.moveTo(s / 2, 1);
+  c.lineTo(s - 2, s - 2);
+  c.lineTo(s / 2, s * 0.7);
+  c.lineTo(2, s - 2);
+  c.closePath();
+  c.fill();
+};
+
+function registerIcons05(map: MLMap) {
+  for (const [cat] of TC_CATS)
+    for (const south of [false, true]) {
+      const name = `tc-now-${cat}-${south ? "s" : "n"}`;
+      make(map, name, TC_NOW_SIZE, (c, s) => drawTcNow(c, s, cat, south, 0));
+    }
+  for (const [k, col] of [["green", "#22c55e"], ["yellow", "#facc15"], ["orange", "#f97316"], ["red", "#ef4444"], ["unassigned", "#9ca3af"]]) make(map, `volc-${k}`, 20, volcano(col));
+  make(map, "sa-tvs", 20, tvsIcon);
+  make(map, "sa-hail", 14, hailIcon);
+  make(map, "sa-head", 14, head, true);
+}
+/* ---------- end layers 0.5 ---------- */
+
 export function registerIcons(map: MLMap) {
+  registerIcons05(map);
   make(map, "cam-img", 22, camera);
   make(map, "cam-hls", 22, video);
   make(map, "cam-yt", 22, youtube);

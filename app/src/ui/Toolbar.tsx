@@ -9,6 +9,8 @@ import { Box } from "lucide-preact"; // 3D
 import { toggle3D } from "./View3D"; // 3D
 import { PaneButton } from "./Panes";
 import { ScreenRecButton } from "./ScreenRecButton";
+import { CalendarClock } from "lucide-preact"; // history
+import { histRange, histPicker, exitHistory } from "../history"; // history
 
 let locMarker: maplibregl.Marker | null = null;
 
@@ -84,6 +86,7 @@ export function Toolbar() {
       {t === "bearing" && bearingInfo.value && <div class="tool-readout glass">From {settings.value.radar.site}: {describeBearing()}</div>}
       <div class="toolbar glass">
         {btn(playing.value, "Play / pause loop (Space)", togglePlay, playing.value ? <Pause size={19} /> : <Play size={19} />, frameCount.value < 2)}
+        {/* history */ btn(!!histRange.value || histPicker.value, histRange.value ? "Historical mode on · click for live" : "Historical mode", () => (histRange.value ? exitHistory() : (histPicker.value = !histPicker.value)), <CalendarClock size={19} />)}
         {btn(false, "My location (L)", locate, <LocateFixed size={19} />)}
         {btn(false, "Screenshot (S)", screenshot, <Camera size={19} />)}
         <ScreenRecButton />

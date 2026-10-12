@@ -228,6 +228,52 @@ pub fn decode(bytes: &[u8], index: usize, opts: &DecodeOpts) -> Result<Grid> {
     Ok(grid.decimate(stride))
 }
 
+/// Decode only the grid points nearest to `pts` (lat, lon) from the first message: avoids
+/// holding a whole national grid when just a small window is needed (MRMS 3D cube).
+/// Missing / outside → NaN.
+pub fn decode_at(bytes: &[u8], opts: &DecodeOpts, pts: &[(f64, f64)]) -> Result<(Vec<f32>, i64)> {
+    let g = grib::from_bytes(bytes).map_err(|e| anyhow!("grib: {e}"))?;
+    let (_, sub) = g.iter().next().ok_or_else(|| anyhow!("empty grib"))?;
+    let def = G::try_from(sub.grid_def()).map_err(|e| anyhow!("grid def: {e}"))?;
+    let (nx, ny, proj, scan) = geometry(&def)?;
+    if scan & 0x30 != 0 {
+        bail!("unsupported scanning mode {scan:#x}");
+    }
+    let t = sub.temporal_info();
+    let valid_ms = t.forecast_time_target.or(t.ref_time).map(|d| d.timestamp_millis()).unwrap_or(0);
+    let mut order: Vec<(usize, usize)> = pts
+        .iter()
+        .enumerate()
+        .filter_map(|(k, &(lat, lon))| {
+            let (fi, fj) = proj.ij(lat, lon)?;
+            let (i, j) = (fi.round(), fj.round());
+            (i >= 0.0 && j >= 0.0 && (i as usize) < nx && (j as usize) < ny).then(|| (j as usize * nx + i as usize, k))
+        })
+        .collect();
+    order.sort_unstable();
+    let mut out = vec![f32::NAN; pts.len()];
+    if order.is_empty() {
+        return Ok((out, valid_ms));
+    }
+    let decoder = grib::Grib2SubmessageDecoder::from(sub).map_err(|e| anyhow!("decoder: {e}"))?;
+    let iter = decoder.dispatch().map_err(|e| anyhow!("unpack: {e}"))?;
+    let mut p = 0;
+    for (n, v) in iter.enumerate() {
+        if order[p].0 > n {
+            continue;
+        }
+        let ok = v.is_finite() && !opts.nodata.iter().any(|x| (v - x).abs() < 1e-3) && !opts.min_valid.map(|m| v <= m).unwrap_or(false) && v.abs() < 9.0e20;
+        while p < order.len() && order[p].0 == n {
+            out[order[p].1] = if ok { opts.transform.apply(v) } else { f32::NAN };
+            p += 1;
+        }
+        if p == order.len() {
+            break;
+        }
+    }
+    Ok((out, valid_ms))
+}
+
 /// Decode two messages (U and V) and combine into wind speed.
 pub fn decode_speed(u_bytes: &[u8], v_bytes: &[u8], opts: &DecodeOpts) -> Result<Grid> {
     let o = DecodeOpts { transform: Transform::None, ..opts.clone() };
@@ -267,6 +313,18 @@ mod tests {
         let (i, j) = g.proj.ij(20.005, -60.005).unwrap();
         assert!((i - 6999.0).abs() < 0.01 && (j - 3499.0).abs() < 0.01, "{i} {j}");
         assert!(g.data.iter().any(|&r| r != 0));
+        // point sampling agrees with the full decode
+        let opts = DecodeOpts { nodata: vec![-999.0, -99.0], ..Default::default() };
+        let pts: Vec<(f64, f64)> = (0..400).map(|k| (30.0 + (k / 20) as f64 * 0.5, -100.0 + (k % 20) as f64 * 0.7)).chain([(60.0, -100.0)]).collect();
+        let (vals, t) = decode_at(&b, &opts, &pts).unwrap();
+        assert!(t > 0);
+        assert!(vals[400].is_nan());
+        for (k, &(lat, lon)) in pts.iter().enumerate().take(400) {
+            match (g.sample(lat, lon), vals[k]) {
+                (None, v) => assert!(v.is_nan()),
+                (Some(a), v) => assert!((a - v).abs() < 0.01, "{lat},{lon}: {a} vs {v}"),
+            }
+        }
     }
 
     #[test]

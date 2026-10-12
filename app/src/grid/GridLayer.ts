@@ -3,6 +3,7 @@
 import type { CustomLayerInterface, CustomRenderMethodInput, Map as MLMap } from "maplibre-gl";
 import type { Raster } from "./raster";
 import { type ColorTable, rasterize, TEX_SIZE } from "../radar/colormaps";
+import { gateFor, mainGridKey, onGateChange } from "../gate";
 
 const VS = `#version 300 es
 precision highp float;
@@ -28,6 +29,9 @@ uniform float u_cmin;
 uniform float u_cmax;
 uniform float u_opacity;
 uniform float u_smooth;
+uniform float u_gmin;
+uniform float u_gmax;
+uniform int u_gabs;
 uniform int u_rgb;
 uniform sampler2D u_color;
 
@@ -78,6 +82,8 @@ void main() {
   } else {
     v = c;
   }
+  float gv = u_gabs == 1 ? abs(v) : v;
+  if (gv < u_gmin || gv > u_gmax) discard;
   vec4 col = texture(u_cmap, vec2(clamp((v - u_cmin) / (u_cmax - u_cmin), 0.0, 1.0), 0.5));
   float alpha = col.a * u_opacity;
   if (alpha <= 0.003) discard;
@@ -118,6 +124,9 @@ export class GridLayer implements CustomLayerInterface {
   table: ColorTable | null = null;
   opacity = 0.85;
   smooth = 0.5;
+  /** value-filter key (gate.ts); undefined = the main window's weather layer */
+  gateKey?: string;
+  private unGate?: () => void;
 
   onAdd(map: MLMap, gl: WebGL2RenderingContext) {
     this.map = map;
@@ -128,7 +137,7 @@ export class GridLayer implements CustomLayerInterface {
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || "link");
     this.prog = p;
-    for (const n of ["u_matrix", "u_data", "u_cmap", "u_size", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth", "u_rgb", "u_color"]) this.loc[n] = gl.getUniformLocation(p, n);
+    for (const n of ["u_matrix", "u_data", "u_cmap", "u_size", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth", "u_gmin", "u_gmax", "u_gabs", "u_rgb", "u_color"]) this.loc[n] = gl.getUniformLocation(p, n);
     this.vao = gl.createVertexArray()!;
     gl.bindVertexArray(this.vao);
     const vbo = gl.createBuffer()!;
@@ -138,10 +147,14 @@ export class GridLayer implements CustomLayerInterface {
     gl.enableVertexAttribArray(a);
     gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
+    this.unGate?.();
+    this.unGate = onGateChange(() => map.triggerRepaint());
     map.triggerRepaint();
   }
 
   onRemove() {
+    this.unGate?.();
+    this.unGate = undefined;
     const gl = this.gl;
     if (!gl) return;
     for (const t of this.textures.values()) gl.deleteTexture(t.tex);
@@ -273,6 +286,10 @@ export class GridLayer implements CustomLayerInterface {
       gl.uniform1f(L.u_cmin, t!.min);
       gl.uniform1f(L.u_cmax, t!.max);
       gl.uniform1f(L.u_smooth, t!.labels ? 0 : this.smooth);
+      const gate = t!.labels ? null : gateFor(this.gateKey ?? mainGridKey());
+      gl.uniform1f(L.u_gmin, gate ? gate[0] : -1e30);
+      gl.uniform1f(L.u_gmax, gate ? gate[1] : 1e30);
+      gl.uniform1i(L.u_gabs, gate?.[2] ? 1 : 0);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.texFor(r));
       gl.uniform1i(L.u_data, 0);

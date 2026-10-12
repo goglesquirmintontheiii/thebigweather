@@ -81,6 +81,8 @@ pub struct GridService {
     max_dim_mrms: usize,
     max_dim_goes: usize,
     rgbs: Mutex<(lru::LruCache<String, (Arc<RgbImage>, usize)>, usize, usize)>, // (cache, bytes, cap)
+    /// MRMS 3D cubes (header + voxels), byte-capped
+    cubes: Mutex<(lru::LruCache<String, Bytes>, usize, usize)>,
     /// optional folder of local files used as frames (offline use / case studies):
     /// files are named "<layer id with / as _>__<original name>"
     pub local_dir: RwLock<Option<PathBuf>>,
@@ -115,6 +117,7 @@ impl GridService {
             max_dim_mrms: if full { 7000 } else { 3500 },
             max_dim_goes: if full { 5424 } else { 2712 },
             rgbs: Mutex::new((lru::LruCache::unbounded(), 0, memory_mb * 1024 * 1024 * 3 / 10)),
+            cubes: Mutex::new((lru::LruCache::unbounded(), 0, (memory_mb * 1024 * 1024 / 8).clamp(16 << 20, 64 << 20))),
             local_dir: RwLock::new(None),
         })
     }
@@ -133,13 +136,18 @@ impl GridService {
     // ---------- fetch helpers ----------
 
     async fn list_cached(&self, bucket: &str, prefix: &str, ttl: u64) -> Result<Arc<Vec<s3::Object>>> {
-        let k = format!("{bucket}/{prefix}");
+        self.list_cached_at(&format!("https://{bucket}.s3.amazonaws.com"), prefix, ttl).await
+    }
+
+    /// Cached listing at any S3-compatible bucket URL.
+    async fn list_cached_at(&self, base: &str, prefix: &str, ttl: u64) -> Result<Arc<Vec<s3::Object>>> {
+        let k = format!("{base}/{prefix}");
         if let Some((t, v)) = self.listings.lock().get(&k) {
             if t.elapsed() < Duration::from_secs(ttl) {
                 return Ok(v.clone());
             }
         }
-        let l = s3::list(&self.http, bucket, prefix, None, None, 10).await?;
+        let l = s3::list_at(&self.http, base, prefix, None, None, 10).await?;
         let v = Arc::new(l.objects);
         let mut m = self.listings.lock();
         if m.len() > 300 {
@@ -217,9 +225,13 @@ impl GridService {
             "metar" => Ok(self.metar_frames(&l, n)),
             "goes" => self.goes_frames(&l, n, end).await,
             "future" => self.future_frames(&l).await,
+            "opera" => self.opera_frames(&l, n, end).await,
+            "cwa" => self.cwa_frames(&l, n, end).await,
             _ => bail!("unknown source"),
         };
         let name = match l.source {
+            "opera" => "OPERA European radar (EUMETNET)",
+            "cwa" => "Taiwan CWA radar",
             "mrms" => "MRMS",
             "model" => "Models",
             "ndfd" => "NDFD",
@@ -251,7 +263,7 @@ impl GridService {
                     frames.push(FrameInfo { key: format!("local|{}|{}|{}", l.id, n, m.index), time: m.valid_ms, label: String::new() });
                 }
             } else {
-                let t = goes::time_from_name(&n).or_else(|| {
+                let t = goes::time_from_name(&n).or_else(|| super::intl::opera_parse(n.split("__").last().unwrap_or("")).map(|x| x.0)).or_else(|| super::intl::cwa_time(n.split("__").last().unwrap_or(""))).or_else(|| {
                     let stem = n.rsplit('_').next()?.split('.').next()?;
                     chrono::NaiveDateTime::parse_from_str(stem, "%Y%m%d-%H%M%S").ok().map(|d| d.and_utc().timestamp_millis())
                 });
@@ -295,6 +307,67 @@ impl GridService {
             })
             .collect();
         Ok(FramesResp { frames, ..Default::default() })
+    }
+
+    /// OPERA composites from the rolling 24 h archive (5-min DBZH, 15-min RATE).
+    async fn opera_frames(&self, l: &LayerDef, n: usize, end: Option<chrono::DateTime<Utc>>) -> Result<FramesResp> {
+        let now = end.unwrap_or_else(Utc::now);
+        let end_ms = now.timestamp_millis();
+        let mut frames: Vec<FrameInfo> = vec![];
+        for back in 0..2 {
+            let d = now - chrono::Duration::days(back);
+            let prefix = format!("{:04}/{:02}/{:02}/OPERA/COMP/", d.year(), d.month(), d.day());
+            let objs = self.list_cached_at(super::intl::OPERA_BASE, &prefix, 60).await?;
+            let mut v: Vec<FrameInfo> = objs
+                .iter()
+                .filter_map(|o| {
+                    let (t, p) = super::intl::opera_parse(&o.key)?;
+                    (p == l.product && t <= end_ms).then(|| FrameInfo { key: format!("opera|{}|{}", l.id, o.key), time: t, label: String::new() })
+                })
+                .collect();
+            v.extend(frames);
+            frames = v;
+            if frames.len() >= n {
+                break;
+            }
+        }
+        if frames.is_empty() {
+            bail!("no OPERA {} files in the last 24 h", l.product);
+        }
+        frames.sort_by_key(|f| f.time);
+        let k = frames.len().saturating_sub(n);
+        Ok(FramesResp { frames: frames.split_off(k), ..Default::default() })
+    }
+
+    /// Taiwan CWA composite reflectivity (10-min; object names are Taipei local time).
+    async fn cwa_frames(&self, l: &LayerDef, n: usize, end: Option<chrono::DateTime<Utc>>) -> Result<FramesResp> {
+        let now = end.unwrap_or_else(Utc::now);
+        let end_ms = now.timestamp_millis();
+        let local = now + chrono::Duration::hours(8);
+        let mut frames: Vec<FrameInfo> = vec![];
+        for back in 0..3 {
+            let d = local - chrono::Duration::days(back);
+            let prefix = format!("history/Observation/{:04}{:02}{:02}", d.year(), d.month(), d.day());
+            let objs = self.list_cached_at(super::intl::CWA_BASE, &prefix, 60).await?;
+            let mut v: Vec<FrameInfo> = objs
+                .iter()
+                .filter_map(|o| {
+                    let t = super::intl::cwa_time(&o.key)?;
+                    (t <= end_ms).then(|| FrameInfo { key: format!("cwa|{}|{}", l.id, o.key), time: t, label: String::new() })
+                })
+                .collect();
+            v.extend(frames);
+            frames = v;
+            if frames.len() >= n {
+                break;
+            }
+        }
+        if frames.is_empty() {
+            bail!("no CWA radar files found");
+        }
+        frames.sort_by_key(|f| f.time);
+        let k = frames.len().saturating_sub(n);
+        Ok(FramesResp { frames: frames.split_off(k), ..Default::default() })
     }
 
     async fn model_runs(&self, m: &sources::ModelDef) -> Result<Vec<(String, i64, Vec<u32>, Vec<String>)>> {
@@ -637,6 +710,20 @@ impl GridService {
                 })
                 .await
             }
+            Some("opera") if parts.len() == 3 => {
+                let l = self.layer(parts[1])?.clone();
+                if super::intl::opera_parse(parts[2]).map(|x| x.1 != l.product).unwrap_or(true) || parts[2].contains("..") {
+                    bail!("bad OPERA key");
+                }
+                let b = self.fetch(&format!("{}/{}", super::intl::OPERA_BASE, parts[2]), None, true).await?;
+                let md = self.max_dim_mrms;
+                self.blocking(move || super::intl::decode_odim(&b, &l.product, md, l.min_valid)).await
+            }
+            Some("cwa") if parts.len() == 3 => {
+                let t = super::intl::cwa_time(parts[2]).filter(|_| parts[2].starts_with("history/Observation/") && !parts[2].contains("..")).ok_or_else(|| anyhow!("bad CWA key"))?;
+                let b = self.fetch(&format!("{}/{}", super::intl::CWA_BASE, parts[2]), None, true).await?;
+                self.blocking(move || super::intl::decode_cwa(&b, t)).await
+            }
             Some("fdiff") if parts.len() == 6 => {
                 // accumulation between two forecast hours of one run (e.g. snowfall from now)
                 let fh: u32 = parts[3].parse()?;
@@ -695,9 +782,16 @@ impl GridService {
                 let b = tokio::fs::read(dir.join(parts[2])).await?;
                 let idx: usize = parts[3].parse()?;
                 let md = if l.source == "goes" { self.max_dim_goes } else { self.max_dim_mrms };
+                let name = parts[2].to_string();
                 self.blocking(move || {
                     if l.source == "goes" {
                         return goes::decode_cmip(&b, md);
+                    }
+                    if l.source == "opera" {
+                        return super::intl::decode_odim(&b, &l.product, md, l.min_valid);
+                    }
+                    if l.source == "cwa" {
+                        return super::intl::decode_cwa(&b, super::intl::cwa_time(name.split("__").last().unwrap_or("")).unwrap_or(0));
                     }
                     let raw = maybe_gunzip(&b)?;
                     let opts = DecodeOpts { nodata: l.nodata.clone(), min_valid: l.min_valid, transform: l.transform, max_dim: md };
@@ -869,6 +963,137 @@ impl GridService {
             return Ok(None);
         }
         Ok(self.grid(key).await?.sample(lat, lon))
+    }
+
+    // ---------- MRMS 3D reflectivity cube ----------
+
+    /// MergedReflectivityQC levels (km MSL) published on AWS.
+    pub const MRMS_3D_LEVELS: [&'static str; 33] = [
+        "00.50", "00.75", "01.00", "01.25", "01.50", "01.75", "02.00", "02.25", "02.50", "02.75", "03.00", "03.50", "04.00", "04.50", "05.00", "05.50", "06.00", "06.50", "07.00", "07.50", "08.00",
+        "08.50", "09.00", "10.00", "11.00", "12.00", "13.00", "14.00", "15.00", "16.00", "17.00", "18.00", "19.00",
+    ];
+
+    /// Newest object of one 3D level at or before `t` (within 10 minutes).
+    async fn mrms3d_key(&self, level: &str, t: chrono::DateTime<Utc>) -> Option<(String, i64)> {
+        let t_ms = t.timestamp_millis() + 60_000;
+        let mut best: Option<(String, i64)> = None;
+        for back in 0..2 {
+            let d = t - chrono::Duration::minutes(10 * back);
+            if back == 1 && d.day() == t.day() {
+                break;
+            }
+            let prefix = format!("CONUS/MergedReflectivityQC_{level}/{}/", ymd(d));
+            let objs = self.list_cached(sources::MRMS_BUCKET, &prefix, 50).await.ok()?;
+            for o in objs.iter() {
+                let stem = o.key.rsplit('_').next().unwrap_or("").trim_end_matches(".grib2.gz");
+                let Ok(ot) = chrono::NaiveDateTime::parse_from_str(stem, "%Y%m%d-%H%M%S") else { continue };
+                let ot = ot.and_utc().timestamp_millis();
+                if ot <= t_ms && t_ms - ot <= 11 * 60_000 && best.as_ref().map(|b| ot > b.1).unwrap_or(true) {
+                    best = Some((o.key.clone(), ot));
+                }
+            }
+        }
+        best
+    }
+
+    /// 3D reflectivity cube over `bbox` (w, s, e, n) from the 33 MRMS levels nearest `time`.
+    /// Same body layout as the Level II volume (u32 header length, JSON, u8 voxels), with a
+    /// regular lat/lon grid: header `proj: "latlon"`, `lon0`/`lat0` = south-west cell centre.
+    pub async fn mrms_volume3d(&self, time: Option<i64>, bbox: [f64; 4]) -> Result<Bytes> {
+        const RES: f64 = 0.01;
+        let [w, s, e, n] = [bbox[0].max(-129.995), bbox[1].max(20.005), bbox[2].min(-60.005), bbox[3].min(54.995)];
+        if !(w < e && s < n) {
+            bail!("bbox not found in the MRMS CONUS domain");
+        }
+        let kx = ((e - w) / RES / 400.0).ceil().max(1.0);
+        let ky = ((n - s) / RES / 400.0).ceil().max(1.0);
+        let (dlon, dlat) = (RES * kx, RES * ky);
+        // snap to MRMS cell centres (…5 in the third decimal)
+        let lon0 = ((w - 0.005) / RES).round() * RES + 0.005;
+        let lat0 = ((s - 0.005) / RES).round() * RES + 0.005;
+        let nx = (((e - lon0) / dlon).floor() as usize + 1).clamp(1, 400);
+        let ny = (((n - lat0) / dlat).floor() as usize + 1).clamp(1, 400);
+        let t = time.and_then(chrono::DateTime::from_timestamp_millis).filter(|t| *t <= Utc::now()).unwrap_or_else(Utc::now);
+        let keys = futures::future::join_all(Self::MRMS_3D_LEVELS.iter().map(|l| self.mrms3d_key(l, t))).await;
+        let base = keys.iter().flatten().map(|k| k.1).max().ok_or_else(|| anyhow!("no MRMS 3D reflectivity found near that time"))?;
+        let ck = format!("{base}|{lon0:.3}|{lat0:.3}|{nx}|{ny}|{dlon:.3}|{dlat:.3}");
+        if let Some(b) = self.cubes.lock().0.get(&ck) {
+            return Ok(b.clone());
+        }
+        let lock = self.inflight.lock().entry(ck.clone()).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone();
+        let _g = lock.lock().await;
+        if let Some(b) = self.cubes.lock().0.get(&ck) {
+            return Ok(b.clone());
+        }
+        let res = self.build_cube(&keys, base, (lon0, lat0, dlon, dlat, nx, ny)).await;
+        self.inflight.lock().remove(&ck);
+        let b = Bytes::from(res?);
+        let mut c = self.cubes.lock();
+        if let Some(old) = c.0.put(ck, b.clone()) {
+            c.1 -= old.len();
+        }
+        c.1 += b.len();
+        while c.1 > c.2 && c.0.len() > 1 {
+            match c.0.pop_lru() {
+                Some((_, old)) => c.1 -= old.len(),
+                None => break,
+            }
+        }
+        Ok(b)
+    }
+
+    async fn build_cube(&self, keys: &[Option<(String, i64)>], base: i64, g: (f64, f64, f64, f64, usize, usize)) -> Result<Vec<u8>> {
+        use futures::StreamExt;
+        let (lon0, lat0, dlon, dlat, nx, ny) = g;
+        // ignore levels from a different scan than the newest one
+        let wanted: Vec<(usize, String)> = keys.iter().enumerate().filter_map(|(i, k)| k.as_ref().filter(|k| (base - k.1).abs() <= 150_000).map(|k| (i, k.0.clone()))).collect();
+        let files: Vec<(usize, Result<Bytes>)> = futures::stream::iter(wanted.into_iter().map(|(i, k)| async move { (i, self.fetch(&s3::object_url(sources::MRMS_BUCKET, &k), None, true).await) }))
+            .buffer_unordered(6)
+            .collect()
+            .await;
+        let mut got = vec![];
+        for (i, r) in files {
+            match r {
+                Ok(b) => got.push((i, b)),
+                Err(e) => tracing::debug!("mrms 3d level {i}: {e}"),
+            }
+        }
+        if got.is_empty() {
+            bail!("MRMS 3D levels could not be downloaded");
+        }
+        let nz = Self::MRMS_3D_LEVELS.len();
+        let out = self
+            .blocking(move || {
+                use rayon::prelude::*;
+                let pts: Vec<(f64, f64)> = (0..nx * ny).map(|k| (lat0 + (k / nx) as f64 * dlat, lon0 + (k % nx) as f64 * dlon)).collect();
+                let opts = DecodeOpts { nodata: vec![-999.0, -99.0], min_valid: Some(-30.0), ..Default::default() };
+                let layers: Vec<(usize, Vec<u8>)> = got
+                    .par_iter()
+                    .filter_map(|(i, b)| {
+                        let raw = maybe_gunzip(b).ok()?;
+                        let (vals, _) = decode::decode_at(&raw, &opts, &pts).ok()?;
+                        Some((*i, vals.iter().map(|&v| if v.is_finite() { (v * 2.0 + 66.0).round().clamp(1.0, 255.0) as u8 } else { 0 }).collect()))
+                    })
+                    .collect();
+                let mut vox = vec![0u8; nx * ny * nz];
+                for (i, l) in layers {
+                    vox[i * nx * ny..(i + 1) * nx * ny].copy_from_slice(&l);
+                }
+                let levels: Vec<f64> = Self::MRMS_3D_LEVELS.iter().map(|l| l.parse::<f64>().unwrap_or(0.0) * 1000.0).collect();
+                let hdr = serde_json::json!({
+                    "nx": nx, "ny": ny, "nz": nz, "proj": "latlon",
+                    "lon0": (lon0 * 1000.0).round() / 1000.0, "lat0": (lat0 * 1000.0).round() / 1000.0,
+                    "dlon": dlon, "dlat": dlat, "levels": levels,
+                    "scale": 2.0, "offset": 66.0, "moment": "REF", "time": base, "site": "MRMS", "elev_m": 0.0,
+                });
+                Ok(crate::radar::volume3d::with_header(&hdr, &vox))
+            })
+            .await;
+        match &out {
+            Ok(_) => self.health.ok("grid-mrms3d", "MRMS 3D reflectivity", ""),
+            Err(e) => self.health.err("grid-mrms3d", "MRMS 3D reflectivity", e),
+        }
+        out
     }
 
     // ---------- background: METAR snapshots ----------

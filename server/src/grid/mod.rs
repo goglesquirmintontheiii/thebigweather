@@ -7,6 +7,7 @@
 
 pub mod decode;
 pub mod goes;
+pub mod intl;
 pub mod rgb;
 pub mod metar;
 pub mod service;
@@ -27,6 +28,61 @@ pub enum Proj {
     PolarStereo { r: f64, lov: f64, lad: f64, south: bool, x0: f64, y0: f64, dx: f64, dy: f64 },
     /// GOES fixed grid: scan angles (radians) x = x0 + i*dx, y = y0 + j*dy
     Geos { h: f64, r_eq: f64, r_pol: f64, lon0: f64, x0: f64, dx: f64, y0: f64, dy: f64 },
+    /// Lambert azimuthal equal-area (ellipsoidal, Snyder): x = x0 + i*dx, y = y0 + j*dy (m)
+    Laea(Laea),
+}
+
+/// Ellipsoidal LAEA parameters (oblique aspect) plus the grid placement.
+#[derive(Debug, Clone, Copy)]
+pub struct Laea {
+    pub lon0: f64,
+    pub a: f64,
+    pub e: f64,
+    qp: f64,
+    rq: f64,
+    d: f64,
+    sb1: f64,
+    cb1: f64,
+    /// projected (no false easting) coordinates of cell (0,0) centre and cell sizes
+    pub x0: f64,
+    pub y0: f64,
+    pub dx: f64,
+    pub dy: f64,
+}
+
+impl Laea {
+    /// `a`/`e`: ellipsoid (e = 0 for a sphere); angles in degrees.
+    pub fn new(lat0: f64, lon0: f64, a: f64, e: f64) -> Laea {
+        let q = |phi: f64| -> f64 {
+            let s = phi.sin();
+            if e < 1e-12 {
+                return 2.0 * s;
+            }
+            (1.0 - e * e) * (s / (1.0 - e * e * s * s) - (1.0 / (2.0 * e)) * ((1.0 - e * s) / (1.0 + e * s)).ln())
+        };
+        let p1 = lat0.to_radians();
+        let qp = q(std::f64::consts::FRAC_PI_2);
+        let b1 = (q(p1) / qp).clamp(-1.0, 1.0).asin();
+        let rq = a * (qp / 2.0).sqrt();
+        let m1 = p1.cos() / (1.0 - e * e * p1.sin().powi(2)).sqrt();
+        let d = a * m1 / (rq * b1.cos());
+        Laea { lon0: lon0.to_radians(), a, e, qp, rq, d, sb1: b1.sin(), cb1: b1.cos(), x0: 0.0, y0: 0.0, dx: 1.0, dy: 1.0 }
+    }
+
+    /// Projected x, y (m) of a lat/lon (degrees).
+    pub fn xy(&self, lat: f64, lon: f64) -> (f64, f64) {
+        let e = self.e;
+        let s = lat.to_radians().sin();
+        let q = if e < 1e-12 { 2.0 * s } else { (1.0 - e * e) * (s / (1.0 - e * e * s * s) - (1.0 / (2.0 * e)) * ((1.0 - e * s) / (1.0 + e * s)).ln()) };
+        let beta = (q / self.qp).clamp(-1.0, 1.0).asin();
+        let dl = wrap180(lon - self.lon0.to_degrees()).to_radians();
+        let den = 1.0 + self.sb1 * beta.sin() + self.cb1 * beta.cos() * dl.cos();
+        if den <= 1e-12 {
+            return (f64::NAN, f64::NAN);
+        }
+        let b = self.rq * (2.0 / den).sqrt();
+        (b * self.d * beta.cos() * dl.sin(), (b / self.d) * (self.cb1 * beta.sin() - self.sb1 * beta.cos() * dl.cos()))
+    }
 }
 
 fn wrap180(mut d: f64) -> f64 {
@@ -114,6 +170,13 @@ impl Proj {
             Proj::PolarStereo { x0, y0, dx, dy, .. } => {
                 let (x, y) = self.polar_xy(lat, lon);
                 Some(((x - x0) / dx, (y - y0) / dy))
+            }
+            Proj::Laea(ref l) => {
+                let (x, y) = l.xy(lat, lon);
+                if !x.is_finite() {
+                    return None;
+                }
+                Some(((x - l.x0) / l.dx, (y - l.y0) / l.dy))
             }
             Proj::Geos { h, r_eq, r_pol, lon0, x0, dx, y0, dy } => {
                 let phi = lat.to_radians();
@@ -245,6 +308,7 @@ impl Grid {
             Proj::Lambert { n, f, r, lov, x0, y0, dx, dy } => Proj::Lambert { n, f, r, lov, x0, y0, dx: dx * stride as f64, dy: dy * stride as f64 },
             Proj::PolarStereo { r, lov, lad, south, x0, y0, dx, dy } => Proj::PolarStereo { r, lov, lad, south, x0, y0, dx: dx * stride as f64, dy: dy * stride as f64 },
             Proj::Geos { h, r_eq, r_pol, lon0, x0, dx, y0, dy } => Proj::Geos { h, r_eq, r_pol, lon0, x0, dx: dx * stride as f64, y0, dy: dy * stride as f64 },
+            Proj::Laea(l) => Proj::Laea(Laea { dx: l.dx * stride as f64, dy: l.dy * stride as f64, ..l }),
         };
         Grid { nx, ny, proj, data, ..self }
     }

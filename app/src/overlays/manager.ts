@@ -8,6 +8,7 @@ import { OVERLAYS, overlayDef, styleFor, optsFor, type OverlayDef, type Popup } 
 import { openCamera } from "../ui/CameraPanels";
 import { registerIcons } from "./icons";
 import { fileOverlays, fileLayers, fileClick, ensureFileData, fileSourceOpts } from "./files";
+import { histRange, histTime, histAllowed, histFeedFor, histFeed } from "../history"; // history replay
 
 export const ovlStatus = signal<Record<string, { loading?: boolean; error?: string; count?: number; note?: string }>>({});
 export const popup = signal<{ x: number; y: number; lng: number; lat: number; p: Popup; overlay: string } | null>(null);
@@ -46,17 +47,23 @@ function addOverlay(m: MLMap, id: string) {
   const def = overlayDef(id);
   const specs = def ? def.layers(src, styleFor(def), optsFor(def)) : fileLayers(id, src);
   if (!specs) return;
+  /* ---------- layers 0.5: raster tile overlays (traffic) ---------- */
+  if (def?.raster && !m.getSource(src)) m.addSource(src, { type: "raster", ...def.raster(optsFor(def)) } as any);
+  /* ---------- end layers 0.5 ---------- */
   if (!m.getSource(src)) m.addSource(src, { type: "geojson", data: (data.get(id) ?? EMPTY) as any, ...(def ? def.source ?? {} : fileSourceOpts(id)) });
   if (!def && !data.has(id)) ensureFileData(id);
   const below = m.getLayer("ovl-alerts-fill") ? "ovl-alerts-fill" : firstTop(m);
   const user = settings.value.ovl[id] ?? {};
   for (const spec0 of specs) {
     if (m.getLayer(spec0.id)) continue;
+    baseFilter.set(spec0.id, (spec0 as any).filter); // history replay
     const spec: any = { ...spec0 };
     if (user.minzoom) spec.minzoom = Math.max(spec.minzoom ?? 0, user.minzoom);
     const under = !user.top && (spec.type === "fill" || spec.type === "heatmap" || (spec.type === "line" && !id.startsWith("file:")));
+    // layers 0.5: raster overlays sit right under the weather picture (above the basemap) unless "draw above weather"
+    const rasterAt = spec.type === "raster" ? (user.top ? below : m.getStyle().layers.find((l) => !l.id.startsWith("base-"))?.id) : null;
     try {
-      m.addLayer(spec as any, under ? below : m.getLayer("ovl-tools-line") ? "ovl-tools-line" : undefined);
+      m.addLayer(spec as any, rasterAt !== null ? rasterAt : under ? below : m.getLayer("ovl-tools-line") ? "ovl-tools-line" : undefined);
     } catch (e) {
       console.warn("overlay layer", spec.id, e);
     }
@@ -67,7 +74,7 @@ function signature(id: string): string {
   const def = overlayDef(id);
   const o = settings.value.ovl[id] ?? {};
   // METAR labels depend on temperature units
-  return JSON.stringify([o.color, o.opacity, o.size, o.labels, o.minzoom, o.top, def ? optsFor(def) : null, id === "metar" ? settings.value.units : 0]);
+  return JSON.stringify([o.color, o.opacity, o.size, o.labels, o.minzoom, o.top, def ? optsFor(def) : null, id === "metar" ? settings.value.units : 0, histKey()]);
 }
 
 function viewParams(def: OverlayDef, m: MLMap): Record<string, string> | null {
@@ -81,6 +88,19 @@ function viewParams(def: OverlayDef, m: MLMap): Record<string, string> | null {
     const e = Math.min(180, b.getEast() + pad(b.getEast(), b.getWest()));
     const so = Math.max(-85, b.getSouth() - pad(b.getNorth(), b.getSouth()));
     const n = Math.min(85, b.getNorth() + pad(b.getNorth(), b.getSouth()));
+    /* layers 0.5: feeds with an area limit get a box around the center that fits it */
+    if (def.maxKm2) {
+      const c = m.getCenter();
+      const kx = 111.32 * Math.cos((c.lat * Math.PI) / 180);
+      const area = (e - w) * kx * (n - so) * 110.57;
+      if (area > def.maxKm2) {
+        const f = Math.sqrt(def.maxKm2 / area) * 0.98;
+        const hw = ((e - w) * f) / 2;
+        const hh = ((n - so) * f) / 2;
+        return { bbox: [c.lng - hw, c.lat - hh, c.lng + hw, c.lat + hh].map((x) => x.toFixed(4)).join(","), z: m.getZoom().toFixed(1) };
+      }
+      return { bbox: [w, so, e, n].map((x) => x.toFixed(4)).join(","), z: m.getZoom().toFixed(1) };
+    }
     return { bbox: [w, so, e, n].map((x) => x.toFixed(2)).join(","), z: m.getZoom().toFixed(1) };
   }
   const c = m.getCenter();
@@ -94,26 +114,28 @@ function viewParams(def: OverlayDef, m: MLMap): Record<string, string> | null {
 async function fetchOverlay(id: string) {
   const def = overlayDef(id);
   if (!def || def.feed === "client" || !map || !api.base) return;
+  if (histRange.value) return fetchHistOverlay(id, def); // history replay
   const vp = viewParams(def, map);
   if (vp === null) {
     setData(id, EMPTY);
     setStatus(id, { note: `Zoom in to ${def.minzoom}+` });
     return;
   }
-  const q = new URLSearchParams({ ...optsFor(def), ...vp });
+  const q = new URLSearchParams({ ...(def.params ?? {}), ...optsFor(def), ...vp });
   // cameras: sources switched off are filtered on the server (before clustering)
   const off = settings.value.ovl[id]?.opts?.off;
   if (id === "cameras" && off !== undefined) q.set("off", off);
   setStatus(id, { ...ovlStatus.value[id], loading: true, error: undefined });
   try {
-    let fc = await api.get(`/api/ovl/${def.feed ?? id}?${q}`);
+    let fc = await api.get(`${def.path ?? `/api/ovl/${def.feed ?? id}`}?${q}`);
     if (!isOn(id)) return;
+    if (def.prepare) fc = def.prepare(fc, optsFor(def)); // layers 0.5: derived features
     if (id === "cameras") ovlMeta.value = { ...ovlMeta.value, cameras: fc.sources, camdb: { db: fc.db, msg: fc.db_msg, total: fc.total } };
     if (id === "ships") ovlMeta.value = { ...ovlMeta.value, ships: fc.sources };
     if (id === "waffle" && optsFor(def).status === "on") fc = await withWaffleStatus(fc);
     setData(id, fc);
     const n = fc.features?.reduce?.((a: number, f: any) => a + (f.properties?.cl ?? 1), 0) ?? 0;
-    setStatus(id, { count: id === "cameras" ? n : fc.features?.length ?? 0, note: fc.loading || fc.pending ? "Loading…" : undefined });
+    setStatus(id, { count: id === "cameras" ? n : fc._count ?? fc.features?.length ?? 0, note: fc.loading || fc.pending ? "Loading…" : undefined });
     // flights: the server is still fetching this area — ask again shortly
     if (fc.pending) window.setTimeout(() => isOn(id) && fetchOverlay(id), 3000);
   } catch (e: any) {
@@ -159,7 +181,7 @@ export function setData(id: string, fc: any) {
 function schedule(id: string) {
   clearInterval(timers.get(id));
   const def = overlayDef(id);
-  if (!def || !def.refresh || def.feed === "client") return;
+  if (!def || !def.refresh || def.feed === "client" || histRange.value) return;
   const secs = Math.max(5, settings.value.ovl[id]?.refresh ?? def.refresh);
   timers.set(id, window.setInterval(() => fetchOverlay(id), secs * 1000));
 }
@@ -168,7 +190,8 @@ function schedule(id: string) {
 function activeIds(): string[] {
   const ids = OVERLAYS.filter((d) => isOn(d.id)).map((d) => d.id);
   for (const f of fileOverlays.value) if (isOn(`file:${f.id}`)) ids.push(`file:${f.id}`);
-  return ids;
+  // history mode: live-only overlays are hidden
+  return histRange.value ? ids.filter((id) => histAllowed(id)) : ids;
 }
 
 function sync() {
@@ -197,7 +220,7 @@ function sync() {
     }
     if (prev === sig && m.getSource(`o-${id}`)) continue;
     const def = overlayDef(id);
-    const opts = JSON.stringify([def ? optsFor(def) : null, settings.value.ovl[id]?.opts?.off ?? null]);
+    const opts = JSON.stringify([def ? optsFor(def) : null, settings.value.ovl[id]?.opts?.off ?? null, histKey()]);
     // client-side overlays (files, my cameras, satellites) supply their own data
     const client = !def || def.feed === "client";
     const optsChanged = !client && (fetchedOpts.get(id) !== opts || !data.has(id));
@@ -377,8 +400,71 @@ export function refreshOverlay(id: string) {
   fetchOverlay(id);
 }
 
+// ---------- history replay ----------
+/** each overlay layer's own filter, combined with the replay time filter */
+const baseFilter = new Map<string, any>();
+function histKey() {
+  const h = histRange.value;
+  return h ? `${h.start}-${h.end}` : "";
+}
+
+async function fetchHistOverlay(id: string, def: OverlayDef) {
+  const hf = histFeedFor(def);
+  if (!hf) return;
+  const key = histKey();
+  setStatus(id, { loading: true });
+  try {
+    const fc = await histFeed(hf.feed, hf.kind === "valid" ? Math.round(histTime.value / 300_000) * 300_000 : undefined);
+    if (!isOn(id) || key !== histKey()) return;
+    setData(id, fc);
+    applyHistFilter(id);
+    setStatus(id, { count: fc.features?.length ?? 0, note: "Replay" });
+  } catch (e: any) {
+    setStatus(id, { error: e.message });
+  }
+}
+
+/** Show only what was in effect (or reported) at the frame time: a layer filter, no new data. */
+function applyHistFilter(id: string) {
+  const m = map;
+  const hf = histFeedFor(overlayDef(id));
+  if (!m || !hf || hf.kind === "valid" || !m.getStyle() || !histRange.value) return;
+  const T = histTime.value;
+  const time: any = hf.kind === "span" ? ["all", ["<=", ["get", "t0"], T], [">", ["get", "t1"], T]] : ["<=", ["get", "t"], T];
+  const src = `o-${id}`;
+  // storm reports: ring the last 30 minutes' reports
+  if (hf.kind === "report" && m.getSource(src) && !m.getLayer(`${src}-recent`)) {
+    const first = m.getStyle().layers.find((l) => l.id.startsWith(`${src}-`))?.id;
+    m.addLayer(
+      { id: `${src}-recent`, type: "circle", source: src, paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 8, 9, 15], "circle-color": "#fde047", "circle-opacity": 0.28, "circle-stroke-color": "#fde047", "circle-stroke-width": 2 } },
+      first,
+    );
+  }
+  for (const l of m.getStyle().layers) {
+    if (!l.id.startsWith(`${src}-`)) continue;
+    const f = l.id === `${src}-recent` ? ["all", time, [">", ["get", "t"], T - 30 * 60_000]] : baseFilter.get(l.id) ? ["all", baseFilter.get(l.id), time] : time;
+    m.setFilter(l.id, f);
+  }
+}
+
+let validTimer: number | undefined;
+effect(() => {
+  const T = histTime.value;
+  if (!T) return;
+  for (const id of shown.keys()) {
+    const hf = histFeedFor(overlayDef(id));
+    if (!hf) continue;
+    if (hf.kind !== "valid") applyHistFilter(id);
+    else {
+      clearTimeout(validTimer);
+      validTimer = window.setTimeout(() => fetchOverlay(id), 400);
+    }
+  }
+});
+
 // react to settings / connection
 effect(() => {
+  void histRange.value; // history mode on/off/window
   void settings.value.ovl;
   void settings.value.units.temp;
   void fileOverlays.value;

@@ -131,6 +131,10 @@ pub struct RadarService {
     pub disk_cap: u64,
     volumes: Mutex<SizedLru<Arc<Volume>>>,
     encoded: Mutex<SizedLru<Bytes>>,
+    /// 3D volumes (header + voxels), byte-capped
+    vol3d: Mutex<SizedLru<Bytes>>,
+    /// rotation GeoJSON per volume key
+    rotation: Mutex<lru::LruCache<String, Bytes>>,
     decode_sem: Arc<Semaphore>,
     pub health: Arc<Health>,
     pub l3_catalog: Vec<serde_json::Value>,
@@ -196,6 +200,8 @@ impl RadarService {
             disk_cap,
             volumes: Mutex::new(SizedLru::new(memory_mb * 1024 * 1024 * 3 / 4)),
             encoded: Mutex::new(SizedLru::new(memory_mb * 1024 * 1024 / 4)),
+            vol3d: Mutex::new(SizedLru::new((memory_mb * 1024 * 1024 / 8).clamp(16 << 20, 64 << 20))),
+            rotation: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(48).unwrap())),
             decode_sem: Arc::new(Semaphore::new(threads.max(1))),
             health,
             l3_catalog,
@@ -388,6 +394,38 @@ impl RadarService {
         .await??;
         let b = Bytes::from(bytes);
         self.encoded.lock().put(ck, b.clone(), b.len());
+        Ok(b)
+    }
+
+    /// 3D grid of one moment (see `volume3d` for the format). Not compressed here: the HTTP
+    /// compression layer handles it.
+    pub async fn volume3d(&self, key: &str, moment: &str, res: &str) -> Result<Bytes> {
+        let res = if res.eq_ignore_ascii_case("hi") { "hi" } else { "lo" };
+        let moment = moment.to_ascii_uppercase();
+        let ck = format!("{key}|{moment}|{res}");
+        if let Some(b) = self.vol3d.lock().get(&ck) {
+            return Ok(b);
+        }
+        let v = self.volume(key).await?;
+        let _permit = self.decode_sem.clone().acquire_owned().await?;
+        if let Some(b) = self.vol3d.lock().get(&ck) {
+            return Ok(b);
+        }
+        let b = Bytes::from(tokio::task::spawn_blocking(move || super::volume3d::encode(&v, &moment, res)).await??);
+        self.vol3d.lock().put(ck, b.clone(), b.len());
+        Ok(b)
+    }
+
+    /// Rotation detections (GeoJSON) for a volume.
+    pub async fn rotation(&self, key: &str) -> Result<Bytes> {
+        if let Some(b) = self.rotation.lock().get(key) {
+            return Ok(b.clone());
+        }
+        let v = self.volume(key).await?;
+        let _permit = self.decode_sem.clone().acquire_owned().await?;
+        let k = key.to_string();
+        let b = Bytes::from(tokio::task::spawn_blocking(move || serde_json::to_vec(&super::rotation::geojson(&v, &k))).await??);
+        self.rotation.lock().put(key.to_string(), b.clone());
         Ok(b)
     }
 

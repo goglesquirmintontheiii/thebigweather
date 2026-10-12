@@ -61,10 +61,23 @@ pub async fn list(
     max_keys: Option<u32>,
     max_pages: usize,
 ) -> Result<Listing> {
+    list_at(http, &format!("https://{bucket}.s3.amazonaws.com"), prefix, delimiter, max_keys, max_pages).await
+}
+
+/// List keys at any S3-compatible endpoint (`base` = bucket URL, virtual-host or path style).
+pub async fn list_at(
+    http: &reqwest::Client,
+    base: &str,
+    prefix: &str,
+    delimiter: Option<&str>,
+    max_keys: Option<u32>,
+    max_pages: usize,
+) -> Result<Listing> {
+    let bucket = base.trim_end_matches('/').rsplit('/').next().unwrap_or(base);
     let mut out = Listing::default();
     let mut token: Option<String> = None;
     for _ in 0..max_pages.max(1) {
-        let mut url = format!("https://{bucket}.s3.amazonaws.com/?list-type=2&prefix={}", enc(prefix));
+        let mut url = format!("{}/?list-type=2&prefix={}", base.trim_end_matches('/'), enc(prefix));
         if let Some(d) = delimiter {
             url.push_str(&format!("&delimiter={}", enc(d)));
         }

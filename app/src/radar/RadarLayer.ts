@@ -6,6 +6,7 @@ import * as maplibregl from "maplibre-gl";
 import type { CustomLayerInterface, CustomRenderMethodInput, Map as MLMap } from "maplibre-gl";
 import { type Sweep, sweepRange } from "./sweep";
 import { type ColorTable, rasterize, TEX_SIZE } from "./colormaps";
+import { gateFor, radarGateKey, onGateChange } from "../gate";
 
 const VS = `#version 300 es
 precision highp float;
@@ -38,6 +39,9 @@ uniform float u_cmin;
 uniform float u_cmax;
 uniform float u_opacity;
 uniform float u_smooth;   // 0 = off … 0.5 = bilinear … 1 = heavy
+uniform float u_gmin;     // value filter (native units); |v| when u_gabs == 1
+uniform float u_gmax;
+uniform int u_gabs;
 uniform vec4 u_rf;
 uniform usampler2D u_data;
 uniform usampler2D u_azidx;
@@ -141,6 +145,8 @@ void main() {
     }
     v = mix(v, sm, min(1.0, u_smooth * 2.0));
   }
+  float gv = u_gabs == 1 ? abs(v) : v;
+  if (gv < u_gmin || gv > u_gmax) discard;
   float t = (v - u_cmin) / (u_cmax - u_cmin);
   vec4 c = texture(u_cmap, vec2(clamp(t, 0.0, 1.0), 0.5));
   float alpha = c.a * u_opacity;
@@ -212,7 +218,7 @@ export class RadarLayer implements CustomLayerInterface {
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || "link error");
     this.prog = p;
-    for (const n of ["u_matrix", "u_extent", "u_cy", "u_lat0", "u_lon0", "u_first", "u_gate", "u_cosel", "u_ngates", "u_nrad", "u_word", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth", "u_rf", "u_data", "u_azidx", "u_az", "u_lut", "u_cmap", "u_nother", "u_others"]) {
+    for (const n of ["u_matrix", "u_extent", "u_cy", "u_lat0", "u_lon0", "u_first", "u_gate", "u_cosel", "u_ngates", "u_nrad", "u_word", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth", "u_gmin", "u_gmax", "u_gabs", "u_rf", "u_data", "u_azidx", "u_az", "u_lut", "u_cmap", "u_nother", "u_others"]) {
       this.loc[n] = gl.getUniformLocation(p, n);
     }
     this.vao = gl.createVertexArray()!;
@@ -224,10 +230,16 @@ export class RadarLayer implements CustomLayerInterface {
     gl.enableVertexAttribArray(a);
     gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
+    this.unGate?.();
+    this.unGate = onGateChange(() => this.repaint());
     this.repaint();
   }
 
+  private unGate?: () => void;
+
   onRemove() {
+    this.unGate?.();
+    this.unGate = undefined;
     const gl = this.gl;
     if (!gl) return;
     for (const g of this.cache.values()) this.freeGpu(g);
@@ -379,6 +391,10 @@ export class RadarLayer implements CustomLayerInterface {
       gl.uniform1f(L.u_cmax, it.table.max);
       gl.uniform1f(L.u_opacity, it.opacity);
       gl.uniform1f(L.u_smooth, this.smooth);
+      const gate = gateFor(radarGateKey(s.product || it.table.id));
+      gl.uniform1f(L.u_gmin, gate ? gate[0] : -1e30);
+      gl.uniform1f(L.u_gmax, gate ? gate[1] : 1e30);
+      gl.uniform1i(L.u_gabs, gate?.[2] ? 1 : 0);
       const rf = it.table.rf ?? [0, 0, 0, 0];
       gl.uniform4f(L.u_rf, rf[0] / 255, rf[1] / 255, rf[2] / 255, rf[3] / 255);
       const bind = (unit: number, tex: WebGLTexture, name: string) => {

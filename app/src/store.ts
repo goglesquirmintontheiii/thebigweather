@@ -155,6 +155,9 @@ export interface Settings {
   panels: { stats: { open: boolean; x: number; y: number } };
   /* 3D volume view (ui/View3D.tsx) */
   view3d: { on: boolean; src: "radar" | "mrms"; thr: Record<string, number>; density: number; exag: number; res: "lo" | "hi"; floor: boolean; smooth: boolean; shade: boolean };
+  /* legend, panes, keys: value filter per legend key (gate.ts) and layer shortcuts (keybinds.ts) */
+  gates: Record<string, { lo?: number; hi?: number; abs?: boolean; off?: boolean }>;
+  keybinds: Record<string, string>;
 }
 
 const DEFAULTS: Settings = {
@@ -193,6 +196,9 @@ const DEFAULTS: Settings = {
   panels: { stats: { open: true, x: -1, y: 70 } },
   /* 3D volume view */
   view3d: { on: false, src: "radar", thr: {}, density: 1, exag: 4, res: "lo", floor: false, smooth: true, shade: true },
+  /* legend, panes, keys */
+  gates: {},
+  keybinds: {},
 };
 
 const KEY = "tbw.settings.v1";

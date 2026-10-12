@@ -97,7 +97,31 @@ export function alertTag(f: any): string | null {
   return null;
 }
 
+/** Alerts on screen: live ones, or the replayed ones active at the frame time in history mode. */
 export const alerts = signal<Map<string, any>>(new Map());
+/** Live alerts (kept up to date while history mode replays old ones). */
+let live = new Map<string, any>();
+/** true while history mode replays alerts */
+export const replaying = signal(false);
+
+/** History mode: show these (historical) alerts instead of the live ones; null restores live. No
+ * sounds, speech or notifications for replayed alerts. */
+export function setReplayAlerts(list: any[] | null) {
+  if (list === null) {
+    replaying.value = false;
+    alerts.value = live;
+    return;
+  }
+  const m = new Map<string, any>();
+  for (const f of list) m.set(f.properties.id, f.properties.color ? f : decorate(f));
+  replaying.value = true;
+  alerts.value = m;
+}
+
+/** Add the app's style fields (color, priority, tag) to a feed alert. */
+export function decorateAlert(f: any) {
+  return decorate(f);
+}
 
 function decorate(f: any) {
   f.properties.color = alertColor(f.properties.event);
@@ -178,7 +202,8 @@ export function startAlerts() {
       const fc = await api.get("/api/alerts");
       const m = new Map<string, any>();
       for (const f of fc.features) m.set(f.properties.id, decorate(f));
-      alerts.value = m;
+      live = m;
+      if (!replaying.value) alerts.value = m;
     } catch {
       /* offline */
     }
@@ -186,10 +211,12 @@ export function startAlerts() {
   api.on("connected", load);
   load();
   api.on("alerts", (msg) => {
-    const m = new Map(alerts.value);
+    const m = new Map(live);
     for (const id of msg.removed ?? []) m.delete(id);
     for (const f of [...(msg.added ?? []), ...(msg.updated ?? [])]) m.set(f.properties.id, decorate(f));
-    alerts.value = m;
+    live = m;
+    if (!replaying.value) alerts.value = m;
+    // real new alerts still notify while history mode replays old ones
     if (msg.added?.length) notifyNew(msg.added.map(decorate));
   });
 }

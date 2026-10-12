@@ -397,7 +397,7 @@ impl LiveManager {
         })
     }
 
-    fn with_volume<T>(&self, key: &str, f: impl FnOnce(&Volume) -> Result<T>) -> Result<T> {
+    pub fn with_volume<T>(&self, key: &str, f: impl FnOnce(&Volume) -> Result<T>) -> Result<T> {
         let rest = key.strip_prefix("live:").ok_or_else(|| anyhow!("not a live key"))?;
         let (site, n) = rest.split_once(':').ok_or_else(|| anyhow!("bad live key"))?;
         let n: u32 = n.parse()?;

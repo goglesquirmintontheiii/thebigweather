@@ -20,7 +20,7 @@ pub struct LayerDef {
     pub nodata: Vec<f32>,
     #[serde(skip)]
     pub min_valid: Option<f32>,
-    /// source kind: mrms | model | ndfd | metar | goes
+    /// source kind: mrms | model | ndfd | metar | goes | future | opera | cwa
     pub source: &'static str,
     /// model id for model layers
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -584,6 +584,7 @@ pub fn all_layers() -> Vec<LayerDef> {
     v.extend(metar_layers());
     v.extend(ndfd_layers());
     v.extend(future_layers());
+    v.extend(super::intl::layers());
     v
 }
 

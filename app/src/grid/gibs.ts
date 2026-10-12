@@ -4,7 +4,7 @@
 import { signal, effect } from "@preact/signals";
 import type { Map as MLMap } from "maplibre-gl";
 import { settings } from "../store";
-import { frameIndex, frameCount, playing, setFrameReady, framesToRequest, historyEnd } from "../anim";
+import { frameIndex, frameCount, playing, setFrameReady, framesToRequest, historyEnd, histRange } from "../anim";
 import { GIBS } from "../weather";
 
 export const gibsTimes = signal<number[]>([]);
@@ -22,6 +22,16 @@ function times(n: number, newest: number | undefined, stepMin: number): number[]
   const step = stepMin * 60_000;
   const last = Math.floor((newest ?? Date.now() - (stepMin >= 1440 ? 86400_000 : LATENCY)) / step) * step;
   return Array.from({ length: n }, (_, i) => last - (n - 1 - i) * step);
+}
+
+/** Image times inside [start, end] at a multiple of the layer's step, at most `cap`. */
+function histTimes(start: number, end: number, stepMin: number, cap: number): number[] {
+  let step = stepMin * 60_000;
+  while ((end - start) / step + 1 > cap) step += stepMin * 60_000;
+  const last = Math.floor(end / step) * step;
+  const out: number[] = [];
+  for (let t = last; t >= start && out.length < cap; t -= step) out.unshift(t);
+  return out.length ? out : [last];
 }
 
 /** EUMETView: newest time from the layer's own WMS capabilities. */
@@ -125,7 +135,9 @@ async function build() {
   const end = historyEnd.value;
   const stepMs = g.step * 60_000;
   const n = g.step >= 1440 ? Math.min(settings.value.grid.frames, 10) : framesToRequest(Math.min(settings.value.grid.frames, 24), g.step, 36);
-  const ts = times(n, end ? Math.floor(end / stepMs) * stepMs : info.newest, g.step);
+  const h = histRange.value;
+  // history: the window's image times (every step, or a multiple of it to stay under the cap)
+  const ts = h && g.step < 1440 ? histTimes(h.start, h.end, g.step, 36) : times(n, end ? Math.floor(end / stepMs) * stepMs : info.newest, g.step);
   ts.forEach((t, i) => {
     const tiles = g.wms
       ? [`${g.wms}?service=WMS&version=1.3.0&request=GetMap&layers=${encodeURIComponent(g.layer)}&styles=&format=image/png&transparent=true&crs=EPSG:3857&bbox={bbox-epsg-3857}&width=256&height=256&time=${iso(t)}`]
@@ -197,7 +209,8 @@ let lastSig = "";
 effect(() => {
   const w = settings.value.weather;
   const a = settings.value.anim;
-  const sig = w.kind === "gibs" ? `${w.id}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${historyEnd.value ?? ""}` : "";
+  const h = histRange.value;
+  const sig = w.kind === "gibs" ? `${w.id}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}` : "";
   if (sig === lastSig) return;
   lastSig = sig;
   playing.value = false;

@@ -9,6 +9,7 @@ mod api;
 mod config;
 mod health;
 mod hub;
+mod intlradar;
 mod radar;
 mod recorder;
 mod s3;
@@ -212,6 +213,7 @@ async fn main() -> anyhow::Result<()> {
         stats: stats_latest,
         started: std::time::Instant::now(),
         grids: grids.clone(),
+        intl: intlradar::IntlRadar::new(http.clone(), health.clone()),
         rec: recorder::Recorder::new(&data_dir, profile_full),
         overlays: {
             let o = overlays::Overlays::new(http.clone(), health.clone(), &data_dir, grids, profile_full);
