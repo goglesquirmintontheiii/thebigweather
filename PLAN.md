@@ -4,7 +4,7 @@
 - UI text should be kept short, uncluttered.
 - UI inspired by **RadarOmega**, with features from **RadarScope**.
 - More features = better, but must run well on the user's PC (96GB DDR5, Ryzen 9850X3D, NVMe) **and** on a 4-vCore / 16GB VPS (reduced functionality OK on low end). Use high-end hardware well, but don't continuously max it out.
-- Android app is **planned only** — do NOT build until the user asks.
+- Android app and VR app (Phase 7) are **planned only** — do NOT build until the user asks.
 
 ## Stack (agreed)
 | Part | Choice | Why |
@@ -48,8 +48,9 @@ Terrain, Satellite, Dark, Light, Road network, Dark roadmap, Google satellite.
 - **Satellite:** GOES-19, GOES-18, Himawari-9 (regional/sub-regional/full disk; GeoColor-style, all ABI bands, SWIR, WV, LWIR), GLM lightning. Plus **Meteosat (MTG/MSG** incl. MTG lightning imager; EUMETView WMS keyless for imagery, EUMETSAT account for raw), **GK-2A**, **VIIRS/MODIS** polar passes incl. VIIRS Day/Night Band (NASA GIBS, keyless), **GPM IMERG**, **ASCAT** ocean winds, **NOAA HMS** fire/smoke.
 - **NDFD** (AWS), **Air quality** (AirNow public data files keyless + Open-Meteo AQ keyless; AirNow API optional), **NWS HeatRisk**.
 - **International radar:**
-  - Full single-site volumes: **Finland** (FMI on AWS, ODIM HDF5, SNS notifications), **Germany** (DWD open data), **Switzerland** + other European countries via **EUMETNET Open Radar Data API / MeteoGate** (24h rolling cache), **Canada** (ECCC — verify volume availability), **Australia (BoM)** and **South Korea (KMA, key)**.
-  - Composites/mosaics (verify each): France, Netherlands, Belgium, Denmark, Sweden, Norway, Poland, Czechia, UK (key), Spain (key), Japan, Taiwan (key), Hong Kong, Singapore, Philippines, Indonesia, Brazil, Mexico, India, Israel, New Zealand.
+  - Full single-site volumes (done): ~210 European radars from **EUMETNET OPERA** open data (24 h) plus **FMI** Finland.
+  - Canada: per-radar views cropped from the ECCC national composite (ECCC publishes no open single-site volumes); GeoMet rain/snow composites.
+  - Composites (done): OPERA Europe, DWD Germany, Mexico (SMN), Japan (JMA), Taiwan (CWA), Philippines (PAGASA).
   - Global fallback: NOAA satellite-derived rain rate (RRQPE, 60S–70N). RainViewer free API is too restricted now (zoom 7 max, one color scheme since Jan 2026) — don't rely on it. LibreWXR (github.com/JoshuaKimsey/LibreWXR) is a useful reference for source regions.
 - **US niche/university radars** (where public; some image-only): MZZU (Univ. of Missouri X-band), Valparaiso Univ. C-band dual-pol (Indiana), Purdue XTRRA (Indiana, public images), Georgia Gwinnett/GT/UGA X-band. To check: UAH ARMOR, CSU-CHILL, OU research radars, CASA DFW X-band network, NASA NPOL/KWAJ. "WLX" unidentified — ask user. FAA ASR and TV station radars are not public.
 
@@ -136,9 +137,69 @@ Synoptic, AirNow, aisstream.io, mPING, Spotter Network, EUMETSAT, KMA, Trafikver
 3. **Overlays:** SPC/WPC/NHC/CPC, METARs, marine, LSRs, lightning, aviation, cameras, ships, ISS, Waffle House, file imports.
 4. **Power features:** multi-pane, drawing, recording (radar + cameras), import/export, pop-out windows, audio alerts, Overpass search, forecast menu, radio menu.
 5. **International & niche radars.**
-6. **Android** — only when user asks.
+6. **New features + Windows** (see "Phase 6 plan" below): a feature-development phase, plus a Windows app (.exe installer) and Windows support for the server.
+7. **Android + VR** — only when the user asks (see "Phase 7 plan").
 
-Each phase ends with a working AppImage + server and a test checklist.
+Each phase ends with a working AppImage + server and a test checklist (from Phase 6 also a Windows .exe).
+
+## Phase 6 plan — new features + Windows
+
+Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRadar, Windy, GRLevelX, Rainmeter and similar tools. Grouped by area; all keyless unless marked.
+
+**Radar and severe weather**
+- **GRLevelX placefile support:** load placefiles by URL or file (icons, lines, polygons, text, refresh), as used by chasers and many services.
+- **Tornado debris signature (TDS) detection:** CC drop + low ZDR + strong rotation at low tilts, highlighted and listed.
+- **Hail detection from dual-pol:** hail size discrimination (HSDA-style) and MESH-like estimates from Level II, with hail swath accumulation over a loop.
+- **Rotation tracks from Level II:** accumulate the rotation detector over time into tracks, like MRMS rotation tracks but per radar and higher resolution.
+- **Velocity dealiasing for display:** cleaner velocity and SRV.
+- **"Inspector" readout:** every product's value at the cursor at once (REF, VEL, ZDR, CC, KDP, SW), RadarScope-style.
+- **Radar nowcast:** extrapolate the last loop 0–60 min ahead with optical flow, marked "forecast".
+- **NWS Damage Assessment Toolkit:** surveyed tornado tracks and damage points (public ArcGIS), plus the SPC historical tornado track database.
+- **Lightning proximity alarms:** for saved points and GPS (GOES GLM), with "last strike" distance and time.
+
+**Forecast and data**
+- **Gridded contours:** isobars, isotherms, heights and thickness, and wind barbs drawn as vector layers with labels on top of any model field.
+- **Model comparison:** a point meteogram across all models at once, plus a swipe/compare slider between two weather layers on the map.
+- **Marine:** waves (GFS-Wave / WW3), ocean currents (RTOFS), SST anomalies, rip-current and surf forecasts (NWS).
+- **Hurricanes:** NHC wind-speed probabilities, peak storm surge and inundation maps, arrival-of-winds times.
+- **Flooding:** MRMS FLASH (CREST unit streamflow), NWM high-flow and rapid-onset flooding, USGS flood-inundation maps.
+- **Winter:** road-condition reports from state 511 feeds, snow-to-liquid ratios, frost/freeze and wind-chill grids.
+- **Climate:** daily records and normals, departures, and climate summaries for saved points (NOAA ACIS).
+- **Health and outdoors:** pollen (Open-Meteo, Europe), UV, wildfire smoke forecast, stargazing (cloud, seeing, moon).
+- **Personal weather stations:** CWOP/APRS weather stations (keyless via public feeds) as a dense observation layer.
+- **Space weather:** SDO/SOHO solar imagery, CME arrivals, and the auroral oval forecast timeline.
+
+**Workflow and app**
+- **Desktop widgets (Rainmeter-style):** small always-on-top windows — mini radar, current conditions, alert ticker, countdown to storm arrival — plus a tray icon with alerts.
+- **Route weather:** plan a drive (OSRM routing, keyless); radar, alerts and forecast along the route with ETAs, plus storm-intercept suggestions for chasers.
+- **Rules engine for notifications:** for example "TOR polygon within 10 mi of GPS", "rotation score > X near home", "lightning within 5 mi", or "AQI > 150", each with its own sound, desktop, TTS or webhook action.
+- **Audio briefings:** a spoken summary of alerts, nowcast and forecast for a point, on demand or scheduled.
+- **Share links:** the server hosts a read-only live view of a workspace (radar, warnings, drawings) for friends or family.
+- **Live collaboration:** shared drawings, positions and notes between users of one server, for chase teams.
+- **Wall / kiosk mode:** full-screen auto-cycling layouts for a second monitor or TV.
+- **Visual polish (WeatherWise-style):** smoother radar shading options, glow and 3D terrain hillshade, animated precipitation-type textures, and a light theme.
+- **Offline basemap regions:** download vector tiles for chosen areas.
+- **Plugin/script API:** user JavaScript that adds layers, data sources or panels.
+
+**Windows**
+- **Windows app:** an Electron NSIS installer (.exe) plus a portable .exe, with auto-start option, tray icon, file associations (.pal, placefiles, Level II files) and correct mixed-DPI scaling.
+- **Windows server:** build tbw-server for x86_64-pc-windows-msvc. Windows paths, config and data folders under %ProgramData%/TheBigWeather, a `start.ps1` equivalent of `start.sh` (prebuilt binary, optional ffmpeg and yt-dlp via winget, firewall rule, optional Windows service), and HTTPS via Caddy for Windows.
+- **Bundled local server:** the Windows and Linux apps can run a bundled server themselves for one-computer setups, so there is no separate install.
+
+## Phase 7 plan — Android + VR (only when asked)
+
+**Android:** Capacitor app reusing the UI with a mobile layout (see Stack). It adds push alerts for saved points and GPS, background location for "alerts where I am", widgets, and Android Auto / car-friendly mode.
+
+**VR (Meta Quest 3 / 3S):** full functionality, with multi-window support.
+- **Platform:** a Horizon OS app built as a WebXR + PWA hybrid from the same codebase, so every feature works. It is packaged for the Quest store or sideloading.
+- **Panels:** windowed mode uses several 2D panels side by side (map, cameras, radio, forecast, seismograph, radar panes), resizable and placeable in space.
+- **Immersive mode:**
+  - a 3D globe or tabletop terrain with radar volumes, isosurfaces and lightning in true 3D, which you can walk around and scale with hand tracking
+  - storm "fly-through"
+  - time scrubbing with a hand-held timeline
+- **Passthrough (mixed reality):** place the tabletop storm or alert dashboards in your room.
+- **Input:** controllers and hand tracking, voice commands (switch layers, play loop), and keyboard/mouse support.
+- **Performance:** foveated rendering, reduced-resolution volumes, and server-side tiling sized for Quest GPUs.
 
 ## Status
 - Phase 1: done, user-tested; fixes from testing shipped with Phase 2.
@@ -152,7 +213,8 @@ Each phase ends with a working AppImage + server and a test checklist.
   - Live chaser video aggregators have no public APIs. Spotter Network's public streamer feed is used instead.
   - mPING needs a free key; its general license allows the last 4 hours.
 - Phase 5 notes: European single-site volumes come from the EUMETNET OPERA open data (24 h) and FMI. Composites cover Canada, Mexico, Japan, Taiwan and the Philippines. Hong Kong, Singapore, Malaysia, India and KMA were left out (licence, no georeferencing, or key). Niche US radars publish no open data.
-- Next: Phase 6 (Android) only when asked.
+- Phase 5 follow-ups (checklist round): see `docs/PHASE5_FIXES.md`.
+- Next: Phase 6 (new features + Windows), when asked. Phase 7 (Android + VR) only when asked.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted server that does the heavy lifting.
 
-**Status:** Phase 5 of 6 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE5_CHECKLIST.md](docs/PHASE5_CHECKLIST.md). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+**Status:** Phase 5 of 6 (see [PLAN.md](PLAN.md)). Test lists: [docs/PHASE5_CHECKLIST.md](docs/PHASE5_CHECKLIST.md), then [docs/PHASE5_FIXES.md](docs/PHASE5_FIXES.md) (0.5.1). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ## Quick start
 
@@ -23,13 +23,17 @@ Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted
 ### 2. Desktop app
 
 ```bash
-chmod +x TheBigWeather-0.5.0-x86_64.AppImage
-./TheBigWeather-0.5.0-x86_64.AppImage
+chmod +x TheBigWeather-0.5.1-x86_64.AppImage
+./TheBigWeather-0.5.1-x86_64.AppImage
 ```
 
 On first launch, paste the server URL and token. If the server runs on the same computer, click **Use the server on this computer** — no token needed (turn this off with `local_no_auth = false` under `[server]` in the config).
 
 The UI also works in a browser at the server URL (phones too, until the Android app exists).
+
+## 0.5.1
+
+Phase 5 follow-ups: 3D surfaces, Seismographs menu, SAME decoding and live transcription in the radio player, Historical Storms (past warnings and hurricanes), METARs in history, Canada per-radar views, keyless road work and traffic speeds, Server settings and App stats, reorganised layers menu, and fixes. Details in `docs/PHASE5_FIXES.md`. The roadmap now has Phase 6 (new features + Windows) and Phase 7 (Android + VR) in `PLAN.md`.
 
 ## Phase 5 features
 

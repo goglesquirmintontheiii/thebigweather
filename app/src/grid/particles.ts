@@ -12,6 +12,7 @@ import { api } from "../api";
 import { settings, toast } from "../store";
 import { OVERLAYS, overlayDef, optsFor, type OverlayDef } from "../overlays/defs";
 import { activeTime, isForecast } from "../active";
+import { histRange } from "../anim";
 
 export const OVL_ID = "windparticles";
 
@@ -512,8 +513,9 @@ function cfg() {
   return { on: !!o?.on, opacity: o?.opacity ?? 0.9, opts: optsFor(def) };
 }
 
-/** Timeline time while a model / forecast layer is shown, else latest. */
+/** Timeline time while a model / forecast layer is shown or in history mode (to the hour), else latest. */
 function wantTime(): number | undefined {
+  if (histRange.value) return activeTime.value ? Math.round(activeTime.value / 3600_000) * 3600_000 : undefined;
   return isForecast.value ? activeTime.value || undefined : undefined;
 }
 
@@ -546,6 +548,12 @@ async function loadField() {
     const f = parseWind(await api.bin(q));
     if (g !== gen) return;
     lastQ = q;
+    // history mode: the server only keeps recent model runs; don't animate the wrong day's wind
+    if (histRange.peek() && t && f.time && Math.abs(f.time - t) > 3 * 3600_000) {
+      layer.setField(null);
+      windStatus.value = { loading: false, error: "No model wind for this time" };
+      return;
+    }
     layer.setField(f);
     windStatus.value = { loading: false, time: f.time };
     lastErr = "";

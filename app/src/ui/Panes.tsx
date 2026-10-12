@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { settings, update, openPanel, type PaneCfg } from "../store";
 import { mountPane, paneConfigured, paneStatus, resizePanes } from "../map/panes";
-import { L2_MOMENTS, l3Products, sites } from "../radar/controller";
-import { gridLayers, GIBS, selectWeather } from "../weather";
+import { L2_MOMENTS, l3Products, sites, productName } from "../radar/controller";
+import { gridLayers, selectWeather, activeLabel } from "../weather";
+import { noLevel3 } from "../intl/sites";
 import { fmtTime } from "../util";
 import { LayoutGrid, Columns2, Rows2, Square, Grid2x2, Link2, Link2Off, AppWindow, MonitorSmartphone } from "lucide-preact";
 import { popout, canPopout } from "../popout";
@@ -12,9 +13,10 @@ import { mapRef } from "../map/mapview";
 import { linkOn, linkLayers, peers, isSecondWindow, setLink } from "../linkwin";
 
 /** Product dropdown options: Level II moments, Level III families (for the site's radar type), gridded layers. */
-function ProductOptions({ site, current }: { site: string; current?: string }) {
-  const tdwr = sites.value.find((x) => x.id === site)?.type === "TDWR";
-  const l3 = l3Products.value.filter((p) => !!p.tdwr === tdwr);
+function ProductOptions({ site, current, value, label }: { site: string; current?: string; value: string; label?: string }) {
+  const st = sites.value.find((x) => x.id === site);
+  const tdwr = st?.type === "TDWR";
+  const l3 = noLevel3(st) ? [] : l3Products.value.filter((p) => !!p.tdwr === tdwr);
   const cur = l3Products.value.find((p) => p.id === current);
   const fams = new Map<string, typeof l3>();
   for (const p of l3) {
@@ -22,8 +24,14 @@ function ProductOptions({ site, current }: { site: string; current?: string }) {
     fams.set(k, [...(fams.get(k) ?? []), p].sort((a, b) => a.tilt - b.tilt));
   }
   const groups = [...new Set(gridLayers.value.map((l) => l.group))];
+  // the current layer when it isn't one of the options below (imagery, world radar, catalog not loaded yet)
+  const known =
+    (value.startsWith("r:L2:") && L2_MOMENTS.some((m) => `r:L2:${m.id}` === value)) ||
+    (value.startsWith("r:L3:") && l3.some((p) => `r:L3:${p.id}` === value)) ||
+    (value.startsWith("g:") && gridLayers.value.some((l) => `g:${l.id}` === value));
   return (
     <>
+      {!known && <option value={value}>{label ?? value.replace(/^\w:(L[23]:)?/, "")}</option>}
       <optgroup label={`Level II · ${site}`}>
         {L2_MOMENTS.map((m, i) => (
           <option key={m.id} value={`r:L2:${m.id}`}>
@@ -39,7 +47,7 @@ function ProductOptions({ site, current }: { site: string; current?: string }) {
             return (
               <option key={pick.id} value={`r:L3:${pick.id}`}>
                 {f[0].name}
-                {f.length > 1 ? ` ${pick.tilt.toFixed(1)}°` : ""}
+                {f.length > 1 ? ` ~${(tdwr ? [0.3, 0.6, 1.0, 1.5] : [0.5, 0.9, 1.3, 1.8])[pick.tilt] ?? pick.tilt}°` : ""}
               </option>
             );
           })}
@@ -128,11 +136,25 @@ export function MainPaneHead() {
       x.radar.product = prod;
     });
   };
+  // the scan bar centres under this dropdown (the main pane's centre), not the window's
+  useEffect(() => {
+    const el = document.querySelector<HTMLElement>(".main-head");
+    if (!el) return;
+    const upd = () => {
+      const r = el.getBoundingClientRect();
+      if (r.width) document.documentElement.style.setProperty("--main-cx", `${Math.round(r.left + r.width / 2)}px`);
+    };
+    upd();
+    const ro = new ResizeObserver(upd);
+    ro.observe(el);
+    window.addEventListener("resize", upd);
+    const t = setInterval(upd, 1000);
+    return () => (ro.disconnect(), window.removeEventListener("resize", upd), clearInterval(t));
+  }, []);
   return (
     <div class={`pane-head main-head glass ${openPanel.value ? "shift" : ""}`}>
       <select value={value} onChange={(e) => pick((e.target as HTMLSelectElement).value)} title="Product (1–6 for Level II)">
-        {w.kind === "gibs" && <option value={value}>{GIBS.find((g) => g.id === w.id)?.name ?? w.id}</option>}
-        <ProductOptions site={s.radar.site} current={s.radar.product} />
+        <ProductOptions site={s.radar.site} current={s.radar.product} value={value} label={w.kind === "radar" ? productName(s.radar.product) : activeLabel.value.title} />
       </select>
       <LinkControls />
     </div>
@@ -166,7 +188,7 @@ function PaneBox({ idx }: { idx: number }) {
       <div ref={ref} class="pane-map" />
       <div class="pane-head glass">
         <select value={value} onChange={(e) => set((e.target as HTMLSelectElement).value)} title="Product for this pane">
-          <ProductOptions site={cfg.site ?? settings.value.radar.site} current={cfg.product} />
+          <ProductOptions site={cfg.site ?? settings.value.radar.site} current={cfg.product} value={value} />
         </select>
         <span class="pane-time" title={st.error ?? ""}>{st.loading ? "Loading…" : st.error ? st.error : st.time ? fmtTime(st.time, true) : ""}</span>
       </div>

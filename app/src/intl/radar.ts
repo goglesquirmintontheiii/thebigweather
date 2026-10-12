@@ -156,7 +156,10 @@ export function intlSource(id: string): IntlSource | undefined {
 }
 
 export function intlName(id: string): string {
-  const base = isGroupAll(id) ? groupName(id) : intlSource(id)?.name ?? INTL_NAMES[id] ?? id;
+  const grp = INTL_NAMES[idPrefix(id)];
+  // single sites of a group before the list has loaded: "Canada radar CASKR"
+  const fallback = grp && id.includes("_") ? `${grp.replace(/s? \(.*$/, "")} ${id.slice(id.indexOf("_") + 1).toUpperCase()}` : id;
+  const base = isGroupAll(id) ? groupName(id) : intlSource(id)?.name ?? INTL_NAMES[id] ?? fallback;
   const w = settings.value.weather;
   return w.kind === "intl" && w.id === id && w.precip === "snow" && hasSnow(id) ? `${base} · snow` : base;
 }

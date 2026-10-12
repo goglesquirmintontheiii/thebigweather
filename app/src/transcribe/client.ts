@@ -143,14 +143,20 @@ export class TranscriptCtl {
     return true;
   }
 
+  private gen = 0;
   private async start(model: string) {
+    const g = ++this.gen;
+    this.unsub?.();
+    this.unsub = null;
+    this.sess?.stop();
     this.sess = new TranscriptSession(
       new WorkerTranscriber(model),
       (l) => (this.lines.value = [...this.lines.value, l].slice(-2000)),
       (s) => (this.state.value = { ...s, dropped: this.sess?.dropped }),
     );
     const tap = await this.getTap().catch(() => null);
-    if (!this.on.value) return;
+    // a newer start (or a stop) happened while waiting for the tap
+    if (!this.on.value || g !== this.gen) return;
     if (!tap) {
       this.state.value = { busy: false, queued: 0, error: "Can't read this stream's audio" };
       return;

@@ -122,10 +122,14 @@ export class AudioTap {
   }
 
   /** The stream's audio as a MediaStream (element.captureStream() may go silent once tapped). */
+  private dest?: MediaStreamAudioDestinationNode;
   stream(): MediaStream {
-    const d = this.ctx.createMediaStreamDestination();
-    this.src.connect(d);
-    return d.stream;
+    // one destination per tap, reused by every recording (no node leak)
+    if (!this.dest) {
+      this.dest = this.ctx.createMediaStreamDestination();
+      this.src.connect(this.dest);
+    }
+    return this.dest.stream;
   }
 
   setVolume(v: number) {

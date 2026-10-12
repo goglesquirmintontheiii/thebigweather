@@ -102,8 +102,32 @@ pub fn router(_st: Arc<AppState>) -> Router<Arc<AppState>> {
         .route_layer(middleware::from_fn(local_only))
 }
 
+/// Loopback host name ("localhost", "127.0.0.1", "[::1]", optional port).
+fn loopback_host(h: &str) -> bool {
+    let h = h.trim();
+    let host = if let Some(r) = h.strip_prefix('[') { r.split(']').next().unwrap_or("") } else { h.rsplit_once(':').map(|(a, _)| a).unwrap_or(h) };
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
+}
+
+/// Blocks other web pages open in a browser on this machine (CORS is permissive and
+/// `local_no_auth` skips the token): the Origin must be the app itself or a loopback page, and the
+/// Host must be loopback (DNS rebinding).
+fn trusted_origin(req: &Request) -> bool {
+    let hdr = |n: &str| req.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
+    if let Some(h) = hdr("host") {
+        if !loopback_host(&h) {
+            return false;
+        }
+    }
+    match hdr("origin") {
+        None => true,
+        Some(o) if o == "null" || o.starts_with("app://") || o.starts_with("file://") => true,
+        Some(o) => o.strip_prefix("http://").or_else(|| o.strip_prefix("https://")).map(loopback_host).unwrap_or(false),
+    }
+}
+
 async fn local_only(req: Request, next: Next) -> Response {
-    if crate::api::is_local(&req) {
+    if crate::api::is_local(&req) && trusted_origin(&req) {
         next.run(req).await
     } else {
         (StatusCode::FORBIDDEN, Json(json!({"error": "server settings are only available on the server's own computer"}))).into_response()
@@ -590,5 +614,22 @@ mod tests {
         // no-op patch changes nothing
         let (_, changed, _) = apply_patch(&old, &rules, &json!({"server": {"name": "Home"}}), 32_000).unwrap();
         assert!(changed.is_empty(), "{changed:?}");
+    }
+
+    #[test]
+    fn origin_guard() {
+        let mk = |host: &str, origin: Option<&str>| {
+            let mut b = axum::http::Request::builder().uri("/api/admin/config").header("host", host);
+            if let Some(o) = origin {
+                b = b.header("origin", o);
+            }
+            trusted_origin(&b.body(axum::body::Body::empty()).unwrap())
+        };
+        assert!(mk("127.0.0.1:8787", None));
+        assert!(mk("localhost:8787", Some("app://tbw")));
+        assert!(mk("[::1]:8787", Some("http://localhost:5173")));
+        assert!(mk("127.0.0.1:8787", Some("http://127.0.0.1:8787")));
+        assert!(!mk("127.0.0.1:8787", Some("https://evil.example")));
+        assert!(!mk("evil.example:8787", None));
     }
 }

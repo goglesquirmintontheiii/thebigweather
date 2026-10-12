@@ -100,7 +100,7 @@ const thisYear = new Date().getUTCFullYear();
 const YEARS = Array.from({ length: thisYear - 2001 }, (_, i) => thisYear - i);
 
 const wForm = signal({ phen: ["TO"], sig: "W" as "W" | "A" | "", dateMode: "year" as "year" | "range" | "any", year: thisYear, from: "", to: "", state: "", wfo: "", q: "", pds: false, emergency: false, observed: false });
-const wRes = signal<{ items: WarnItem[]; total?: number; offset: number; loading: boolean; error?: string; searched: boolean }>({ items: [], offset: 0, loading: false, searched: false });
+const wRes = signal<{ items: WarnItem[]; total?: number; offset: number; loading: boolean; error?: string; searched: boolean; note?: string }>({ items: [], offset: 0, loading: false, searched: false });
 const wSel = signal<{ item: WarnItem; fc: any | null; loading: boolean; error?: string } | null>(null);
 
 const observed = (w: WarnItem) => !!w.flags?.observed || /observed/i.test(w.flags?.tornado_detection ?? "");
@@ -114,13 +114,26 @@ async function searchWarnings(offset = 0) {
   if (f.wfo.trim()) q.set("wfo", f.wfo.trim().toUpperCase().replace(/^K(?=[A-Z]{3}$)/, ""));
   if (f.phen.length) q.set("phen", f.phen.join(","));
   if (f.sig) q.set("sig", f.sig);
+  let sts = NaN;
+  let ets = NaN;
   if (f.dateMode === "year") {
-    q.set("sts", `${f.year}-01-01T00:00:00Z`);
-    q.set("ets", `${f.year + 1}-01-01T00:00:00Z`);
+    sts = Date.UTC(f.year, 0, 1);
+    ets = Date.UTC(f.year + 1, 0, 1);
   } else if (f.dateMode === "range") {
-    if (f.from) q.set("sts", isoQ(Date.parse(`${f.from}T00:00:00Z`)));
-    if (f.to) q.set("ets", isoQ(Date.parse(`${f.to}T23:59:59Z`)));
+    if (f.from) sts = Date.parse(`${f.from}T00:00:00Z`);
+    if (f.to) ets = Date.parse(`${f.to}T23:59:59Z`);
   }
+  // the server limits nationwide searches (no state / office) to 31 days: search the last 30 of the period
+  let note: string | undefined;
+  if (!f.state.trim() && !f.wfo.trim() && f.dateMode !== "any") {
+    const e = Math.min(Number.isFinite(ets) ? ets : Date.now(), Date.now());
+    if (!Number.isFinite(sts) || e - sts > 31 * 864e5) {
+      sts = e - 30 * 864e5;
+      note = "Nationwide: last 30 days of the period. Add a state or office to search further.";
+    }
+  }
+  if (Number.isFinite(sts)) q.set("sts", isoQ(sts));
+  if (Number.isFinite(ets)) q.set("ets", isoQ(ets));
   const flags = [f.pds && "pds", f.emergency && "emergency", f.observed && "observed"].filter(Boolean) as string[];
   if (flags.length) q.set("flags", flags.join(","));
   wRes.value = { ...wRes.value, loading: true, error: undefined, offset };
@@ -128,7 +141,7 @@ async function searchWarnings(offset = 0) {
     const r = await api.get(`/api/hist/warnings?${q}`);
     // flags are filtered here too in case the server ignores them
     const items: WarnItem[] = (r.items ?? []).filter((w: WarnItem) => (!f.pds || w.flags?.pds) && (!f.emergency || w.flags?.emergency) && (!f.observed || observed(w)));
-    wRes.value = { items, total: r.total, offset, loading: false, searched: true };
+    wRes.value = { items, total: r.total, offset, loading: false, searched: true, note };
   } catch (e: any) {
     wRes.value = { items: [], offset, loading: false, error: e.message, searched: true };
   }
@@ -299,7 +312,7 @@ function WarningsTab() {
           {r.error ? (
             <div class="hs-empty err">Search failed: {r.error}</div>
           ) : !r.items.length ? (
-            <div class="hs-empty muted">{r.loading ? "Searching…" : r.searched ? "No matching alerts" : ""}</div>
+            <div class="hs-empty muted">{r.loading ? "Searching…" : r.searched ? `No matching alerts${r.note ? `. ${r.note}` : ""}` : ""}</div>
           ) : (
             <table class="hs-table">
               <thead>
@@ -336,6 +349,7 @@ function WarningsTab() {
               </tbody>
             </table>
           )}
+          {r.note && r.items.length > 0 && <div class="muted small hs-note">{r.note}</div>}
           {(r.offset > 0 || r.items.length >= PAGE || (total ?? 0) > PAGE) && (
             <div class="hs-pager">
               <button class="btn sm ghost" disabled={r.offset === 0 || r.loading} onClick={() => searchWarnings(Math.max(0, r.offset - PAGE))}>
