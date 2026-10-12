@@ -210,7 +210,7 @@ effect(() => {
   const w = settings.value.weather;
   const a = settings.value.anim;
   const h = histRange.value;
-  const sig = w.kind === "gibs" ? `${w.id}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}` : "";
+  const sig = w.kind === "gibs" ? `${w.id}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}|${settings.value.saver}` : ""; // saver caps frames
   if (sig === lastSig) return;
   lastSig = sig;
   playing.value = false;

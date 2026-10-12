@@ -82,7 +82,7 @@ Terrain, Satellite, Dark, Light, Road network, Dark roadmap, Google satellite.
 - **International:** Canada (511 Ontario, DriveBC, Québec 511, 511 Alberta, others), UK/Ireland (Traffic Scotland, Traffic Wales, TII, England motorways), Nordics (Finland Digitraffic, Norway Statens vegvesen, Sweden Trafikverket key, Iceland), Asia-Pacific (Hong Kong, Singapore, Taiwan, NZTA, Australia NSW key / QLD / others), Europe to check (Spain DGT, France, Italy, Germany, Netherlands, Switzerland, Czechia, Poland), South Korea ITS (key), Japan (patchy), parts of LatAm. One adapter per source. Include mountain-pass/weather/ski cams.
 - **TrafficVision.live:** their ToS forbids scrapers/bots and bulk DB extraction without permission; they offer API/licensing by contact. Implement as **optional source with key field**, with required attribution. Not scraped.
 - **Camera icons by type** (shape, not just color): video stream = play triangle; YouTube = YouTube-style rounded rect; snapshot = still camera; 360°/panoramic = circle-arrow badge. Offline = greyed; recording = red dot.
-- **Camera recording** (server-side): video streams saved without re-encoding (ffmpeg copy); snapshot cams saved per refresh → playback/timelapse MP4. Concurrency limited by hardware profile. Scheduled recording; **record-on-alert** (cams inside new warning polygons). Shared library with radar recordings; synced playback against radar. Disclaimer under every feed: recording/redistributing some feeds may require owner permission. **YouTube is watch-only** (ToS prohibits downloading).
+- **Camera recording** (server-side): video streams saved without re-encoding (ffmpeg copy); snapshot cams saved per refresh → playback/timelapse MP4. Concurrency limited by hardware profile. Scheduled recording; **record-on-alert** (cams inside new warning polygons). Shared library with radar recordings; synced playback against radar. Disclaimer under every feed: recording/redistributing some feeds may require owner permission. YouTube recording via yt-dlp on the server (added at the user's request in 0.5; check stream owners' terms).
 
 ## Bottom toolbar
 Play/pause radar animation · locate me (pinpoint + zoom) · screenshot · distance/bearing from selected radar to screen center · center crosshair showing current layer value · measure tool · show/hide radar sites · drawing mode.
@@ -144,13 +144,15 @@ Each phase ends with a working AppImage + server and a test checklist.
 - Phase 1: done, user-tested; fixes from testing shipped with Phase 2.
 - Phase 2: done, user-tested; fixes shipped with Phase 3.
 - Phase 3: done, user-tested; fixes and requested changes shipped with Phase 4.
-- Phase 4: done (this build). Test with `docs/PHASE4_CHECKLIST.md`.
+- Phase 4: done, user-tested; fixes and requested changes shipped with Phase 5.
+- Phase 5: done (this build, 0.5.0). Test with `docs/PHASE5_CHECKLIST.md`. A full plan audit is in `docs/PLAN_AUDIT.md` (missing items added; the rest explained).
 - Deferred from Phase 3: Blitzortung (its terms forbid third-party apps without approval; GOES GLM is used instead); NOAA Weather Radio transmitter map (no official machine-readable list with coordinates; revisit with the Phase 4 radio menu); Spotter Network / chasers and mPING (need accounts, so they move to Phase 4 with the account-based features).
 - Phase 4 notes:
   - NWR transmitter coordinates aren't published in a machine-readable list, so stations are mapped at their stream's city (geocoded once, cached).
   - Live chaser video aggregators have no public APIs. Spotter Network's public streamer feed is used instead.
   - mPING needs a free key; its general license allows the last 4 hours.
-- Next: Phase 5 (international & niche radars).
+- Phase 5 notes: European single-site volumes come from the EUMETNET OPERA open data (24 h) and FMI. Composites cover Canada, Mexico, Japan, Taiwan and the Philippines. Hong Kong, Singapore, Malaysia, India and KMA were left out (licence, no georeferencing, or key). Niche US radars publish no open data.
+- Next: Phase 6 (Android) only when asked.
 
 ---
 

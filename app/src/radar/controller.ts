@@ -16,7 +16,7 @@ export interface Site {
   lat: number;
   lon: number;
   elev_m: number;
-  type: "NEXRAD" | "TDWR";
+  type: "NEXRAD" | "TDWR" | "ODIM";
 }
 export interface TiltMeta {
   index: number;
@@ -61,7 +61,15 @@ export const L2_MOMENTS = [
   { id: "RHO", name: "Correlation Coef." },
   { id: "PHI", name: "Diff. Phase" },
   { id: "CFP", name: "Clutter Filter Power" },
+  { id: "KDP", name: "Specific Diff. Phase" },
+  // derived by the server from the whole volume
+  { id: "CREF", name: "Composite Refl." },
+  { id: "ET", name: "Echo Tops" },
+  { id: "VIL", name: "VIL" },
 ];
+
+/** Products the server computes from the whole volume (one picture per volume, no tilt). */
+export const DERIVED = new Set(["CREF", "ET", "VIL"]);
 
 export const sites = signal<Site[]>([]);
 export const l3Products = signal<L3Product[]>([]);
@@ -241,7 +249,7 @@ async function getMeta(key: string, fresh = false): Promise<VolMeta> {
 
 async function loadL2Sweep(key: string, moment: string, angle: number, fresh = false): Promise<Sweep | undefined> {
   const meta = await getMeta(key, fresh);
-  const t = pickTilt(meta, moment, angle);
+  const t = DERIVED.has(moment) ? { index: 0 } : pickTilt(meta, moment, angle);
   if (!t) return undefined;
   const ck = `${key}|${t.index}|${moment}`;
   if (!fresh) {

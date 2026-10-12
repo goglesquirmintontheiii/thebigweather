@@ -2,7 +2,7 @@
 
 Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted server that does the heavy lifting.
 
-**Status:** Phase 3 of 6 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE3_CHECKLIST.md](docs/PHASE3_CHECKLIST.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+**Status:** Phase 5 of 6 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE5_CHECKLIST.md](docs/PHASE5_CHECKLIST.md). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ## Quick start
 
@@ -23,13 +23,50 @@ Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted
 ### 2. Desktop app
 
 ```bash
-chmod +x TheBigWeather-0.3.0-x86_64.AppImage
-./TheBigWeather-0.3.0-x86_64.AppImage
+chmod +x TheBigWeather-0.5.0-x86_64.AppImage
+./TheBigWeather-0.5.0-x86_64.AppImage
 ```
 
 On first launch, paste the server URL and token. If the server runs on the same computer, click **Use the server on this computer** — no token needed (turn this off with `local_no_auth = false` under `[server]` in the config).
 
 The UI also works in a browser at the server URL (phones too, until the Android app exists).
+
+## Phase 5 features
+
+- **International radar:**
+  - About 210 European single-site radars (EUMETNET OPERA, plus FMI for Finland) that work like NEXRAD.
+  - Composites: OPERA Europe, DWD Germany, Canada (GeoMet), Mexico (SMN), Japan (JMA), Taiwan (CWA), Philippines (PAGASA). They're in the layer menu → World.
+- **Historical mode:** pick a date range. All radars, satellite and grids follow it, and warnings, watches, MDs, reports and storm cells replay with the loop.
+- **Radar analysis:**
+  - 3D volume view (Shift+3), vertical cross-sections and storm-relative velocity.
+  - Composite reflectivity, echo tops and VIL from Level II.
+  - Rotation detection on the selected radar, plus a US-wide rotation/supercell scan.
+  - Storm tracks with ETAs to your points.
+  - A noise filter on the legend.
+- **Forecast tools:** a big forecast window with ensembles, and Skew-T/hodograph soundings (model or balloon). Also GEFS, CMC GDPS/HRDPS, ICON-EU and HRRR smoke.
+- **New layers:**
+  - spaghetti models
+  - recon center fixes
+  - volcanoes
+  - Raspberry Shake seismographs
+  - drought
+  - air quality
+  - SVI
+  - HMS fire/smoke
+  - NOHRSC snow
+  - HeatRisk
+  - Kp
+  - traffic (TomTom key)
+  - wind particles
+  - Meteosat and NASA polar imagery
+- **Workflow:**
+  - Linked second window and per-pane products.
+  - Layer shortcuts (`?`).
+  - Workspaces and loop export (GIF/WebM/MP4).
+  - Screen recording and a bandwidth saver.
+  - Appearance settings.
+  - Pinned METAR panels and GPS tracks.
+- **Cameras and radio:** bigger camera viewer with info and recording, including YouTube once yt-dlp is installed on the server. A big radio window with a DVR-style player that can pause, seek back and record.
 
 ## Phase 4 features
 
@@ -144,6 +181,12 @@ How it works: the server decodes GRIB2 and NetCDF, reprojects to the map, and se
 | `←` `→` | previous / next frame |
 | `↑` `↓` | tilt up / down (Level II and Level III) |
 | `1`–`6` | REF, VEL, SW, ZDR, CC, PHI |
+| `Shift+3` | 3D view |
+| `V` | value under the cursor |
+| `D` | draw |
+| `[` `]` | step through overlapping items |
+| `,` `.` | legend filter (legend hovered) |
+| `?` | all shortcuts, and your layer shortcuts |
 | `C` | crosshair |
 | `B` | bearing from radar |
 | `M` | measure |

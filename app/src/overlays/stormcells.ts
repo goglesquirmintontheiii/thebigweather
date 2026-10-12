@@ -4,6 +4,7 @@
 import type { LayerSpecification, ExpressionSpecification } from "maplibre-gl";
 import { signal } from "@preact/signals";
 import { settings } from "../store";
+import { histRange } from "../anim";
 import { destination, compass, speedFactor } from "../util";
 import type { Style, Popup } from "./defs";
 
@@ -160,7 +161,7 @@ export function etaText(list: { name: string; min: number }[]): string {
 
 const notified = new Map<string, number>();
 function notifyEtas(cells: { lon: number; lat: number; p: any }[]) {
-  if (!settings.value.etaNotify) return;
+  if (!settings.value.etaNotify || histRange.peek()) return; // not for replayed (history) cells
   const now = Date.now();
   for (const [k, t] of notified) if (now - t > 3 * 3600_000) notified.delete(k);
   for (const c of cells) {

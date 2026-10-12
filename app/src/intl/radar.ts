@@ -286,7 +286,7 @@ function build() {
   }
   built = framesFor(w.id);
   const bad = new Set<number>();
-  intlError.value = built.length ? null : intlErrors.value[w.id.startsWith("smn") ? "smn" : w.id] ?? (intlSources.value.length || !listP ? "No frames available for this source right now" : null);
+  intlError.value = built.length ? null : intlErrors.value[w.id.startsWith("smn") ? "smn" : w.id] ?? (intlSources.value.length || !listP ? (histRange.peek() ? "This source has no archive for that window (recent frames only)" : "No frames available for this source right now") : null);
   built.forEach((f, i) =>
     f.parts.forEach((p, j) => {
       const s = p.src;
@@ -444,7 +444,7 @@ function sigNow() {
   const a = settings.value.anim;
   const h = histRange.value;
   const fr = framesFor(w.id);
-  return `${w.id}|${fr.map((f) => f.t).join(",")}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}|${api.base}`;
+  return `${w.id}|${fr.map((f) => f.t).join(",")}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}|${api.base}|${settings.value.saver}`;
 }
 
 effect(() => {

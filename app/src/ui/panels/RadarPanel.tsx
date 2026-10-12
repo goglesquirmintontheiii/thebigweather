@@ -83,7 +83,7 @@ function SitePicker() {
             onClick={(e) => (selectSite(s.id, e.ctrlKey || e.metaKey), setQ(""))}
           >
             <span class="sid">{s.id}</span>
-            <span class="sname">{[s.name, s.state, (s as AnySite).country && siteRegion(s) !== "US" ? (s as AnySite).country : ""].filter(Boolean).join(", ")}</span>
+            <span class="sname">{[...new Set([s.name, s.state, (s as AnySite).country && siteRegion(s) !== "US" ? (s as AnySite).country : ""].filter(Boolean))].join(", ")}</span>
             {s.type === "TDWR" && <span class="tag tdwr">TDWR</span>}
             {siteRegion(s) !== "US" && <span class="tag intl">{(s as AnySite).kind === "odim" ? "ODIM" : siteRegion(s)}</span>}
             <span class="sdist">{fmtDist(d)}</span>
@@ -284,7 +284,7 @@ function HistoryBox() {
   return (
     <section>
       <label class="lbl">Files</label>
-      <p class="muted small">History is in the timeline at the bottom (clock button).</p>
+      <p class="muted small">History: calendar button on the toolbar or timeline.</p>
       <div class="row">
         {pinned.value && (
           <button class="btn sm ghost" onClick={backToLatest}>

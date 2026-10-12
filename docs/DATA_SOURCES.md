@@ -12,6 +12,20 @@ Every feed is public and keyless unless marked **key**. The server caches each o
 | GOES-19/18 bands and RGB composites | AWS `noaa-goes19` / `noaa-goes18`. Composites are built by the server from CIRA/RAMMB quick-guide recipes |
 | NASA GeoColor (full disk), Himawari | NASA GIBS WMTS (`epsg3857/best`) |
 | NDFD | tgftp.nws.noaa.gov |
+| European radar volumes | EUMETNET OPERA open radar data (`openradar-24h` on CloudFerro S3, CC BY 4.0); FMI Finland (`fmi-opendata-radar-volume-hdf5` on AWS) | 24 h rolling for OPERA |
+| OPERA composites | Same OPERA bucket (DBZH, RATE) | CC BY 4.0 |
+| Taiwan composite | CWA open data on S3 | |
+| Canada, Germany radar | ECCC GeoMet WMS (OGL Canada); DWD WMS (GeoNutzV) | |
+| Japan radar | JMA nowcast tiles | Credit JMA |
+| Mexico radar | SMN (CONAGUA) radar images | Personal use |
+| Philippines radar | PAGASA (panahon.gov.ph) | |
+| Meteosat | EUMETView WMS | |
+| GEFS | AWS `noaa-gefs-pds` | |
+| CMC GDPS / HRDPS | MSC Datamart (dd.weather.gc.ca) | OGL Canada |
+| ICON-EU | DWD open data | |
+| MRMS 3D reflectivity | AWS `noaa-mrms-pds` (MergedReflectivityQC levels) | |
+| Soundings | IEM RAOB archive (observed); Open-Meteo pressure levels (model) | |
+| Ensembles | Open-Meteo Ensemble API (called from the app) | CC BY 4.0, non-commercial |
 | METARs / TAFs / PIREPs / SIGMETs / G-AIRMETs | aviationweather.gov Data API (100 requests per minute limit) |
 
 ## Overlays
@@ -45,6 +59,20 @@ Every feed is public and keyless unless marked **key**. The server caches each o
 | mPING | mping.ou.edu API v2 (**key**) | General license: last 4 hours |
 | Forecast | api.weather.gov (US); Open-Meteo elsewhere or as backup | Open-Meteo is CC BY 4.0, non-commercial |
 | Place search | Nominatim (OpenStreetMap) | Max 1 request per second; results are cached |
+| Historical warnings, reports, watches, MDs | Iowa Environmental Mesonet archives | |
+| Storm attributes (storm tracks, rotation scan) | IEM `nexrad_attr.geojson` (NWS storm cell data) | |
+| Spaghetti models | NHC ATCF a-decks | |
+| Recon center fixes | NHC vortex messages (tgftp), IEM AFOS archive | |
+| Volcanoes | USGS HANS | |
+| Drought | US Drought Monitor via IEM | |
+| Social Vulnerability Index | CDC/ATSDR SVI 2022 (ArcGIS) | |
+| Fire and smoke | NOAA HMS daily files | |
+| Air quality | AirNow public files (`reportingarea.dat`) | |
+| Kp | NOAA SWPC | |
+| NOHRSC snow, HeatRisk | mapservices.weather.noaa.gov (ArcGIS) | |
+| Raspberry Shake | data.raspberryshake.org FDSN | Data may not be redistributed; the server only fetches on demand |
+| Traffic | TomTom Traffic API (**key**, free tier) | |
+| YouTube recording | yt-dlp on the server (optional) | Check the stream owner's terms before recording |
 | Map search | Overpass API (overpass-api.de, overpass.private.coffee) | |
 
 ## Not used, and why

@@ -202,8 +202,8 @@ pub const VARS: &[VarDef] = &[
     VarDef { id: "hgt500", name: "500 mb Height", group: "Upper air", units: "m", cmap: "HGT500", transform: Transform::None, ncep: Match::Ncep(&["HGT:500 mb"]), ecmwf: Some(Match::Ec("gh", "pl", "500")), accum: false },
     VarDef { id: "wind250", name: "250 mb Wind", group: "Upper air", units: "m/s", cmap: "JET", transform: Transform::None, ncep: Match::NcepUv("UGRD:250 mb", "VGRD:250 mb"), ecmwf: Some(Match::EcUv("u", "v")), accum: false },
     // HRRR-Smoke (wrfsfc): "|organic" prefers the smoke (organic matter) record when several aerosols share the level
-    VarDef { id: "smoke", name: "Near-Surface Smoke", group: "Smoke", units: "µg/m³", cmap: "PRECIPMM", transform: Transform::KgM3ToUgM3, ncep: Match::Ncep(&["MASSDEN:8 m above ground|organic"]), ecmwf: None, accum: false },
-    VarDef { id: "colsmoke", name: "Vertically Integrated Smoke", group: "Smoke", units: "mg/m²", cmap: "PRECIPMM", transform: Transform::KgM2ToMgM2, ncep: Match::Ncep(&["COLMD:entire atmosphere|organic"]), ecmwf: None, accum: false },
+    VarDef { id: "smoke", name: "Near-Surface Smoke", group: "Smoke", units: "µg/m³", cmap: "SMOKE", transform: Transform::KgM3ToUgM3, ncep: Match::Ncep(&["MASSDEN:8 m above ground|organic"]), ecmwf: None, accum: false },
+    VarDef { id: "colsmoke", name: "Vertically Integrated Smoke", group: "Smoke", units: "mg/m²", cmap: "SMOKE", transform: Transform::KgM2ToMgM2, ncep: Match::Ncep(&["COLMD:entire atmosphere|organic"]), ecmwf: None, accum: false },
     // GEFS: precipitation comes in 6-hour (3-hour early on) buckets, not run totals
     VarDef { id: "apcp6", name: "6-hr Precipitation", group: "Precip", units: "mm", cmap: "PRECIPMM", transform: Transform::None, ncep: Match::Ncep(&["APCP:surface"]), ecmwf: None, accum: true },
 ];

@@ -13,7 +13,7 @@ import { CalendarClock } from "lucide-preact"; // history
 import { histRange, histPicker, exitHistory } from "../history"; // history
 // workflow
 import { useState } from "preact/hooks";
-import { Film, Bookmark, Slice, Route, Leaf } from "lucide-preact";
+import { Film, Bookmark, Slice, Route, Leaf, Ellipsis } from "lucide-preact";
 import { loopDialog, loopProgress } from "../loopexport";
 import { LoopExportDialog } from "./LoopExport";
 import { SrvControl } from "./SrvControl";
@@ -78,6 +78,7 @@ export async function screenshot() {
 export function Toolbar() {
   const t = tool.value;
   const [wsOpen, setWsOpen] = useState(false); // workflow
+  const [more, setMore] = useState(false);
   void measurePts.value;
   void bearingInfo.value;
   const btn = (on: boolean, title: string, onClick: () => void, icon: any, disabled = false) => (
@@ -85,6 +86,15 @@ export function Toolbar() {
       {icon}
     </button>
   );
+  const item = (on: boolean, label: string, key: string, onClick: () => void, icon: any, disabled = false) => (
+    <button class={`tb-more-item ${on ? "on" : ""}`} onClick={onClick} disabled={disabled}>
+      {icon}
+      <span>{label}</span>
+      {key && <kbd>{key}</kbd>}
+    </button>
+  );
+  // a tool inside the menu is active
+  const moreOn = t === "bearing" || t === "xsect" || crosshair.value || settings.value.ui.cursorValue || !!xsLine.value || trackPanel.value || loopDialog.value || !!loopProgress.value;
   return (
     <div class="toolbar-wrap">
       {t === "measure" && (
@@ -103,24 +113,40 @@ export function Toolbar() {
           <WorkspaceMenu onClose={() => setWsOpen(false)} />
         </>
       )}
+      {more && (
+        <>
+          <div class="ws-scrim" onPointerDown={() => setMore(false)} />
+          <div class="tb-more glass" onClick={() => setMore(false)}>
+            {item(t === "bearing", "Distance & direction", "B", () => (tool.value = t === "bearing" ? "none" : "bearing"), <Compass size={16} />)}
+            {item(crosshair.value, "Center crosshair value", "C", () => (crosshair.value = !crosshair.value), <Crosshair size={16} />)}
+            {item(settings.value.ui.cursorValue, "Value under mouse", "V", () => update((s) => (s.ui.cursorValue = !s.ui.cursorValue)), <MousePointer2 size={16} />)}
+            {item(settings.value.overlays.sites, "Radar sites", "R", () => update((s) => (s.overlays.sites = !s.overlays.sites)), <RadioTower size={16} />)}
+            {/* workflow */ item(t === "xsect" || !!xsLine.value, "Cross-section (Level II)", "", startXSection, <Slice size={16} />)}
+            {item(loopDialog.value || !!loopProgress.value, "Export loop (GIF / MP4)", "", () => (loopDialog.value = !loopDialog.value), <Film size={16} />, frameCount.value < 1 || !!loopProgress.value)}
+            {item(trackPanel.value, recording.value ? "GPS track · recording" : "GPS track & chasers", "", () => (trackPanel.value = !trackPanel.value), <Route size={16} />)}
+            {item(wsOpen, "Workspaces", "", () => setWsOpen(!wsOpen), <Bookmark size={16} />)}
+          </div>
+        </>
+      )}
       <div class="toolbar glass">
         {btn(playing.value, "Play / pause loop (Space)", togglePlay, playing.value ? <Pause size={19} /> : <Play size={19} />, frameCount.value < 2)}
         {/* history */ btn(!!histRange.value || histPicker.value, histRange.value ? "Historical mode on · click for live" : "Historical mode", () => (histRange.value ? exitHistory() : (histPicker.value = !histPicker.value)), <CalendarClock size={19} />)}
         {btn(false, "My location (L)", locate, <LocateFixed size={19} />)}
         {btn(false, "Screenshot (S)", screenshot, <Camera size={19} />)}
         <ScreenRecButton />
-        {btn(t === "bearing", "Distance & direction from radar (B)", () => (tool.value = t === "bearing" ? "none" : "bearing"), <Compass size={19} />)}
-        {btn(crosshair.value, "Center crosshair value (C)", () => (crosshair.value = !crosshair.value), <Crosshair size={19} />)}
-        {btn(settings.value.ui.cursorValue, "Show the value under the mouse (V) · or hold Shift", () => update((s) => (s.ui.cursorValue = !s.ui.cursorValue)), <MousePointer2 size={19} />)}
         {btn(t === "measure", "Measure distance (M)", () => (tool.value = t === "measure" ? "none" : "measure"), <Ruler size={19} />)}
-        {btn(settings.value.overlays.sites, "Show/hide radar sites (R)", () => update((s) => (s.overlays.sites = !s.overlays.sites)), <RadioTower size={19} />)}
         <PaneButton />
         {btn(t === "draw", "Drawing mode (D)", () => (tool.value = t === "draw" ? "none" : "draw"), <PenTool size={19} />)}
         {/* 3D */ btn(settings.value.view3d.on, "3D radar volume (Shift+3)", toggle3D, <Box size={19} />)}
-        {/* workflow */ btn(t === "xsect" || !!xsLine.value, "Vertical cross-section (Level II)", startXSection, <Slice size={19} />)}
-        {btn(loopDialog.value || !!loopProgress.value, "Export loop (GIF / MP4)", () => (loopDialog.value = !loopDialog.value), <Film size={19} />, frameCount.value < 1 || !!loopProgress.value)}
-        {btn(trackPanel.value, recording.value ? "GPS track · recording" : "GPS track & nearby chasers", () => (trackPanel.value = !trackPanel.value), <span class="tb-ic">{<Route size={19} />}{recording.value && <i class="tb-dot rec" />}</span>)}
-        {btn(wsOpen, "Workspaces", () => setWsOpen(!wsOpen), <Bookmark size={19} />)}
+        {btn(
+          more || moreOn,
+          "More tools",
+          () => setMore(!more),
+          <span class="tb-ic">
+            <Ellipsis size={19} />
+            {recording.value && <i class="tb-dot rec" />}
+          </span>,
+        )}
         {settings.value.saver && btn(true, "Bandwidth saver on · click to turn off", () => update((s) => (s.saver = false)), <Leaf size={19} />)}
       </div>
     </div>

@@ -7,7 +7,7 @@ import { signal, effect } from "@preact/signals";
 import { settings, update } from "./store";
 import { popoutSpec } from "./popout";
 import { mapRef } from "./map/mapview";
-import { frameIndex, playing } from "./anim";
+import { frameIndex, playing, historyStart, historyEnd, setHistory } from "./anim";
 import { activeFrames } from "./active";
 
 export const isSecondWindow = popoutSpec?.kind === "map";
@@ -31,6 +31,7 @@ type Msg =
   | { t: "view"; c: [number, number]; z: number; b: number; p: number }
   | { t: "time"; time: number }
   | { t: "play"; on: boolean }
+  | { t: "hist"; start: number | null; end: number | null }
   | { t: "site"; site: string; extra: string[] }
   | { t: "layers"; ovl: any; overlays: any };
 
@@ -47,6 +48,8 @@ function guard(fn: () => void) {
   }
 }
 
+const histSig = () => JSON.stringify([historyStart.value, historyEnd.value]);
+let lastHist = "";
 const siteSig = () => JSON.stringify([settings.value.radar.site, settings.value.extraSites]);
 const layerSig = () => JSON.stringify([settings.value.ovl, settings.value.overlays]);
 let lastSite = "";
@@ -68,8 +71,12 @@ function sendSite() {
 function sendLayers() {
   send({ t: "layers", ovl: settings.peek().ovl, overlays: settings.peek().overlays });
 }
+function sendHist() {
+  send({ t: "hist", start: historyStart.peek(), end: historyEnd.peek() });
+}
 function sendAll() {
   sendView();
+  sendHist();
   sendTime();
   sendSite();
   if (linkLayers.peek()) sendLayers();
@@ -121,6 +128,12 @@ function onMsg(m: Msg & { from: string }) {
         // the other window drives playback; this one follows its frame times
         if (m.on && playing.peek()) playing.value = false;
         break;
+      case "hist": {
+        // history window first, so the frame times that follow line up
+        lastHist = JSON.stringify([m.start, m.end]);
+        if (lastHist !== histSig()) setHistory(m.start, m.end);
+        break;
+      }
       case "site": {
         lastSite = JSON.stringify([m.site, m.extra]);
         if (lastSite !== siteSig())
@@ -183,6 +196,13 @@ if (ch) {
     const p = playing.value;
     if (!linkOn.peek() || applying) return;
     send({ t: "play", on: p });
+  });
+  // history mode window
+  effect(() => {
+    const sig = histSig();
+    if (sig === lastHist) return;
+    lastHist = sig;
+    if (linkOn.peek() && !applying) sendHist();
   });
   // radar site(s)
   effect(() => {

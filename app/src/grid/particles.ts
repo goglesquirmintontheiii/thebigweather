@@ -54,11 +54,13 @@ export function parseWind(buf: ArrayBuffer): WindField {
   const b = new Uint8Array(buf, 4 + hl, n * 2);
   const u = new Float32Array(n);
   const v = new Float32Array(n);
-  const su = (h.umax - h.umin) / 255;
-  const sv = (h.vmax - h.vmin) / 255;
+  // byte 0 = no data (outside the model domain); else min + (b-1)/254 * (max-min)
+  const su = (h.umax - h.umin) / 254;
+  const sv = (h.vmax - h.vmin) / 254;
   for (let i = 0; i < n; i++) {
-    u[i] = h.umin + b[i * 2] * su;
-    v[i] = h.vmin + b[i * 2 + 1] * sv;
+    const bu = b[i * 2], bv = b[i * 2 + 1];
+    u[i] = bu ? h.umin + (bu - 1) * su : 0;
+    v[i] = bv ? h.vmin + (bv - 1) * sv : 0;
   }
   return { nx: h.nx, ny: h.ny, lon0: h.lon0, lat0: h.lat0, dlon: h.dlon, dlat: h.dlat, time: h.time, u, v };
 }

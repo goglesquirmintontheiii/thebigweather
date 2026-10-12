@@ -106,9 +106,11 @@ export function AlertDetail() {
   useEffect(() => {
     if (!d || d.items.length < 2) return;
     const key = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
-      if (e.key === "[" || e.key === ",") step(-1);
-      if (e.key === "]" || e.key === ".") step(1);
+      const tg = (e.target as HTMLElement)?.tagName;
+      if (tg === "INPUT" || tg === "TEXTAREA" || tg === "SELECT" || e.ctrlKey || e.metaKey || e.altKey) return;
+      // (`,` / `.` belong to the legend filter)
+      if (e.key === "[") step(-1);
+      if (e.key === "]") step(1);
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);

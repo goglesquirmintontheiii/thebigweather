@@ -4871,3 +4871,42 @@ body.loopx-hide .loopx {
   margin-right: 4px;
 }
 /* ---------- end intl & forecast tools ---------- */
+
+/* toolbar "more" menu */
+.tb-more {
+  position: absolute;
+  bottom: 56px;
+  right: 0;
+  width: 230px;
+  padding: 6px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tb-more-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  text-align: left;
+  color: #c4cdd8;
+}
+.tb-more-item span {
+  flex: 1;
+}
+.tb-more-item kbd {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.tb-more-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.tb-more-item.on {
+  color: var(--accent);
+}
+.tb-more-item:disabled {
+  opacity: 0.35;
+}

@@ -29,6 +29,8 @@ export const BUILTIN_HOTKEYS: [string, string][] = [
   ["B", "Bearing"],
   ["R", "Radar sites"],
   ["Escape", "Close / cancel"],
+  ["[", "Info panel: previous item"],
+  ["]", "Info panel: next item"],
   ["?", "Keyboard shortcuts"],
   [",", "Legend filter down (legend hovered)"],
   [".", "Legend filter up (legend hovered)"],

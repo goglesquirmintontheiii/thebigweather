@@ -415,11 +415,12 @@ async function fetchHistOverlay(id: string, def: OverlayDef) {
   const key = histKey();
   setStatus(id, { loading: true });
   try {
-    const fc = await histFeed(hf.feed, hf.kind === "valid" ? Math.round(histTime.value / 300_000) * 300_000 : undefined);
+    let fc = await histFeed(hf.feed, hf.kind === "valid" ? Math.round(histTime.value / 300_000) * 300_000 : undefined);
     if (!isOn(id) || key !== histKey()) return;
+    if (def.prepare) fc = def.prepare(fc, optsFor(def)); // derived features (storm arrows) in replay too
     setData(id, fc);
     applyHistFilter(id);
-    setStatus(id, { count: fc.features?.length ?? 0, note: "Replay" });
+    setStatus(id, { count: fc._count ?? fc.features?.length ?? 0, note: "Replay" });
   } catch (e: any) {
     setStatus(id, { error: e.message });
   }
@@ -452,14 +453,16 @@ let validTimer: number | undefined;
 effect(() => {
   const T = histTime.value;
   if (!T) return;
+  const valid: string[] = [];
   for (const id of shown.keys()) {
     const hf = histFeedFor(overlayDef(id));
     if (!hf) continue;
     if (hf.kind !== "valid") applyHistFilter(id);
-    else {
-      clearTimeout(validTimer);
-      validTimer = window.setTimeout(() => fetchOverlay(id), 400);
-    }
+    else valid.push(id);
+  }
+  if (valid.length) {
+    clearTimeout(validTimer);
+    validTimer = window.setTimeout(() => valid.forEach((id) => fetchOverlay(id)), 400);
   }
 });
 

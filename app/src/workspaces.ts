@@ -53,7 +53,7 @@ export function applyWorkspace(id: string) {
       if (k === "view" || v === undefined) continue;
       const cur = (s as any)[k];
       // merge object groups so settings added after the save keep their defaults
-      (s as any)[k] = cur && typeof cur === "object" && !Array.isArray(cur) && typeof v === "object" && !Array.isArray(v) && k !== "ovl" && k !== "gates" && k !== "tables" && k !== "keybinds" ? { ...cur, ...structuredClone(v) } : structuredClone(v);
+      (s as any)[k] = cur && typeof cur === "object" && !Array.isArray(cur) && typeof v === "object" && !Array.isArray(v) && k !== "weather" && k !== "ovl" && k !== "gates" && k !== "tables" && k !== "keybinds" ? { ...cur, ...structuredClone(v) } : structuredClone(v);
     }
     if (w.data.view) s.view = w.data.view;
   });

@@ -9,6 +9,54 @@ import { nhcPrepare, nhcNowLayers, atcfPrepare, atcfLayers, atcfClick, atcfStorm
 import { stormPrepare, stormLayers, stormClick } from "./stormcells";
 import { rotationLayers, rotationClick, scanLayers, scanClick } from "./rotation";
 import { trafficSource, trafficLayers, incPrepare, incLayers, incClick } from "./traffic";
+import { api } from "../api";
+
+/** NOAA ArcGIS raster services through the server's tile proxy */
+function arcgis(service: string, q: string) {
+  const tok = api.token ? `&token=${encodeURIComponent(api.token)}` : "";
+  return { tiles: [`${api.base}/api/arcgis/${service}/{z}/{x}/{y}?${q}${tok}`], tileSize: 256, maxzoom: 12, attribution: "NOAA/NWS" };
+}
+const rasterLayer = (s: string, st: { opacity: number }): LayerSpecification[] => [{ id: `${s}-r`, type: "raster", source: s, paint: { "raster-opacity": st.opacity, "raster-fade-duration": 0 } } as LayerSpecification];
+
+const extras: OverlayDef[] = [
+  {
+    id: "nohrsc",
+    name: "Snow depth / SWE (NOHRSC)",
+    group: "Environment",
+    feed: "client",
+    refresh: 0,
+    options: [{ key: "layer", label: "Show", choices: [["depth", "Snow depth"], ["swe", "Snow water"]], def: "depth" }],
+    style: { opacity: 0.75 },
+    raster: (o) => arcgis("nohrsc", `layer=${o.layer || "depth"}`),
+    layers: (s, st) => rasterLayer(s, st),
+    note: "Daily NOHRSC analysis.",
+  },
+  {
+    id: "heatrisk",
+    name: "HeatRisk (NWS)",
+    group: "Environment",
+    feed: "client",
+    refresh: 0,
+    options: [{ key: "day", label: "Day", choices: [["1", "Today"], ["2", "Day 2"], ["3", "Day 3"], ["4", "Day 4"], ["5", "Day 5"], ["6", "Day 6"], ["7", "Day 7"]], def: "1" }],
+    style: { opacity: 0.6 },
+    raster: (o) => arcgis("heatrisk", `day=${o.day || "1"}`),
+    layers: (s, st) => rasterLayer(s, st),
+    note: "Green little → magenta extreme heat risk.",
+  },
+  {
+    id: "vdm",
+    name: "Recon center fixes",
+    group: "Tropical",
+    refresh: 120,
+    style: { color: "#f472b6", opacity: 1, size: 1 },
+    layers: (s, st) => [
+      { id: `${s}-c`, type: "circle", source: s, paint: { "circle-radius": 5 * st.size, "circle-color": st.color, "circle-opacity": st.opacity, "circle-stroke-color": "#000", "circle-stroke-width": 1 } } as LayerSpecification,
+      { id: `${s}-l`, type: "symbol", source: s, minzoom: 4, layout: { "text-field": ["concat", ["to-string", ["get", "mslp"]], " mb"], "text-font": font, "text-size": 11, "text-offset": [0, 1.1], "text-anchor": "top" }, paint: halo } as LayerSpecification,
+    ],
+    click: (p) => ({ title: `Center fix · ${p.storm || p.id || ""}`, sub: p.mission, rows: [["Time", when(p.t)], ["Min pressure", p.mslp != null ? `${p.mslp} mb` : "—"], ["Max flight-level wind", p.maxwind != null ? `${p.maxwind} kt` : "—"]], text: p.text }),
+    note: "Vortex messages from Hurricane Hunter flights (last 5 days).",
+  },
+];
 
 const font = ["Noto Sans Regular"];
 const bold = ["Noto Sans Bold"];
@@ -277,6 +325,8 @@ place([hazards[0]], undefined, "Hazards");
 place([hazards[1]], "fires");
 place(environment, undefined, "Hazards");
 place(traffic, undefined, "Cameras");
+place(extras.slice(0, 2), undefined, "Hazards");
+place(extras.slice(2), "recon");
 
 // NHC: spinning symbol at each storm's current position, bigger than the forecast points
 const nhc = overlayDef("nhc");

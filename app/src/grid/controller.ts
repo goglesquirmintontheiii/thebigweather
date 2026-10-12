@@ -233,7 +233,7 @@ export async function loadGridFrames(keepIndex = false) {
         const def = gridDef(w.id);
         frameIndex.value = def?.source === "model" || def?.source === "ndfd" || def?.source === "future" ? 0 : Math.max(0, fs.length - 1);
       }
-      if (!fs.length) gridError.value = "No data available for this layer right now";
+      if (!fs.length) gridError.value = obs && histRange.value ? "No archived data for this layer in that window" : "No data available for this layer right now";
     });
     refreshRasters();
   } catch (e: any) {
@@ -263,6 +263,8 @@ function cadence(id: string): number {
   const d = gridDef(id);
   if (d?.source === "mrms") return 2;
   if (d?.source === "metar") return 60;
+  if ((d?.source as string) === "opera") return id.includes("rate") ? 15 : 5;
+  if ((d?.source as string) === "cwa") return 10;
   if (d?.source === "goes") return id.includes("/meso") ? 1 : id.includes("/full") ? 10 : 5;
   return 10;
 }
@@ -275,7 +277,7 @@ effect(() => {
   const a = settings.value.anim;
   const h = histRange.value;
   void api.base;
-  const sig = w.kind === "grid" ? `${w.id}|${w.run ?? ""}|${w.storm ?? ""}|${n}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}` : "";
+  const sig = w.kind === "grid" ? `${w.id}|${w.run ?? ""}|${w.storm ?? ""}|${n}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}|${settings.value.saver}` : ""; // saver caps frames
   if (sig === lastSig) return;
   const layerChanged = lastSig.split("|")[0] !== sig.split("|")[0];
   lastSig = sig;

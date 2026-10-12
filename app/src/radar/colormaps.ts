@@ -237,6 +237,7 @@ Object.assign(BUILTIN, {
   MESH: T("MESH", "Hail Size", "mm", 0, 100, [S(0, "#000000", 0), S(2, "#2fb6d9", 150), S(10, "#16c45a"), S(19, "#f2e30c"), S(25, "#f2a105"), S(38, "#e41b14"), S(51, "#ff2ab4"), S(64, "#b02be3"), S(100, "#ffffff")]),
   ROT: T("ROT", "Rotation", "1/s", 0, 0.02, [S(0, "#000000", 0), S(0.002, "#3b4d5c", 100), S(0.004, "#2fb6d9"), S(0.006, "#16c45a"), S(0.008, "#f2e30c"), S(0.01, "#f2a105"), S(0.012, "#e41b14"), S(0.015, "#ff2ab4"), S(0.02, "#ffffff")]),
   AZSHEAR: T("AZSHEAR", "Azimuthal Shear", "1/s", -0.015, 0.015, [S(-0.015, "#0a1f8a"), S(-0.008, "#1b6cff"), S(-0.003, "#5ac8fa", 160), S(0, "#000000", 0), S(0.003, "#f2e30c", 160), S(0.008, "#f2a105"), S(0.012, "#e41b14"), S(0.015, "#ff2ab4")]),
+  SMOKE: T("SMOKE", "Smoke", "µg/m³", 0, 250, [S(0, "#000000", 0), S(1, "#d9d2c0", 60), S(4, "#c2b58f", 120), S(12, "#b0915a"), S(35, "#9a6a3a"), S(55, "#7f4a2a"), S(150, "#5a2a2a"), S(250, "#2a1010")]),
   ETKM: T("ETKM", "Echo Tops", "km", 0, 20, [S(0, "#000000", 0), S(2, "#4a6d85"), S(5, "#2fb6d9"), S(8, "#16c45a"), S(11, "#f2e30c"), S(14, "#f07a05"), S(17, "#e41b14"), S(20, "#ffffff")]),
   PTYPE: cat("PTYPE", "Precip Type", [
     [0, "#00000000", "None"],
@@ -283,7 +284,9 @@ export function defaultTableFor(product: string): string {
   if (["N0H", "HHC"].includes(p)) return "HCA";
   if (p === "PHI") return "PHI";
   if (p === "CFP") return "CFP";
-  if (p === "DVL") return "VIL";
+  if (p === "DVL" || p === "VIL") return "VIL";
+  if (p === "CREF") return "REF";
+  if (p === "ET") return "ETKM";
   if (p === "EET") return "ET";
   if (["DAA", "DTA", "N1P", "NTP"].includes(p)) return "PRECIP";
   return "REF";
