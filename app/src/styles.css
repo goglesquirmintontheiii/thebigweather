@@ -7913,3 +7913,84 @@ html[data-theme="light"] .toggle i {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---------- p7 outages/canada ---------- */
+.outage-total {
+  margin: 2px 0 6px;
+}
+.eccc-img {
+  position: fixed;
+  left: 12px;
+  bottom: 132px;
+  z-index: 6;
+  width: min(320px, calc(100vw - 24px));
+  padding: 8px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.eccc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.eccc-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.eccc-play,
+.eccc-x {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0 4px;
+  user-select: none;
+}
+.eccc-play:hover,
+.eccc-x:hover {
+  color: var(--text);
+}
+.eccc-pic {
+  position: relative;
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+  min-height: 60px;
+}
+.eccc-pic img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.eccc-img.empty .eccc-pic img {
+  display: none;
+}
+.eccc-msg:empty {
+  display: none;
+}
+.eccc-msg {
+  padding: 10px;
+  color: var(--muted);
+}
+.eccc-slider {
+  width: 100%;
+}
+.eccc-foot {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.eccc-src {
+  color: var(--accent);
+}
+@media (max-width: 640px) {
+  .eccc-img {
+    width: 220px;
+    bottom: 150px;
+  }
+}

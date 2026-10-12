@@ -533,9 +533,18 @@ impl IntlRadar {
     // ---------- Canada: per-radar views (ECCC) ----------
 
     /// One image source per Canadian radar: the MSC GeoMet 1 km radar mosaic (rain and snow
-    /// rate) cropped to the radar's 240 km range, georeferenced in EPSG:4326. ECCC publishes no
-    /// open single-site volumes; with `site` the source also lists that radar's own pre-rendered
-    /// Datamart GIFs (DPQPE, falling back to CAPPI), which carry a basemap and legend.
+    /// rate) cropped to the radar's 240 km range, georeferenced in EPSG:4326. With `site` the
+    /// source also lists that radar's own pre-rendered Datamart GIFs (DPQPE, falling back to
+    /// CAPPI), which the app shows in a separate (not georeferenced) station-image viewer.
+    ///
+    /// Re-checked 2026-10-12 for a real single-site source: `dd.weather.gc.ca/today/radar/` only
+    /// has `24_HR_ACCUM`, `CAPPI`, `DPQPE` (GIF per site, 6 min) and `visibility`; GeoMet WMS has
+    /// only composite layers (`RADAR_1KM_RRAI/RSNO`, `Radar_1km_SfcPrecipType`, extrapolations;
+    /// no per-site layers, WCS disabled for radar); the MSC open-data docs list no volume scans,
+    /// and the cost-recovered services page sells "Full doppler volume scans data in ODIM_H5
+    /// format" / raw IRIS/ODIM data ($1,600–2,000 per month). The NWS ingests 24 Canadian S-band
+    /// radars as ODIM_H5 into AWIPS over the SBN, which is not openly downloadable either.
+    /// The GIFs carry no published projection or extent, so they are not warped onto the map.
     async fn eccc(&self, site: Option<&'static (&'static str, &'static str, &'static str, f64, f64)>) -> Result<Value> {
         let mut times = HashMap::new();
         for layer in ["RADAR_1KM_RRAI", "RADAR_1KM_RSNO"] {

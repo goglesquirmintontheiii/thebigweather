@@ -15,6 +15,7 @@ import { configModal } from "./OverlayList";
 import { compass } from "../util";
 import { Table2, X } from "lucide-preact";
 import { spaceOpen } from "./SpacePanel"; // data 0.6
+import { outageSummary } from "../overlays/p7defs"; // p7
 
 export const stormTableOpen = signal(false);
 
@@ -102,6 +103,15 @@ export function LayerExtra({ id }: { id: string }) {
           <Table2 size={13} /> Storm table
         </button>
         {!stormCells.value.cells.length && <span class="muted small"> Turn the layer on first</span>}
+      </section>
+    );
+  /* p7: power outages — totals + per-utility status */
+  if (id === "outages")
+    return (
+      <section>
+        <label class="lbl">Utilities</label>
+        <div class="muted small outage-total">{outageSummary()}</div>
+        <FeedSources id={id} />
       </section>
     );
   if (id === "roadwork" || id === "trafficflow")
