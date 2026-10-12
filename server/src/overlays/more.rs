@@ -994,14 +994,14 @@ impl Default for TileCache {
 }
 
 impl TileCache {
-    fn get(&self, k: &str) -> Option<Bytes> {
+    pub fn get(&self, k: &str) -> Option<Bytes> {
         let mut g = self.inner.lock();
         match g.0.get(k) {
             Some((t, b)) if t.elapsed() < TILE_TTL => Some(b.clone()),
             _ => None,
         }
     }
-    fn put(&self, k: String, b: Bytes) {
+    pub fn put(&self, k: String, b: Bytes) {
         let mut g = self.inner.lock();
         let n = b.len();
         if let Some((_, old)) = g.0.put(k, (Instant::now(), b)) {

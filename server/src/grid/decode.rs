@@ -24,6 +24,12 @@ pub enum Transform {
     MToCm,
     /// fraction (0–1) → percent
     FracToPct,
+    /// kg/m³ → µg/m³ (smoke concentration)
+    KgM3ToUgM3,
+    /// kg/m² → mg/m² (column smoke)
+    KgM2ToMgM2,
+    /// geopotential (m²/s²) → geopotential height (m)
+    GeopotToM,
 }
 
 impl Transform {
@@ -37,6 +43,9 @@ impl Transform {
             Transform::MToMm => v * 1000.0,
             Transform::MToCm => v * 100.0,
             Transform::FracToPct => v * 100.0,
+            Transform::KgM3ToUgM3 => v * 1.0e9,
+            Transform::KgM2ToMgM2 => v * 1.0e6,
+            Transform::GeopotToM => v / 9.80665,
         }
     }
 }
@@ -91,27 +100,63 @@ fn norm_lon(l: f64) -> f64 {
     l
 }
 
+/// Decompress .bz2 (DWD open data) if needed.
+pub fn maybe_bunzip2(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>> {
+    if bytes.len() > 3 && &bytes[..3] == b"BZh" {
+        let mut out = Vec::with_capacity(bytes.len() * 3);
+        bzip2::read::MultiBzDecoder::new(bytes).read_to_end(&mut out)?;
+        Ok(std::borrow::Cow::Owned(out))
+    } else {
+        Ok(std::borrow::Cow::Borrowed(bytes))
+    }
+}
+
+/// Whether vector components are resolved relative to the grid's x/y axes.
+fn uv_grid_relative(def: &G) -> bool {
+    let f = match def {
+        G::Template0(t) => t.lat_lon.grid.resolution_and_component_flags.0,
+        G::Template1(t) => t.lat_lon.grid.resolution_and_component_flags.0,
+        G::Template30(t) => t.resolution_and_component_flags.0,
+        G::Template20(t) => t.resolution_and_component_flags.0,
+        _ => 0,
+    };
+    f & 0x08 != 0
+}
+
+fn latlon_params(ll: &grib::def::grib2::template::param_set::LatLonGrid) -> (usize, usize, f64, f64, f64, f64, f64, u8) {
+    let g = &ll.grid;
+    let unit = if g.initial_production_domain_basic_angle == 0 || g.initial_production_domain_basic_angle == u32::MAX || g.basic_angle_subdivisions == 0 || g.basic_angle_subdivisions == u32::MAX {
+        1e-6
+    } else {
+        g.initial_production_domain_basic_angle as f64 / g.basic_angle_subdivisions as f64
+    };
+    let scan = ll.scanning_mode.0;
+    let di = ll.i_direction_inc as f64 * unit;
+    let dj = ll.j_direction_inc as f64 * unit;
+    let lat0 = g.first_point_lat as f64 * unit;
+    let lon0 = norm_lon(g.first_point_lon as f64 * unit);
+    let dlon = if scan & 0x80 != 0 { -di } else { di };
+    let dlat = if scan & 0x40 != 0 { dj } else { -dj };
+    (g.ni as usize, g.nj as usize, lat0, lon0, dlat, dlon, unit, scan)
+}
+
 /// Geometry of a GRIB2 grid: (nx, ny, proj, column_major)
 /// Returns (nx, ny, projection, scanning-mode flags).
 fn geometry(def: &G) -> Result<(usize, usize, Proj, u8)> {
     match def {
         G::Template0(t) => {
-            let g = &t.lat_lon.grid;
-            let unit = if g.initial_production_domain_basic_angle == 0 || g.initial_production_domain_basic_angle == u32::MAX || g.basic_angle_subdivisions == 0 || g.basic_angle_subdivisions == u32::MAX {
-                1e-6
-            } else {
-                g.initial_production_domain_basic_angle as f64 / g.basic_angle_subdivisions as f64
-            };
-            let scan = t.lat_lon.scanning_mode.0;
-            let (nx, ny) = (g.ni as usize, g.nj as usize);
-            let di = t.lat_lon.i_direction_inc as f64 * unit;
-            let dj = t.lat_lon.j_direction_inc as f64 * unit;
-            let lat0 = g.first_point_lat as f64 * unit;
-            let lon0 = norm_lon(g.first_point_lon as f64 * unit);
-            let dlon = if scan & 0x80 != 0 { -di } else { di };
-            let dlat = if scan & 0x40 != 0 { dj } else { -dj };
-            let global = di * nx as f64 >= 359.0;
+            let (nx, ny, lat0, lon0, dlat, dlon, _, scan) = latlon_params(&t.lat_lon);
+            let global = dlon.abs() * nx as f64 >= 359.0;
             Ok((nx, ny, Proj::LatLon { lat0, lon0, dlat, dlon, nx, global }, scan))
+        }
+        G::Template1(t) => {
+            let (nx, ny, lat0, lon0, dlat, dlon, unit, scan) = latlon_params(&t.lat_lon);
+            if t.rotation.rot_angle.abs() > 1e-6 {
+                bail!("rotated grids with a rotation angle are not supported");
+            }
+            let sp_lat = t.rotation.south_pole_lat as f64 * unit;
+            let sp_lon = norm_lon(t.rotation.south_pole_lon as f64 * unit);
+            Ok((nx, ny, Proj::RotLatLon { lat0, lon0, dlat, dlon, sp_lat, sp_lon }, scan))
         }
         G::Template30(t) => {
             let e = &t.earth_shape;
@@ -188,6 +233,7 @@ pub fn decode(bytes: &[u8], index: usize, opts: &DecodeOpts) -> Result<Grid> {
     let (_, sub) = g.iter().nth(index).ok_or_else(|| anyhow!("message {index} not found"))?;
     let def = G::try_from(sub.grid_def()).map_err(|e| anyhow!("grid def: {e}"))?;
     let (nx, ny, proj, scan) = geometry(&def)?;
+    let grid_rel = uv_grid_relative(&def);
     let col_major = scan & 0x20 != 0;
     let t = sub.temporal_info();
     let valid_ms = t.forecast_time_target.map(|d| d.timestamp_millis()).unwrap_or(0);
@@ -223,7 +269,8 @@ pub fn decode(bytes: &[u8], index: usize, opts: &DecodeOpts) -> Result<Grid> {
         }
         vals = t;
     }
-    let grid = Grid::from_values(nx, ny, proj, &vals, valid_ms, ref_ms);
+    let mut grid = Grid::from_values(nx, ny, proj, &vals, valid_ms, ref_ms);
+    grid.grid_rel = grid_rel;
     let stride = if opts.max_dim > 0 { nx.max(ny).div_ceil(opts.max_dim) } else { 1 };
     Ok(grid.decimate(stride))
 }
