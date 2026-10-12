@@ -437,7 +437,7 @@ let saveTimer: number | undefined;
 effect(() => {
   const v = settings.value;
   clearTimeout(saveTimer);
-  if (POPOUT) return;
+  if (POPOUT || /[?&]share=/.test(location.search)) return; // pop-outs and shared views (Phase 6) don't save
   saveTimer = window.setTimeout(() => {
     try {
       localStorage.setItem(KEY, JSON.stringify(v));

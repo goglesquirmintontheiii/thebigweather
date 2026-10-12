@@ -2,6 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import { ServerEditor } from "./panels/SettingsPanel";
 import { update, uid } from "../store";
 import { Radar, Monitor } from "lucide-preact";
+import { BuiltinServerButton } from "../share/DesktopSettings"; // Phase 6
 
 const LOCAL = ["http://127.0.0.1:8787", "http://localhost:8787"];
 
@@ -56,6 +57,7 @@ export function ConnectDialog() {
             <Monitor size={15} /> Use the server on this computer <span class="muted small">({local.url} · no token)</span>
           </button>
         )}
+        <BuiltinServerButton />
         <ServerEditor />
         <p class="muted small">
           Run <code>./start.sh</code> on your server. It prints the URL and token. On the same computer no token is needed.

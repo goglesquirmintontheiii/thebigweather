@@ -5,6 +5,7 @@ import { Toggle } from "./RadarPanel";
 import { Trash2, Check, Plus, Server } from "lucide-preact";
 import { playAlertSound } from "../../sound";
 import { ACCENTS } from "../../theme"; // workflow
+import { DesktopSection } from "../../share/DesktopSettings"; // Phase 6
 import { ServerSettingsSection } from "../ServerSettings"; // shake/stats/server 0.6
 import { LookSection, KioskSection, OfflineSection, PluginsSection } from "../Wf6Settings"; // workflow 0.6
 
@@ -142,6 +143,7 @@ export function SettingsPanel() {
         )}
       </section>
       <ServerSettingsSection /> {/* shake/stats/server 0.6 */}
+      <DesktopSection /> {/* Phase 6: tray, auto-start, built-in server */}
       <AppearanceSection />
       {/* workflow 0.6 */}
       <KioskSection />

@@ -42,6 +42,50 @@ pub struct AppState {
     pub overlays: Arc<crate::overlays::Overlays>,
     pub rec: Arc<crate::recorder::Recorder>,
     pub intl: Arc<crate::intlradar::IntlRadar>,
+    pub shares: Arc<crate::share::Shares>,
+    pub collab: Arc<crate::collab::Collab>,
+    pub rules: Arc<crate::rules::Rules>,
+}
+
+/// Marks a request made with a share link's read-only token.
+#[derive(Clone)]
+pub struct ShareScope(pub String);
+
+enum Access {
+    Full,
+    Share(String),
+    Denied,
+}
+
+fn request_token(req: &Request) -> Option<String> {
+    req.headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.strip_prefix("Bearer ").unwrap_or(v).to_string())
+        .filter(|t| !t.is_empty())
+        .or_else(|| req.uri().query().and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=").map(str::to_string))))
+}
+
+fn access(st: &AppState, req: &Request) -> Access {
+    if st.cfg.read().server.local_no_auth && is_local(req) {
+        return Access::Full;
+    }
+    let token = st.cfg.read().server.token.clone();
+    // the header and the query may both be present (WebSockets): either one matching is enough
+    let hdr = req.headers().get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).map(|v| v.strip_prefix("Bearer ").unwrap_or(v) == token).unwrap_or(false);
+    let q = req.uri().query().map(|q| q.split('&').any(|kv| kv == format!("token={token}"))).unwrap_or(false);
+    if !token.is_empty() && (hdr || q) {
+        return Access::Full;
+    }
+    match request_token(req).filter(|t| t.starts_with("shr_")).and_then(|t| st.shares.by_token(&t)) {
+        Some(id) => Access::Share(id),
+        None => Access::Denied,
+    }
+}
+
+/// Full (owner) access: the server token, or this machine with `local_no_auth`.
+pub(crate) fn full_access(st: &AppState, req: &Request) -> bool {
+    matches!(access(st, req), Access::Full)
 }
 
 type St = State<Arc<AppState>>;
@@ -72,29 +116,26 @@ fn bad(msg: &str) -> ApiError {
 pub(crate) fn is_local(req: &Request) -> bool {
     let direct = !req.headers().contains_key("x-forwarded-for") && !req.headers().contains_key("forwarded") && !req.headers().contains_key("x-real-ip");
     let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip());
-    direct && peer.map(|ip| ip.is_loopback()).unwrap_or(false)
+    // to_canonical: a dual-stack listener ("[::]:8787", common on Windows) reports IPv4
+    // loopback as ::ffff:127.0.0.1, which is_loopback() alone doesn't recognise
+    direct && peer.map(|ip| ip.to_canonical().is_loopback()).unwrap_or(false)
 }
 
-async fn auth(State(st): St, req: Request, next: Next) -> Result<Response, StatusCode> {
-    if st.cfg.read().server.local_no_auth && is_local(&req) {
-        return Ok(next.run(req).await);
-    }
-    let token = st.cfg.read().server.token.clone();
-    let hdr_ok = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.strip_prefix("Bearer ").unwrap_or(v) == token)
-        .unwrap_or(false);
-    let q_ok = req
-        .uri()
-        .query()
-        .map(|q| q.split('&').any(|kv| kv == format!("token={token}")))
-        .unwrap_or(false);
-    if hdr_ok || q_ok {
-        Ok(next.run(req).await)
-    } else {
-        Err(StatusCode::UNAUTHORIZED)
+async fn auth(State(st): St, mut req: Request, next: Next) -> Result<Response, StatusCode> {
+    match access(&st, &req) {
+        Access::Full => Ok(next.run(req).await),
+        Access::Share(id) => {
+            if !crate::share::allowed(req.method(), req.uri().path()) {
+                return Ok((StatusCode::FORBIDDEN, Json(json!({"error": "not available in a shared view"}))).into_response());
+            }
+            // generous: a radar loop is a few hundred requests
+            if !st.shares.limit.allow(&format!("tok:{id}"), 3000, 60) {
+                return Ok((StatusCode::TOO_MANY_REQUESTS, Json(json!({"error": "too many requests for this share link"}))).into_response());
+            }
+            req.extensions_mut().insert(ShareScope(id));
+            Ok(next.run(req).await)
+        }
+        Access::Denied => Err(StatusCode::UNAUTHORIZED),
     }
 }
 
@@ -182,6 +223,14 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/rec/{id}/file/{name}", get(rec_file))
         .route("/rec/{id}/timelapse", get(rec_timelapse))
         .route("/ws", get(ws))
+        // share links, live collaboration, notification rules (Phase 6)
+        .route("/share", post(crate::share::create))
+        .route("/shares", get(crate::share::list))
+        .route("/collab/rooms", get(crate::collab::list_rooms).post(crate::collab::create_room))
+        .route("/collab/rooms/{code}", get(crate::collab::get_room).delete(crate::collab::delete_room))
+        .route("/collab/ws", get(crate::collab::ws))
+        .route("/rules", get(crate::rules::get).put(crate::rules::put))
+        .route("/rules/webhook-test", post(crate::rules::webhook_test))
         // local admin API (Server settings): loopback only, see admin.rs
         .merge(crate::admin::router(st.clone()))
         .layer(DefaultBodyLimit::max(400 * 1024 * 1024))
@@ -194,6 +243,9 @@ pub fn router(st: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/local", get(local_check))
+        // public share endpoint (GET); PUT/DELETE check the owner token themselves
+        .route("/api/share/{id}", get(crate::share::public_get).put(crate::share::update).delete(crate::share::delete))
+        .route("/s/{id}", get(crate::share::open))
         .nest("/api", api)
         .fallback_service(static_files)
         .layer(
@@ -210,6 +262,7 @@ async fn health(State(st): St) -> Json<Value> {
 
 async fn info(State(st): St, req: Request) -> Json<Value> {
     let same_host = is_local(&req);
+    let shared = req.extensions().get::<ShareScope>().is_some();
     let c = st.cfg.read();
     let keys: HashMap<&str, bool> = Keys::NAMES.iter().map(|k| (*k, c.keys.get(k).map(|v| !v.is_empty()).unwrap_or(false))).collect();
     Json(json!({
@@ -219,9 +272,11 @@ async fn info(State(st): St, req: Request) -> Json<Value> {
         "profile": st.profile,
         "uptime_s": st.started.elapsed().as_secs(),
         "keys_set": keys,
-        "google_maps_key": c.keys.google_maps,
+        // a share link's viewers never see the owner's keys
+        "google_maps_key": if shared { "" } else { c.keys.google_maps.as_str() },
         "live_sites": st.live.active_sites(),
-        "same_host": same_host,
+        "same_host": same_host && !shared,
+        "shared": shared,
     }))
 }
 

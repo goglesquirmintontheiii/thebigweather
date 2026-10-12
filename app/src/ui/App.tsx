@@ -68,6 +68,10 @@ import { startWidgets } from "../widgets/manager";
 import { startPlugins } from "../plugins/host";
 import { kioskFromArgs, kiosk } from "../kiosk";
 /* end workflow 0.6 */
+// share & collab (Phase 6)
+import { SharePanel } from "./SharePanel";
+import { CollabPanel } from "./CollabPanel";
+import "../share/desktop";
 
 export function App() {
   const mapEl = useRef<HTMLDivElement>(null);
@@ -126,6 +130,8 @@ export function App() {
       <MetarPanels /> {/* workflow */}
       <TrackPanel /> {/* workflow */}
       <Wf6Overlays /> {/* workflow 0.6 */}
+      <SharePanel /> {/* share & collab */}
+      <CollabPanel /> {/* share & collab */}
       <ConfigModal />
       <ForecastCenter />
       <SpacePanel /> {/* data 0.6 */}

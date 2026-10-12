@@ -7687,3 +7687,197 @@ html[data-theme="light"] .toggle i {
   white-space: nowrap;
 }
 /* ---------- end data 0.6 ---------- */
+/* ---------- share & collab ---------- */
+.share-panel .share-form select,
+.share-panel .share-form input:not([type="checkbox"]),
+.team-panel input:not([type="checkbox"]),
+.team-panel select {
+  width: 100%;
+  min-width: 0;
+}
+.share-made,
+.share-row,
+.team-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.share-made input {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+.share-row > span,
+.team-row > span {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.team-row > span {
+  display: block;
+  white-space: nowrap;
+}
+.share-row small {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.share-banner {
+  position: fixed;
+  top: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid var(--line-2);
+  pointer-events: auto;
+}
+.share-banner.bad {
+  border-color: var(--err);
+}
+.share-banner .err {
+  color: var(--err);
+}
+/* viewer mode: hide owner-only controls (the server refuses them anyway) */
+.tbw-viewer .rail-btn[title="Settings"],
+.tbw-viewer .rail-btn[title="Recordings"],
+.tbw-viewer .rail-btn[title="Files & backup"],
+.tbw-viewer .rail-btn[title="Workspaces"],
+.tbw-viewer .tb[title^="Drawing mode"],
+.tbw-viewer .tb-more-item:has(.p6-owner),
+.tbw-viewer .draw-x {
+  display: none !important;
+}
+.team-id {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-colors {
+  display: flex;
+  gap: 4px;
+}
+.team-colors .swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+}
+.team-colors .swatch.on {
+  border-color: var(--text);
+}
+.team-code {
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+.team-codeview {
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.12em;
+  user-select: all;
+}
+.team-head .dot {
+  position: static;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.team-head .dot.online {
+  background: var(--ok);
+}
+.team-room {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--glass-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  cursor: pointer;
+}
+.team-room:hover {
+  border-color: var(--accent);
+}
+.team-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.team-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+.team-notes {
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-note {
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: var(--glass-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.team-note .icon-btn {
+  display: inline-flex;
+  vertical-align: middle;
+}
+.team-member {
+  --c: #3fb7ff;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.team-member i {
+  width: 14px;
+  height: 14px;
+  border-radius: 50% 50% 50% 0;
+  transform-origin: center;
+  background: var(--c);
+  border: 2px solid #fff;
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6);
+}
+.team-member span {
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.65);
+  padding: 1px 5px;
+  border-radius: 6px;
+  border-left: 3px solid var(--c);
+  white-space: nowrap;
+}
+.team-pin {
+  --c: #ffcc00;
+  max-width: 160px;
+  padding: 2px 6px;
+  border-radius: 6px 6px 6px 0;
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid var(--c);
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

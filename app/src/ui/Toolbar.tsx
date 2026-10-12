@@ -25,6 +25,9 @@ import { Megaphone, Tv, Navigation, ListChecks, AppWindow } from "lucide-preact"
 import { runBriefing, briefing } from "../briefing";
 import { enterKiosk } from "../kiosk";
 /* end workflow 0.6 */
+import { Share2, Users } from "lucide-preact"; // share & collab
+import { shareDialog } from "../share/share"; // share & collab
+import { teamOpen, team, unread } from "../share/collab"; // share & collab
 
 let locMarker: maplibregl.Marker | null = null;
 
@@ -139,6 +142,8 @@ export function Toolbar() {
             {item(openPanel.value === "widgets", "Desktop widgets", "", () => (openPanel.value = openPanel.value === "widgets" ? null : "widgets"), <AppWindow size={16} />)}
             {item(false, "Wall / kiosk mode", "", enterKiosk, <Tv size={16} />)}
             {/* end workflow 0.6 */}
+            {/* share & collab */ item(shareDialog.value, "Share live view", "", () => (shareDialog.value = !shareDialog.value), <Share2 size={16} class="p6-owner" />)}
+            {item(teamOpen.value, team.value ? `Team · ${team.value.name}${unread.value ? ` (${unread.value})` : ""}` : "Team (live collaboration)", "", () => (teamOpen.value = !teamOpen.value), <Users size={16} class="p6-owner" />)}
           </div>
         </>
       )}

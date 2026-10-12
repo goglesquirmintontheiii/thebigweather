@@ -6,7 +6,11 @@ import "./styles.css";
 import { App } from "./ui/App";
 import { popoutSpec } from "./popout";
 import { PopoutApp } from "./ui/Popout";
+import { shareParam, initViewer } from "./share/share";
 
 setWorkerUrl(new URL(workerUrl, location.href).href);
 
-render(popoutSpec && popoutSpec.kind !== "map" ? <PopoutApp spec={popoutSpec} /> : <App />, document.getElementById("root")!);
+const go = () => render(popoutSpec && popoutSpec.kind !== "map" ? <PopoutApp spec={popoutSpec} /> : <App />, document.getElementById("root")!);
+// share links (Phase 6): ?share=<id> loads the shared workspace first
+if (shareParam) initViewer().finally(go);
+else go();

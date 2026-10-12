@@ -162,7 +162,7 @@ impl Recorder {
     pub fn has_ffmpeg(&self) -> bool {
         let mut f = self.ffmpeg.lock();
         if f.is_none() {
-            *f = Some(std::process::Command::new("ffmpeg").arg("-version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false));
+            *f = Some(crate::platform::command_sync("ffmpeg").arg("-version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false));
         }
         f.unwrap_or(false)
     }
@@ -171,7 +171,7 @@ impl Recorder {
     pub fn has_ytdlp(&self) -> bool {
         let mut f = self.ytdlp.lock();
         if f.is_none() {
-            *f = Some(std::process::Command::new("yt-dlp").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false));
+            *f = Some(crate::platform::command_sync("yt-dlp").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false));
         }
         f.unwrap_or(false)
     }
@@ -440,7 +440,7 @@ impl Recorder {
         }
         txt.push_str(&format!("file '{}'\n", imgs.last().unwrap()));
         std::fs::write(&list, txt)?;
-        let st = tokio::process::Command::new("ffmpeg")
+        let st = crate::platform::command("ffmpeg")
             .args(["-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i"])
             .arg(&list)
             .args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-movflags", "+faststart"])
@@ -614,14 +614,14 @@ async fn camera_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result
             // YouTube: yt-dlp resolves and downloads the stream, ffmpeg remuxes it into the same
             // 10-minute .mp4 pieces as other video cameras (so playback/export/timelapse just work)
             let (mut child, mut feeder) = if yt {
-                let mut dl = tokio::process::Command::new("yt-dlp")
+                let mut dl = crate::platform::command("yt-dlp")
                     .args(["-q", "--no-warnings", "--no-part", "--no-playlist", "-f", "best[height<=1080]/best", "-o", "-", &c.url])
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::null())
                     .kill_on_drop(true)
                     .spawn()?;
                 let out: std::process::Stdio = dl.stdout.take().ok_or_else(|| anyhow!("yt-dlp pipe"))?.try_into()?;
-                let ff = tokio::process::Command::new("ffmpeg")
+                let ff = crate::platform::command("ffmpeg")
                     .args(["-y", "-loglevel", "error", "-i", "pipe:0", "-c", "copy", "-t", &left.to_string(), "-f", "mp4", "-movflags", "+faststart"])
                     .arg(&part)
                     .stdin(out)
@@ -629,9 +629,11 @@ async fn camera_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result
                     .spawn()?;
                 (ff, Some(dl))
             } else {
-                let ff = tokio::process::Command::new("ffmpeg")
+                let ff = crate::platform::command("ffmpeg")
                     .args(["-y", "-loglevel", "error", "-rw_timeout", "15000000", "-i", &c.url, "-c", "copy", "-t", &left.to_string(), "-f", "mp4", "-movflags", "+faststart"])
                     .arg(&part)
+                    // Windows: "q" on stdin is how ffmpeg is asked to finish the file (no SIGINT)
+                    .stdin(if cfg!(unix) { std::process::Stdio::null() } else { std::process::Stdio::piped() })
                     .kill_on_drop(true)
                     .spawn()?;
                 (ff, None)
@@ -640,10 +642,16 @@ async fn camera_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result
             let mut clean_exit = false;
             loop {
                 if stop.load(Ordering::SeqCst) {
-                    // ask ffmpeg to finish the file cleanly
-                    #[cfg(unix)]
-                    if let Some(pid) = child.id() {
-                        let _ = std::process::Command::new("kill").args(["-INT", &pid.to_string()]).status();
+                    // ask ffmpeg to finish the file cleanly; when yt-dlp feeds it, ending the feed
+                    // (EOF on its stdin) does the same on every platform
+                    if let Some(dl) = feeder.as_mut() {
+                        if cfg!(unix) {
+                            crate::platform::ffmpeg_finish(&mut child).await;
+                        } else {
+                            dl.start_kill().ok();
+                        }
+                    } else {
+                        crate::platform::ffmpeg_finish(&mut child).await;
                     }
                     let _ = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
                     break;
