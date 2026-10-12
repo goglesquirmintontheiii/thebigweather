@@ -1,4 +1,5 @@
-//! Raster tiles from allowlisted NOAA ArcGIS services (NOHRSC snow analysis, NWS HeatRisk),
+//! Raster tiles from allowlisted NOAA ArcGIS services (NOHRSC snow analysis, NWS HeatRisk, NHC
+//! storm surge / inundation / arrival of tropical-storm winds, National Water Model flooding),
 //! rendered by the service's `export` / `exportImage` for each Web Mercator tile.
 
 use super::Overlays;
@@ -12,12 +13,72 @@ pub struct Service {
     pub url: &'static str,
     /// ImageServer (exportImage) rather than MapServer (export)
     pub image: bool,
+    /// which sub-layers to draw (MapServer)
+    pub layers: Layers,
 }
 
+/// Sub-layer selection for a MapServer export.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Layers {
+    /// the service's default visibility
+    Default,
+    /// a fixed `show:` list
+    Show(&'static str),
+    /// NOHRSC: layer=depth|swe
+    Nohrsc,
+    /// NHC arrival of tropical-storm winds: layer=earliest|likely (every storm slot)
+    NhcArrival,
+    /// NWM rapid-onset flooding: layer=arrival|duration|length
+    NwmRof,
+}
+
+/// NHC_tropical_weather: group layer ids of the 15 storm slots (AT1-5, EP1-5, CP1-5); within a
+/// slot, +15 = earliest reasonable arrival, +16 = most likely arrival, +21 = inundation raster.
+const NHC_SLOTS: [u32; 15] = [4, 30, 56, 82, 108, 134, 160, 186, 212, 238, 264, 290, 316, 342, 368];
+
+fn nhc_show(off: u32) -> String {
+    format!("show:{}", NHC_SLOTS.iter().map(|b| (b + off).to_string()).collect::<Vec<_>>().join(","))
+}
+
+const NHC_TW: &str = "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_tropical_weather/MapServer";
+
 pub const SERVICES: &[Service] = &[
-    Service { id: "nohrsc", name: "NOHRSC snow analysis", url: "https://mapservices.weather.noaa.gov/raster/rest/services/snow/NOHRSC_Snow_Analysis/MapServer", image: false },
-    Service { id: "heatrisk", name: "NWS HeatRisk", url: "https://mapservices.weather.noaa.gov/experimental/rest/services/NWS_HeatRisk/ImageServer", image: true },
+    Service { id: "nohrsc", name: "NOHRSC snow analysis", url: "https://mapservices.weather.noaa.gov/raster/rest/services/snow/NOHRSC_Snow_Analysis/MapServer", image: false, layers: Layers::Nohrsc },
+    Service { id: "heatrisk", name: "NWS HeatRisk", url: "https://mapservices.weather.noaa.gov/experimental/rest/services/NWS_HeatRisk/ImageServer", image: true, layers: Layers::Default },
+    Service { id: "surge", name: "NHC peak storm surge", url: "https://mapservices.weather.noaa.gov/tropical/rest/services/tropical/NHC_PeakStormSurge/MapServer", image: false, layers: Layers::Show("show:0,1,2") },
+    Service { id: "inundation", name: "NHC potential storm surge flooding", url: NHC_TW, image: false, layers: Layers::Show("inundation") },
+    Service { id: "arrival", name: "NHC arrival of tropical-storm winds", url: NHC_TW, image: false, layers: Layers::NhcArrival },
+    Service { id: "nwm_hiflow", name: "NWM high flow magnitude (analysis)", url: "https://maps.water.noaa.gov/server/rest/services/nwm/ana_high_flow_magnitude/MapServer", image: false, layers: Layers::Default },
+    Service { id: "nwm_srf_hiflow", name: "NWM 18-hr max high flow magnitude", url: "https://maps.water.noaa.gov/server/rest/services/nwm/srf_18hr_max_high_flow_magnitude/MapServer", image: false, layers: Layers::Default },
+    Service { id: "nwm_mrf_hiflow", name: "NWM 10-day max high flow magnitude", url: "https://maps.water.noaa.gov/server/rest/services/nwm/mrf_gfs_10day_max_high_flow_magnitude/MapServer", image: false, layers: Layers::Default },
+    Service { id: "nwm_rof", name: "NWM 18-hr rapid onset flooding", url: "https://maps.water.noaa.gov/server/rest/services/nwm/srf_18hr_rapid_onset_flooding/MapServer", image: false, layers: Layers::NwmRof },
+    Service { id: "nwm_hwp", name: "NWM 12-hr high water probability", url: "https://maps.water.noaa.gov/server/rest/services/nwm/srf_12hr_max_high_water_probability/MapServer", image: false, layers: Layers::Default },
+    Service { id: "nwm_inund", name: "NWM inundation extent (analysis)", url: "https://maps.water.noaa.gov/server/rest/services/nwm/ana_inundation_extent/MapServer", image: false, layers: Layers::Default },
 ];
+
+/// The `layers` export parameter for a MapServer service (None = service default).
+fn layers_param(s: &Service, layer: &str) -> Result<Option<String>> {
+    Ok(match s.layers {
+        Layers::Default => None,
+        Layers::Show("inundation") => Some(nhc_show(21)),
+        Layers::Show(v) => Some(v.to_string()),
+        Layers::Nohrsc => Some(format!("show:{}", nohrsc_layer(layer)?)),
+        Layers::NhcArrival => Some(nhc_show(match layer {
+            "" | "earliest" => 15,
+            "likely" => 16,
+            _ => bail!("layer must be earliest or likely"),
+        })),
+        Layers::NwmRof => Some(format!(
+            "show:{}",
+            match layer {
+                "arrival" => 0,
+                "duration" => 1,
+                "" | "length" => 2,
+                _ => bail!("layer must be arrival, duration or length"),
+            }
+        )),
+    })
+}
 
 /// Percent-encode a query value (unreserved characters, ',' and ':' pass through).
 pub fn enc(s: &str) -> String {
@@ -85,7 +146,9 @@ pub fn tile_query(s: &Service, z: u32, x: u32, y: u32, layer: &str, day: &str) -
         q.push(("mosaicRule", format!(r#"{{"mosaicMethod":"esriMosaicNone","where":"name='HeatRisk_{day}_Mercator'"}}"#)));
         q.push(("interpolation", "RSP_NearestNeighbor".to_string()));
     } else {
-        q.push(("layers", format!("show:{}", nohrsc_layer(layer)?)));
+        if let Some(l) = layers_param(s, layer)? {
+            q.push(("layers", l));
+        }
         q.push(("dpi", "96".to_string()));
     }
     Ok(q)
@@ -165,6 +228,12 @@ mod tests {
         assert!(tile_query(service("heatrisk").unwrap(), 4, 3, 5, "", "9").is_err());
         assert!(tile_query(service("nohrsc").unwrap(), 4, 3, 5, "rain", "").is_err());
         assert!(service("other").is_none());
+        let q = tile_query(service("arrival").unwrap(), 4, 3, 5, "likely", "").unwrap();
+        assert!(q.contains(&("layers", "show:20,46,72,98,124,150,176,202,228,254,280,306,332,358,384".to_string())));
+        let q = tile_query(service("inundation").unwrap(), 4, 3, 5, "", "").unwrap();
+        assert!(q.iter().any(|(k, v)| *k == "layers" && v.starts_with("show:25,51,")));
+        assert!(tile_query(service("nwm_hiflow").unwrap(), 4, 3, 5, "", "").unwrap().iter().all(|(k, _)| *k != "layers"));
+        assert!(tile_query(service("nwm_rof").unwrap(), 4, 3, 5, "x", "").is_err());
         assert_eq!(enc("show:7 {\"a\"='x'}"), "show:7%20%7B%22a%22%3D%27x%27%7D");
     }
 }

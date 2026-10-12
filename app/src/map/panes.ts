@@ -12,7 +12,7 @@ import { RadarLayer } from "../radar/RadarLayer";
 import { GridLayer } from "../grid/GridLayer";
 import { fetchSweep, tableById, tableKeyFor, sites, l3For, selectSite } from "../radar/controller";
 import { gridGateKey } from "../gate";
-import { gridDef, gridTable } from "../weather";
+import { gridDef, gridTable, GIBS } from "../weather";
 import { parseRaster, type Raster } from "../grid/raster";
 import type { Sweep } from "../radar/sweep";
 import { activeTime } from "../active";
@@ -22,6 +22,23 @@ import { mapRef } from "./mapview";
 export const paneStatus = signal<Record<number, { loading?: boolean; error?: string; time?: number; label?: string }>>({});
 const panes = new Map<number, PaneView>();
 let syncing = false;
+/* ---------- data 0.6: swipe compare always follows the main map; satellite imagery in panes ---------- */
+const synced = () => settings.value.panes.sync || settings.value.panes.layout === "swipe";
+function gibsTiles(id: string, t: number): { tiles: string[]; maxzoom: number; key: string } | null {
+  const g = GIBS.find((x) => x.id === id);
+  if (!g) return null;
+  const step = g.step * 60_000;
+  // newest image that is surely published: daily layers yesterday, others ~40 min back
+  const lim = g.step >= 1440 ? Date.now() - 86400_000 : Date.now() - 40 * 60_000;
+  const tt = Math.floor(Math.min(t || lim, lim) / step) * step;
+  const iso = new Date(tt).toISOString().slice(0, 19) + "Z";
+  const time = g.step >= 1440 ? iso.slice(0, 10) : iso;
+  const tiles = g.wms
+    ? [`${g.wms}?service=WMS&version=1.3.0&request=GetMap&layers=${encodeURIComponent(g.layer)}&styles=&format=image/png&transparent=true&crs=EPSG:3857&bbox={bbox-epsg-3857}&width=256&height=256&time=${iso}`]
+    : [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${g.layer}/default/${time}/GoogleMapsCompatible_Level${g.level}/{z}/{y}/{x}.${g.format}`];
+  return { tiles, maxzoom: g.level, key: `${id}|${time}` };
+}
+/* ---------- end data 0.6 ---------- */
 
 function setStatus(i: number, s: { loading?: boolean; error?: string; time?: number; label?: string }) {
   paneStatus.value = { ...paneStatus.value, [i]: { ...paneStatus.value[i], ...s } };
@@ -72,7 +89,7 @@ class PaneView {
     this.grid.id = "pane-grid";
     this.map.on("style.load", () => this.addLayers());
     this.map.on("move", () => {
-      if (syncing || !settings.value.panes.sync) return;
+      if (syncing || !synced()) return; // data 0.6
       syncing = true;
       const c = this.map.getCenter();
       mapRef.value?.jumpTo({ center: c, zoom: this.map.getZoom() });
@@ -174,6 +191,10 @@ class PaneView {
           const r = await api.get(`/api/l3/${site}/${prod}/list?n=${n}`);
           this.frames = r.volumes.map((v: any) => ({ key: v.key, time: v.time }));
         }
+      } else if (cfg.weather.kind === "gibs") {
+        this.frames = []; // data 0.6: drawn by showGibs
+        if (gen === this.gen) (setStatus(this.idx, { loading: false, error: undefined }), this.show());
+        return;
       } else if (cfg.weather.kind === "grid") {
         const r = await api.get(`/api/grid/frames?layer=${encodeURIComponent(cfg.weather.id)}&n=${settings.value.grid.frames}`);
         this.frames = r.frames;
@@ -200,6 +221,9 @@ class PaneView {
 
   async show() {
     const cfg = this.cfg;
+    /* data 0.6: satellite imagery (one image near the main map's time) */
+    if (cfg && this.map.getStyle()) this.showGibs(cfg.weather.kind === "gibs" ? cfg.weather.id : null);
+    if (cfg?.weather.kind === "gibs") return;
     const f = this.pick();
     if (!cfg || !f || !this.map.getStyle()) return;
     const gen = this.gen;
@@ -247,6 +271,21 @@ class PaneView {
     }
   }
 
+  /* data 0.6 */
+  gibsKey = "";
+  showGibs(id: string | null) {
+    const m = this.map;
+    const g = id ? gibsTiles(id, activeTime.value) : null;
+    if ((g?.key ?? "") === this.gibsKey && (!g || m.getSource("pane-gibs"))) return;
+    this.gibsKey = g?.key ?? "";
+    if (m.getLayer("pane-gibs")) m.removeLayer("pane-gibs");
+    if (m.getSource("pane-gibs")) m.removeSource("pane-gibs");
+    if (!g) return;
+    m.addSource("pane-gibs", { type: "raster", tiles: g.tiles, tileSize: 256, maxzoom: g.maxzoom, attribution: "NASA GIBS / EUMETSAT" });
+    m.addLayer({ id: "pane-gibs", type: "raster", source: "pane-gibs", paint: { "raster-opacity": 0.95, "raster-fade-duration": 0 } }, "pane-grid");
+    setStatus(this.idx, { loading: false, error: undefined, time: Date.parse(g.key.split("|")[1]) || undefined });
+  }
+
   setBasemap() {
     const s = settings.value;
     this.map.setStyle(buildStyle(s.basemap === "google" ? "satellite" : s.basemap, { labels: s.overlays.labels, provider: s.basemapProvider, custom: s.customBasemaps }), { diff: false });
@@ -259,7 +298,7 @@ class PaneView {
 
 export function label(cfg: PaneCfg): string {
   if (cfg.weather.kind === "grid") return gridDef(cfg.weather.id)?.name ?? cfg.weather.id;
-  if (cfg.weather.kind === "gibs") return cfg.weather.id;
+  if (cfg.weather.kind === "gibs") return GIBS.find((g) => g.id === (cfg.weather as any).id)?.name ?? cfg.weather.id; // data 0.6
   return `${cfg.site ?? settings.value.radar.site} ${cfg.product ?? "REF"}`;
 }
 
@@ -291,7 +330,7 @@ effect(() => {
   if (!m || hooked) return;
   hooked = true;
   m.on("move", () => {
-    if (syncing || !settings.value.panes.sync || !panes.size) return;
+    if (syncing || !synced() || !panes.size) return; // data 0.6
     syncing = true;
     const c = m.getCenter();
     for (const p of panes.values()) p.map.jumpTo({ center: c, zoom: m.getZoom() });

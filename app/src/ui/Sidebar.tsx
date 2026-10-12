@@ -1,3 +1,5 @@
+import { Shapes } from "lucide-preact"; // radar 0.6
+import { PlacefilePanel } from "./PlacefilePanel"; // radar 0.6
 import { openPanel, type PanelId, connection } from "../store";
 import { alerts } from "../alerts";
 import { Layers, Radar, TriangleAlert, MapPin, Activity, Settings, Radio, FolderOpen, CloudSun, Search, X, Map as MapIcon, CircleDot } from "lucide-preact";
@@ -23,6 +25,12 @@ import { histStormsOpen } from "../histsearch"; // history 0.6
 /* shake/stats/server 0.6 */
 import { AudioWaveform } from "lucide-preact";
 import { shakeOpen } from "../shake";
+/* workflow 0.6 */
+import { Navigation, ListChecks, AppWindow } from "lucide-preact";
+import { RoutePanel } from "./RoutePanel";
+import { RulesPanel } from "./RulesPanel";
+import { WidgetsPanel } from "./WidgetHost";
+/* end workflow 0.6 */
 /* end shake/stats/server 0.6 */
 
 const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
@@ -42,6 +50,11 @@ const MORE: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "record", icon: CircleDot, label: "Recordings" },
   { id: "files", icon: FolderOpen, label: "Files & backup" },
   { id: "workspaces", icon: Bookmark, label: "Workspaces" }, // workflow
+  /* workflow 0.6 */
+  { id: "route", icon: Navigation, label: "Route weather" },
+  { id: "rules", icon: ListChecks, label: "Notification rules" },
+  { id: "widgets", icon: AppWindow, label: "Desktop widgets" },
+  { id: "placefiles", icon: Shapes, label: "Placefiles" }, // radar 0.6
 ];
 
 export function Rail() {
@@ -76,7 +89,7 @@ export function Rail() {
   );
 }
 
-const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */ };
+const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */, route: "Route weather", rules: "Notification rules", widgets: "Desktop widgets" /* workflow 0.6 */, placefiles: "Placefiles" /* radar 0.6 */ };
 
 export function SidePanel() {
   const p = openPanel.value;
@@ -103,6 +116,10 @@ export function SidePanel() {
         {p === "sources" && <SourcesPanel />}
         {p === "settings" && <SettingsPanel />}
         {p === "workspaces" && <WorkspacePanel /> /* workflow */}
+        {p === "placefiles" && <PlacefilePanel /> /* radar 0.6 */}
+        {p === "route" && <RoutePanel /> /* workflow 0.6 */}
+        {p === "rules" && <RulesPanel /> /* workflow 0.6 */}
+        {p === "widgets" && <WidgetsPanel /> /* workflow 0.6 */}
       </div>
     </aside>
   );

@@ -290,6 +290,167 @@ ipcMain.handle("client-stats", () => {
   };
 });
 // ---------- end shake/stats/server 0.6 ----------
+// ---------- workflow 0.6: desktop widget windows, offline map tiles, kiosk, plugins folder ----------
+const wf6Crypto = require("node:crypto");
+const wf6Widgets = new Map(); // id -> BrowserWindow
+const wf6PosFile = () => path.join(app.getPath("userData"), "widgets.json");
+function wf6LoadPos() {
+  try {
+    return JSON.parse(fs.readFileSync(wf6PosFile(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+let wf6PosTimer = null;
+function wf6SavePos() {
+  clearTimeout(wf6PosTimer);
+  wf6PosTimer = setTimeout(() => {
+    const all = wf6LoadPos();
+    for (const [id, w] of wf6Widgets) if (!w.isDestroyed()) all[id] = w.getBounds();
+    try {
+      fs.mkdirSync(app.getPath("userData"), { recursive: true });
+      fs.writeFileSync(wf6PosFile(), JSON.stringify(all));
+    } catch {}
+  }, 400);
+}
+function wf6Apply(w, o) {
+  if (o.opacity != null) w.setOpacity(Math.max(0.2, Math.min(1, Number(o.opacity))));
+  if (o.onTop != null) w.setAlwaysOnTop(!!o.onTop, "floating");
+  if (o.locked != null) w.setIgnoreMouseEvents(!!o.locked, { forward: true });
+}
+ipcMain.handle("wf6-widget-open", (_e, cfg) => {
+  const id = String(cfg.id || "");
+  if (!id || !/^widget\.html\?/.test(String(cfg.url || ""))) return false;
+  const old = wf6Widgets.get(id);
+  if (old && !old.isDestroyed()) {
+    wf6Apply(old, cfg);
+    old.showInactive();
+    return true;
+  }
+  const pos = wf6LoadPos()[id];
+  const vis = pos && screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return pos.x < a.x + a.width - 30 && pos.x + pos.width > a.x + 30 && pos.y < a.y + a.height - 30 && pos.y + pos.height > a.y + 10;
+  });
+  const wa = screen.getPrimaryDisplay().workArea;
+  const n = wf6Widgets.size;
+  const w = new BrowserWindow({
+    width: vis ? pos.width : cfg.width || 280,
+    height: vis ? pos.height : cfg.height || 160,
+    x: vis ? pos.x : wa.x + wa.width - (cfg.width || 280) - 24,
+    y: vis ? pos.y : wa.y + 24 + n * 30,
+    minWidth: 160,
+    minHeight: 50,
+    frame: false,
+    transparent: true,
+    resizable: true,
+    hasShadow: false,
+    skipTaskbar: true,
+    alwaysOnTop: cfg.onTop !== false,
+    title: cfg.title || "TheBigWeather widget",
+    backgroundColor: "#00000000",
+    show: false,
+    webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, backgroundThrottling: true },
+  });
+  wf6Widgets.set(id, w);
+  if (isDev) w.loadURL(process.env.TBW_DEV_URL.replace(/\/?$/, "/") + cfg.url);
+  else w.loadURL("app://tbw/" + cfg.url);
+  w.once("ready-to-show", () => {
+    wf6Apply(w, cfg);
+    w.showInactive();
+  });
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  w.on("moved", wf6SavePos);
+  w.on("resized", wf6SavePos);
+  w.on("closed", () => {
+    if (wf6Widgets.get(id) === w) wf6Widgets.delete(id);
+    if (win && !win.isDestroyed() && !wf6Quitting) win.webContents.send("wf6-widget-closed", id);
+  });
+  // widgets go away with the main window
+  if (win && !win.wf6Hooked) {
+    win.wf6Hooked = true;
+    win.on("closed", () => {
+      wf6Quitting = true;
+      for (const x of wf6Widgets.values()) if (!x.isDestroyed()) x.destroy();
+    });
+  }
+  return true;
+});
+let wf6Quitting = false;
+ipcMain.handle("wf6-widget-close", (_e, id) => {
+  const w = wf6Widgets.get(String(id));
+  if (w && !w.isDestroyed()) w.close();
+});
+ipcMain.handle("wf6-widget-set", (_e, id, o) => {
+  const w = wf6Widgets.get(String(id));
+  if (w && !w.isDestroyed()) wf6Apply(w, o || {});
+});
+ipcMain.handle("wf6-argv", () => process.argv.slice(1));
+ipcMain.handle("wf6-fullscreen", (_e, on) => {
+  if (win && !win.isDestroyed()) win.setFullScreen(!!on);
+});
+ipcMain.handle("wf6-flash", () => {
+  if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true);
+});
+// offline basemap tiles: <userData>/offline-tiles/ab/<sha1>
+const wf6TileDir = () => path.join(app.getPath("userData"), "offline-tiles");
+const wf6TileFile = (key) => {
+  const h = wf6Crypto.createHash("sha1").update(String(key)).digest("hex");
+  return path.join(wf6TileDir(), h.slice(0, 2), h);
+};
+ipcMain.handle("wf6-tile-get", async (_e, key) => {
+  try {
+    return await fs.promises.readFile(wf6TileFile(key));
+  } catch {
+    return null;
+  }
+});
+ipcMain.handle("wf6-tile-put", async (_e, key, buf) => {
+  const f = wf6TileFile(key);
+  await fs.promises.mkdir(path.dirname(f), { recursive: true });
+  await fs.promises.writeFile(f, Buffer.from(buf));
+  return true;
+});
+ipcMain.handle("wf6-tile-del", async (_e, keys) => {
+  let n = 0;
+  for (const k of keys || []) {
+    try {
+      await fs.promises.unlink(wf6TileFile(k));
+      n++;
+    } catch {}
+  }
+  return n;
+});
+ipcMain.handle("wf6-tile-usage", async () => {
+  let bytes = 0, files = 0;
+  try {
+    for (const d of await fs.promises.readdir(wf6TileDir())) {
+      for (const f of await fs.promises.readdir(path.join(wf6TileDir(), d))) {
+        const st = await fs.promises.stat(path.join(wf6TileDir(), d, f));
+        bytes += st.size;
+        files++;
+      }
+    }
+  } catch {}
+  return { bytes, files };
+});
+// plugins: .js files in <userData>/plugins
+ipcMain.handle("wf6-plugins-dir", async () => {
+  const dir = path.join(app.getPath("userData"), "plugins");
+  await fs.promises.mkdir(dir, { recursive: true });
+  const files = [];
+  for (const f of await fs.promises.readdir(dir)) {
+    if (!/\.m?js$/.test(f)) continue;
+    try {
+      files.push({ name: f, code: await fs.promises.readFile(path.join(dir, f), "utf8") });
+    } catch {}
+  }
+  return { dir, files };
+});
+// ---------- end workflow 0.6 ----------
 ipcMain.handle("app-info", () => ({ version: app.getVersion(), platform: process.platform, displays: screen.getAllDisplays().length }));
 
 app.on("second-instance", () => {

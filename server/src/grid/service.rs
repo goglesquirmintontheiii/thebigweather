@@ -97,7 +97,24 @@ pub struct GridService {
     /// optional folder of local files used as frames (offline use / case studies):
     /// files are named "<layer id with / as _>__<original name>"
     pub local_dir: RwLock<Option<PathBuf>>,
+    /// radar nowcast runs (motion fields) per layer, newest last
+    nowcast: Mutex<HashMap<String, VecDeque<NowcastRun>>>,
+    nowcast_req: Mutex<HashMap<String, Instant>>,
+    nowcast_lock: tokio::sync::Mutex<()>,
+    nowcast_poller: std::sync::atomic::AtomicBool,
+    me: std::sync::Weak<GridService>,
 }
+
+/// One nowcast run: the MRMS frame it starts from and the motion field.
+#[derive(Clone)]
+struct NowcastRun {
+    base_key: String,
+    base_ms: i64,
+    motion: Arc<super::nowcast::Motion>,
+}
+
+/// Forecast leads (minutes) of a nowcast.
+pub const NOWCAST_LEADS: [u32; 6] = [10, 20, 30, 40, 50, 60];
 
 fn safe(k: &str) -> String {
     k.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' }).collect()
@@ -162,7 +179,7 @@ impl GridService {
         let cache_dir = data_dir.join("cache/raw");
         std::fs::create_dir_all(&cache_dir).ok();
         let reqwest_clone = http.clone();
-        Arc::new(Self {
+        Arc::new_cyclic(|me| Self {
             http,
             health,
             layers: sources::all_layers(),
@@ -182,6 +199,11 @@ impl GridService {
             cubes: Mutex::new((lru::LruCache::unbounded(), 0, 0)),
             winds: Mutex::new((lru::LruCache::unbounded(), 0, 0)),
             local_dir: RwLock::new(None),
+            nowcast: Mutex::new(HashMap::new()),
+            nowcast_req: Mutex::new(HashMap::new()),
+            nowcast_lock: tokio::sync::Mutex::new(()),
+            nowcast_poller: std::sync::atomic::AtomicBool::new(false),
+            me: me.clone(),
         })
         .with_budget(memory_mb)
     }
@@ -248,6 +270,12 @@ impl GridService {
         }
         let (b, n, cap) = self.metar_archive.mem_stats();
         v.push(CacheInfo::mem("metar-archive", &format!("METAR archive hours (max {cap})"), b, n, 0));
+        {
+            let r = self.nowcast.lock();
+            let runs: Vec<&NowcastRun> = r.values().flatten().collect();
+            let b = runs.iter().map(|x| x.motion.u.len() * 8 + 256).sum();
+            v.push(CacheInfo::mem("nowcast", "Radar nowcast motion fields", b, runs.len(), 0));
+        }
         v
     }
 
@@ -275,6 +303,7 @@ impl GridService {
                 g.1 = 0;
             }
             "metar-archive" => self.metar_archive.clear_mem(),
+            "nowcast" => self.nowcast.lock().clear(),
             _ => return false,
         }
         true
@@ -386,6 +415,7 @@ impl GridService {
             },
             "goes" => self.goes_frames(&l, n, end).await,
             "future" => self.future_frames(&l).await,
+            "nowcast" => self.nowcast_frames(&l).await,
             "opera" => self.opera_frames(&l, n, end).await,
             "cwa" => self.cwa_frames(&l, n, end).await,
             _ => bail!("unknown source"),
@@ -398,6 +428,7 @@ impl GridService {
             "ndfd" => "NDFD",
             "metar" => "METAR analysis",
             "future" => "Future radar / snow",
+            "nowcast" => "Radar nowcast",
             _ => "GOES satellite",
         };
         match &res {
@@ -892,6 +923,11 @@ impl GridService {
         tokio::task::spawn_blocking(f).await?
     }
 
+    /// CPU work on the blocking pool under the decode limiter (for sibling modules).
+    pub async fn run_blocking<T: Send + 'static>(&self, f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+        self.blocking(f).await
+    }
+
     async fn load(&self, key: &str) -> Result<Grid> {
         let parts: Vec<&str> = key.split('|').collect();
         match parts.first().copied() {
@@ -948,6 +984,22 @@ impl GridService {
                         })
                         .collect();
                     Ok(Grid::from_values(a.nx, a.ny, a.proj.clone(), &vals, a.valid_ms, a.ref_ms))
+                })
+                .await
+            }
+            Some("nowcast") if parts.len() == 4 => {
+                let (base_ms, lead): (i64, u32) = (parts[2].parse()?, parts[3].parse()?);
+                if !NOWCAST_LEADS.contains(&lead) {
+                    bail!("bad nowcast lead");
+                }
+                let run = self.nowcast.lock().get(parts[1]).and_then(|q| q.iter().find(|r| r.base_ms == base_ms).cloned()).ok_or_else(|| anyhow!("nowcast run expired"))?;
+                let base = Box::pin(self.grid(&run.base_key)).await?;
+                self.blocking(move || {
+                    // keep nowcast frames near the lite MRMS size
+                    let stride = base.nx.div_ceil(3500).max(1);
+                    let data = super::nowcast::advect(&base, &run.motion, lead, stride);
+                    let (nx, ny) = (base.nx / stride, base.ny / stride);
+                    Ok(Grid { nx, ny, proj: base.proj.strided(stride, nx), data, scale: base.scale, offset: base.offset, valid_ms: base.valid_ms + lead as i64 * 60_000, ref_ms: base.valid_ms, grid_rel: false })
                 })
                 .await
             }
@@ -1161,13 +1213,8 @@ impl GridService {
     /// x fastest (W→E), rows S→N. Byte 0 = no data; otherwise
     /// value = min + (b - 1) / 254 * (max - min) m/s.
     pub async fn wind(&self, model: &str, level: &str, time: Option<i64>, bbox: [f64; 4], max: usize) -> Result<Bytes> {
-        let m = sources::model_def(model).filter(|m| m.group != "Hidden" && !m.id.starts_with("hafs")).ok_or_else(|| anyhow!("unknown model {model}"))?;
-        if !sources::WIND_LEVELS.contains(&level) || sources::wind_match(m.index, level).is_none() {
-            bail!("level must be one of {}", sources::WIND_LEVELS.join("|"));
-        }
-        let runs = self.model_runs(m).await?;
-        let t = time.unwrap_or_else(|| Utc::now().timestamp_millis());
-        let (run, _, fh) = nearest_step(&runs, t).ok_or_else(|| anyhow!("no {} forecast hours available", m.name))?;
+        let (run, fh) = self.wind_step(model, level, time).await?;
+        let m = sources::model_def(model).ok_or_else(|| anyhow!("unknown model {model}"))?;
         let [w, s, e, n] = bbox;
         let ck = format!("{model}|{run}|{fh}|{level}|{w:.3},{s:.3},{e:.3},{n:.3}|{max}");
         {
@@ -1240,6 +1287,129 @@ impl GridService {
             }
         }
         Ok(b)
+    }
+
+    /// Model run and forecast hour nearest `time` for wind at a level.
+    async fn wind_step(&self, model: &str, level: &str, time: Option<i64>) -> Result<(String, u32)> {
+        let m = sources::model_def(model).filter(|m| m.group != "Hidden" && m.group != "Marine" && !m.id.starts_with("hafs")).ok_or_else(|| anyhow!("unknown model {model}"))?;
+        if !sources::WIND_LEVELS.contains(&level) || sources::wind_match(m.index, level).is_none() {
+            bail!("level must be one of {}", sources::WIND_LEVELS.join("|"));
+        }
+        let runs = self.model_runs(m).await?;
+        let t = time.unwrap_or_else(|| Utc::now().timestamp_millis());
+        let (run, _, fh) = nearest_step(&runs, t).ok_or_else(|| anyhow!("no {} forecast hours available", m.name))?;
+        Ok((run, fh))
+    }
+
+    /// U and V grids (as published; check `grid_rel`) for a model level nearest `time`.
+    pub async fn wind_uv(&self, model: &str, level: &str, time: Option<i64>) -> Result<(Arc<Grid>, Arc<Grid>, String, u32)> {
+        let (run, fh) = self.wind_step(model, level, time).await?;
+        let ku = format!("wcomp|{model}|{run}|{fh}|{level}|u");
+        let kv = format!("wcomp|{model}|{run}|{fh}|{level}|v");
+        let (gu, gv) = tokio::try_join!(self.grid(&ku), self.grid(&kv))?;
+        if gu.data.len() != gv.data.len() {
+            bail!("U/V grids differ");
+        }
+        Ok((gu, gv, run, fh))
+    }
+
+    // ---------- radar nowcast ----------
+
+    /// Forecast frames (+10 … +60 min) from the newest nowcast run of a layer.
+    async fn nowcast_frames(&self, l: &LayerDef) -> Result<FramesResp> {
+        self.nowcast_req.lock().insert(l.id.clone(), Instant::now());
+        self.ensure_nowcast_poller();
+        let run = self.nowcast_run(l).await?;
+        let frames = NOWCAST_LEADS
+            .iter()
+            .map(|lead| FrameInfo { key: format!("nowcast|{}|{}|{lead}", l.id, run.base_ms), time: run.base_ms + *lead as i64 * 60_000, label: format!("+{lead} min (forecast)") })
+            .collect();
+        Ok(FramesResp { frames, run: Some(run.base_ms.to_string()), ..Default::default() })
+    }
+
+    /// The run for the newest MRMS frame, computing a new motion field when a frame arrives.
+    async fn nowcast_run(&self, l: &LayerDef) -> Result<NowcastRun> {
+        let src = self.layer(&l.product)?.clone();
+        // through frames() so local case-study files work too
+        let fr = Box::pin(self.frames(&src.id, 16, None, None, None)).await?;
+        let newest = fr.frames.last().ok_or_else(|| anyhow!("no MRMS frames for {}", src.id))?.clone();
+        let have = |s: &Self| s.nowcast.lock().get(&l.id).and_then(|q| q.back().cloned()).filter(|r| r.base_key == newest.key);
+        if let Some(r) = have(self) {
+            return Ok(r);
+        }
+        let _g = self.nowcast_lock.lock().await;
+        if let Some(r) = have(self) {
+            return Ok(r);
+        }
+        // frames ~10 and ~20 minutes before the newest
+        let pick = |back_min: i64| fr.frames.iter().filter(|f| (newest.time - f.time - back_min * 60_000).abs() <= 3 * 60_000).min_by_key(|f| (newest.time - f.time - back_min * 60_000).abs()).cloned();
+        let mut keys: Vec<FrameInfo> = [pick(20), pick(10)].into_iter().flatten().collect();
+        if keys.is_empty() {
+            // sparse listing: any frame at least 6 minutes older
+            keys.extend(fr.frames.iter().rev().find(|f| newest.time - f.time >= 6 * 60_000).cloned());
+        }
+        if keys.is_empty() {
+            bail!("not enough MRMS frames for a nowcast yet");
+        }
+        keys.push(newest.clone());
+        let mut grids = vec![];
+        for k in &keys {
+            grids.push((self.grid(&k.key).await?, k.time));
+        }
+        let motion = self
+            .blocking(move || {
+                let refs: Vec<(&Grid, i64)> = grids.iter().map(|(g, t)| (g.as_ref(), *t)).collect();
+                super::nowcast::motion(&refs).ok_or_else(|| anyhow!("MRMS frames differ in size"))
+            })
+            .await?;
+        let run = NowcastRun { base_key: newest.key.clone(), base_ms: newest.time, motion: Arc::new(motion) };
+        {
+            let mut m = self.nowcast.lock();
+            let q = m.entry(l.id.clone()).or_default();
+            q.push_back(run.clone());
+            while q.len() > 3 {
+                q.pop_front();
+            }
+        }
+        let (mu, mv) = run.motion.mean();
+        self.health.ok("grid-nowcast", "Radar nowcast", format!("{} blocks with motion; mean {:.2},{:.2} cells/min", run.motion.measured, mu, mv));
+        Ok(run)
+    }
+
+    /// While a nowcast layer was requested in the last 10 minutes, recompute when MRMS updates
+    /// and pre-build the forecast frames.
+    fn ensure_nowcast_poller(&self) {
+        use std::sync::atomic::Ordering;
+        if self.nowcast_poller.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let Some(me) = self.me.upgrade() else {
+            self.nowcast_poller.store(false, Ordering::SeqCst);
+            return;
+        };
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                let active: Vec<String> = me.nowcast_req.lock().iter().filter(|(_, t)| t.elapsed() < Duration::from_secs(600)).map(|(k, _)| k.clone()).collect();
+                if active.is_empty() {
+                    break;
+                }
+                for id in active {
+                    let Ok(l) = me.layer(&id).cloned() else { continue };
+                    match me.nowcast_run(&l).await {
+                        Ok(run) => {
+                            for lead in NOWCAST_LEADS {
+                                let _ = me.grid(&format!("nowcast|{}|{}|{lead}", l.id, run.base_ms)).await;
+                            }
+                        }
+                        Err(e) => me.health.err("grid-nowcast", "Radar nowcast", e),
+                    }
+                }
+            }
+            me.nowcast_req.lock().retain(|_, t| t.elapsed() < Duration::from_secs(600));
+            me.nowcast.lock().clear();
+            me.nowcast_poller.store(false, Ordering::SeqCst);
+        });
     }
 
     // ---------- render ----------

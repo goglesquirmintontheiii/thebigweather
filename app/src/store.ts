@@ -150,7 +150,7 @@ export interface Settings {
   /** speak new warnings aloud */
   speak: boolean;
   /** extra map panes: layout and what each shows */
-  panes: { layout: "1" | "2" | "2v" | "3" | "4"; sync: boolean; list: PaneCfg[] };
+  panes: { layout: "1" | "2" | "2v" | "3" | "4" | "swipe" /* data 0.6 */; sync: boolean; list: PaneCfg[]; /* data 0.6: swipe divider position (0..1) */ swipeX?: number };
   /** keep drawings after leaving drawing mode */
   drawKeep: boolean;
   drawings: import("./map/draw").Drawing[];
@@ -183,7 +183,153 @@ export interface Settings {
   /** history ranges opened recently (Historical Storms → Recent) */
   histRecent: { label: string; kind: "range" | "warning" | "tropical"; start: number; end: number; site?: string; bbox?: [number, number, number, number]; at: number; ref?: string }[];
   /* ---------- end history 0.6 ---------- */
+  /* ---------- workflow 0.6 ---------- */
+  wf6: Wf6Settings;
+  /* ---------- end workflow 0.6 ---------- */
+  /* ---------- data 0.6: contours / barbs over gridded layers (grid/contours.ts) ---------- */
+  data6?: Data6Settings;
+  /* ---------- end data 0.6 ---------- */
+  /* ---------- radar 0.6 ---------- */
+  /** dealias = unfold velocity for display; inspector = every-moment readout at the cursor;
+   * ltgWatch = poll GLM for strikes near saved points (chip in the toolbar) */
+  radar6: { dealias: boolean; inspector: boolean; ltgWatch: boolean; ltgMi: number };
+  /** GRLevelX placefiles (local files keep their text in localStorage "tbw.pf.<id>") */
+  placefiles: PlacefileCfg[];
+  /* ---------- end radar 0.6 ---------- */
 }
+
+/* ---------- radar 0.6 ---------- */
+export interface PlacefileCfg {
+  id: string;
+  name: string;
+  /** http(s) URL, or "" for a local file */
+  url: string;
+  on: boolean;
+  opacity: number;
+  /** refresh override (seconds, 0 = the file's own) */
+  refresh?: number;
+}
+/* ---------- end radar 0.6 ---------- */
+
+/* ---------- data 0.6 ---------- */
+export interface Data6Settings {
+  contours: boolean;
+  /** grid layer id to contour ("" = the layer on screen) */
+  cfield: string;
+  /** interval / base in display units (NaN/undefined = preset) */
+  interval?: number;
+  base?: number;
+  ccolor: string;
+  labels: boolean;
+  barbs: boolean;
+  blevel: "10m" | "850" | "500" | "250";
+  bcolor: string;
+  /** models compared in the forecast center */
+  models?: string[];
+}
+export const DATA6_DEFAULTS: Data6Settings = { contours: false, cfield: "", ccolor: "#ffffff", labels: true, barbs: false, blevel: "10m", bcolor: "#e5e7eb" };
+/* ---------- end data 0.6 ---------- */
+
+/* ---------- workflow 0.6: widgets, route, rules, briefings, kiosk, look, offline maps, plugins ---------- */
+export type WidgetKind = "radar" | "current" | "alerts" | "countdown" | "lightning" | "clock";
+export interface WidgetCfg {
+  id: string;
+  kind: WidgetKind;
+  /** saved point id ("" = first point / map centre) */
+  point: string;
+  opacity: number;
+  onTop: boolean;
+  /** click-through (unlock from the Widgets panel) */
+  locked: boolean;
+  open: boolean;
+  /** mini radar: zoom level */
+  zoom?: number;
+}
+export interface RuleCond {
+  kind: "alert" | "rotation" | "lightning" | "eta" | "aqi" | "metar" | "spc" | "dbz";
+  /** where: saved point id, "gps" or "route" */
+  where: string;
+  /** distance (mi) */
+  mi: number;
+  /** alert: event name substring ("Tornado Warning", "Warning", …) */
+  event?: string;
+  /** rotation: "tvs" | "meso" (rank ≥ value) */
+  rot?: "tvs" | "meso";
+  /** generic threshold (dBZ, AQI, minutes, meso rank, °F, mph, SPC level 1-5) */
+  value?: number;
+  /** lightning: within the last N minutes */
+  minutes?: number;
+  /** metar: field */
+  field?: "temp_hi" | "temp_lo" | "gust";
+}
+export interface RuleAction {
+  sound?: "off" | "chime" | "beep" | "alarm" | "siren";
+  desktop?: boolean;
+  tts?: string;
+  flash?: boolean;
+  webhook?: string;
+  /** "ws:<id>" workspace, "ovl:<id>" overlay on */
+  open?: string;
+}
+export interface Rule {
+  id: string;
+  name: string;
+  on: boolean;
+  cond: RuleCond;
+  act: RuleAction;
+  /** minutes */
+  cooldown: number;
+}
+export interface OfflineRegion {
+  id: string;
+  name: string;
+  bbox: [number, number, number, number];
+  minz: number;
+  maxz: number;
+  tiles: number;
+  bytes: number;
+  saved: number;
+  /** tile URL templates downloaded (vector/raster) */
+  templates: string[];
+}
+export interface PluginCfg {
+  id: string;
+  name: string;
+  /** "file:<name>" | "url:<url>" | "paste" | "folder:<file>" */
+  src: string;
+  on: boolean;
+}
+export interface Wf6Settings {
+  themeMode: "dark" | "light" | "auto";
+  radarStyle: "classic" | "smooth";
+  terrain: { on: boolean; hillshade: boolean; exag: number; tilt: boolean };
+  precipFx: boolean;
+  widgets: WidgetCfg[];
+  routeUrl: string;
+  rules: Rule[];
+  quiet: { on: boolean; from: string; to: string };
+  briefing: { voice: string; rate: number; times: string[]; point: string };
+  kiosk: { workspaces: string[]; seconds: number; resume: number };
+  offline: { regions: OfflineRegion[]; prefer: boolean };
+  plugins: PluginCfg[];
+}
+export const WF6_DEFAULTS: Wf6Settings = {
+  themeMode: "dark",
+  radarStyle: "classic",
+  terrain: { on: false, hillshade: true, exag: 1.5, tilt: false },
+  precipFx: false,
+  widgets: [],
+  routeUrl: "",
+  rules: [],
+  quiet: { on: false, from: "22:00", to: "07:00" },
+  briefing: { voice: "", rate: 1, times: [], point: "" },
+  kiosk: { workspaces: [], seconds: 30, resume: 60 },
+  offline: { regions: [], prefer: false },
+  plugins: [],
+};
+/** widget windows (widget.html) are read-only views of the settings */
+const WIDGET_PAGE = typeof location !== "undefined" && /widget\.html$/.test(location.pathname);
+/* ---------- end workflow 0.6 ---------- */
 
 const DEFAULTS: Settings = {
   servers: [],
@@ -234,12 +380,15 @@ const DEFAULTS: Settings = {
   /* ---------- end workflow ---------- */
   hist: { step: 0, maxFrames: 200, fps: 8, dwellMs: 1000, before: 30, after: 30 }, // history 0.6
   histRecent: [], // history 0.6
+  radar6: { dealias: false, inspector: false, ltgWatch: true, ltgMi: 10 }, // radar 0.6
+  placefiles: [], // radar 0.6
+  wf6: structuredClone(WF6_DEFAULTS), // workflow 0.6
 };
 
 const KEY = "tbw.settings.v1";
 
 /** pop-out windows don't write settings back (they'd overwrite the main window's) */
-const POPOUT = typeof location !== "undefined" && location.hash.includes("popout=");
+const POPOUT = (typeof location !== "undefined" && location.hash.includes("popout=")) || WIDGET_PAGE; // workflow 0.6: widgets too
 
 function popoutOverrides(out: any) {
   if (!POPOUT) return out;
@@ -308,7 +457,7 @@ export function update(fn: (s: Settings) => void) {
 export const activeServer = computed(() => settings.value.servers.find((s) => s.id === settings.value.activeServer) ?? settings.value.servers[0]);
 
 // ---------- transient UI state ----------
-export type PanelId = "layers" | "map" | "radar" | "alerts" | "points" | "sources" | "settings" | "radio" | "forecast" | "search" | "files" | "draw" | "record" | "workspaces" /* workflow */ | null;
+export type PanelId = "layers" | "map" | "radar" | "alerts" | "points" | "sources" | "settings" | "radio" | "forecast" | "search" | "files" | "draw" | "record" | "workspaces" /* workflow */ | "route" | "rules" | "widgets" /* workflow 0.6 */ | "placefiles" /* radar 0.6 */ | null;
 export const openPanel = signal<PanelId>("radar");
 export const tool = signal<"none" | "measure" | "bearing" | "draw" | "xsect" /* workflow */>("none");
 export const crosshair = signal(false);

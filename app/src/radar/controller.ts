@@ -8,6 +8,7 @@ import { BUILTIN, COLORBLIND, defaultTableFor, parsePal, type ColorTable } from 
 import type { RadarLayer } from "./RadarLayer";
 import { playSweepSound } from "../sound";
 import { pollPaused } from "../saver"; // workflow
+import { dealiased, dealiasTick } from "./dealias"; // radar 0.6
 
 export interface Site {
   id: string;
@@ -118,8 +119,8 @@ export const currentFrame = computed(() => {
 /** The sweep under the user's eye: live partial overlay wins when on the newest frame. */
 export const displaySweep = computed<Sweep | undefined>(() => {
   const f = currentFrame.value;
-  if (liveSweep.value && frameIndex.value === frames.value.length - 1) return liveSweep.value;
-  return f?.sweep;
+  if (liveSweep.value && frameIndex.value === frames.value.length - 1) return dealiased(liveSweep.value); // radar 0.6: dealias
+  return dealiased(f?.sweep); // radar 0.6: dealias
 });
 
 // ---------- color tables ----------
@@ -206,8 +207,8 @@ function pushToLayer() {
       const lv = extraLive.value[site]?.sweep;
       if (lv && frameIndex.value >= frames.value.length - 1 && settings.value.radar.live && !histRange.value) items.push({ sweep: lv, table: t, opacity: op });
     }
-    if (f?.sweep) items.push({ sweep: f.sweep, table: t, opacity: op });
-    if (liveSweep.value && frameIndex.value === frames.value.length - 1) items.push({ sweep: liveSweep.value, table: t, opacity: op });
+    if (f?.sweep) items.push({ sweep: dealiased(f.sweep), table: t, opacity: op }); // radar 0.6: dealias
+    if (liveSweep.value && frameIndex.value === frames.value.length - 1) items.push({ sweep: dealiased(liveSweep.value), table: t, opacity: op }); // radar 0.6: dealias
   }
   layer.smooth = settings.value.radar.smooth;
   layer.setItems(items);
@@ -224,6 +225,8 @@ effect(() => {
   void settings.value.weather;
   void extraFrames.value;
   void extraLive.value;
+  void dealiasTick.value; // radar 0.6
+  void settings.value.radar6; // radar 0.6
   pushToLayer();
 });
 

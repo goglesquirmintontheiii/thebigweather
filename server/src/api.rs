@@ -151,6 +151,12 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/grid/wind", get(grid_wind))
         .route("/sounding", get(sounding))
         .route("/sounding/stations", get(sounding_stations))
+        .route("/placefile", get(placefile))
+        .route("/placefile/asset", get(placefile_asset))
+        .route("/climate", get(climate))
+        .route("/climate/records", get(climate_records))
+        .route("/grid/contours", get(grid_contours))
+        .route("/grid/barbs", get(grid_barbs))
         .route("/arcgis/{service}/legend", get(arcgis_legend))
         .route("/arcgis/{service}/{z}/{x}/{y}", get(arcgis_tile))
         .route("/metars", get(metars))
@@ -544,7 +550,7 @@ async fn overlay(State(st): St, Path(id): Path<String>, Query(q): Query<std::col
     let mut q = q;
     q.remove("token");
     let keys = st.cfg.read().keys.clone();
-    let b = st.overlays.get(&id, &q, &keys).await?;
+    let b = st.overlays.get(&id, &q, &keys).await.map_err(input_err)?;
     let mut r = Response::new(Body::from(b));
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -846,6 +852,80 @@ async fn arcgis_legend(State(st): St, Path(service): Path<String>) -> Result<Res
     resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
     resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=3600"));
     Ok(resp)
+}
+
+// ---------- phase 6: placefiles, climate, contours / barbs ----------
+
+fn input_err(e: anyhow::Error) -> ApiError {
+    let msg = format!("{e:#}");
+    if msg.starts_with("blocked") {
+        ApiError(StatusCode::FORBIDDEN, msg)
+    } else if ["bad url", "url must", "required", "must be", "too large", "not an image", "not a placefile", "bbox", "out of range", "unknown layer", "unknown model", "level must", "interval", "no frame"].iter().any(|k| msg.contains(k)) {
+        bad(&msg)
+    } else {
+        ApiError::from(e)
+    }
+}
+
+async fn placefile_get(st: &AppState, q: HashMap<String, String>, req: Request, asset: bool) -> Result<Response, ApiError> {
+    let url = q.get("url").cloned().unwrap_or_default();
+    if url.is_empty() {
+        return Err(bad("url=<http(s) url> required"));
+    }
+    // private / loopback targets only for an app on this machine
+    let local = is_local(&req);
+    let (b, ct) = st.overlays.placefile(&url, asset, local).await.map_err(input_err)?;
+    let mut r = Response::new(Body::from(b));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_str(&ct).unwrap_or(HeaderValue::from_static("application/octet-stream")));
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(if asset { "private, max-age=3600" } else { "no-store" }));
+    r.headers_mut().insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    Ok(r)
+}
+
+/// Placefile text (`url=`, URL-encoded), fetched by the server; the app parses it.
+async fn placefile(State(st): St, Query(q): Query<HashMap<String, String>>, req: Request) -> Result<Response, ApiError> {
+    placefile_get(&st, q, req, false).await
+}
+
+/// An icon sheet / image a placefile refers to (`url=`; images only).
+async fn placefile_asset(State(st): St, Query(q): Query<HashMap<String, String>>, req: Request) -> Result<Response, ApiError> {
+    placefile_get(&st, q, req, true).await
+}
+
+async fn ovl_json(st: &AppState, id: &str, q: std::collections::BTreeMap<String, String>) -> Result<Response, ApiError> {
+    let mut q = q;
+    q.remove("token");
+    let keys = st.cfg.read().keys.clone();
+    let b = st.overlays.get(id, &q, &keys).await.map_err(input_err)?;
+    let mut r = json_bytes(b);
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=600"));
+    Ok(r)
+}
+
+/// Nearest ACIS station: recent days, normals, departures, records (`lat`, `lon`).
+async fn climate(State(st): St, Query(q): Query<std::collections::BTreeMap<String, String>>) -> Result<Response, ApiError> {
+    ovl_json(&st, "climate", q).await
+}
+
+/// Daily records set or tied in an area (`date=MM-DD|YYYY-MM-DD`, `bbox`).
+async fn climate_records(State(st): St, Query(q): Query<std::collections::BTreeMap<String, String>>) -> Result<Response, ApiError> {
+    ovl_json(&st, "climaterec", q).await
+}
+
+/// Contour lines of a grid frame (GeoJSON).
+async fn grid_contours(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+    let v = crate::grid::contour::contours_api(&st.grids, &q).await.map_err(input_err)?;
+    let mut r = Json(v).into_response();
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"));
+    Ok(r)
+}
+
+/// Wind barbs thinned to a screen-space grid (GeoJSON points).
+async fn grid_barbs(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+    let v = crate::grid::contour::barbs_api(&st.grids, &q).await.map_err(input_err)?;
+    let mut r = Json(v).into_response();
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"));
+    Ok(r)
 }
 
 async fn metars(State(st): St) -> Json<Value> {

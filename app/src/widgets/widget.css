@@ -1,0 +1,231 @@
+/* workflow 0.6: desktop widget windows (transparent, frameless) */
+:root {
+  --wg-bg: rgba(12, 16, 22, 0.82);
+  --wg-line: rgba(255, 255, 255, 0.12);
+  --wg-text: #e7edf4;
+  --wg-muted: #8b97a6;
+  --wg-accent: #3fb7ff;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  font-size: 13px;
+  color: var(--wg-text);
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --wg-bg: rgba(250, 251, 253, 0.88);
+  --wg-line: rgba(0, 0, 0, 0.12);
+  --wg-text: #1b2430;
+  --wg-muted: #5b6676;
+  color-scheme: light;
+}
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+html.wg-bg body {
+  background: #2b3440;
+}
+* {
+  box-sizing: border-box;
+}
+.wg {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--wg-bg);
+  border: 1px solid var(--wg-line);
+  border-radius: 12px;
+  overflow: hidden;
+  -webkit-app-region: drag;
+  user-select: none;
+  backdrop-filter: blur(10px);
+}
+.wg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--wg-muted);
+}
+.wg-head span {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wg-x {
+  -webkit-app-region: no-drag;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+  transition: opacity 0.15s;
+}
+.wg:hover .wg-x {
+  opacity: 0.8;
+}
+.wg-x:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.wg-body {
+  flex: 1;
+  min-height: 0;
+  padding: 2px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.wg-muted {
+  color: var(--wg-muted);
+  font-size: 12px;
+}
+.wg-big {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 30px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.wg-sub {
+  color: var(--wg-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.wg-count.on .wg-big {
+  color: #fbbf24;
+}
+.wg-count.bad .wg-big,
+.wg-ltg.bad .wg-big {
+  color: #f87171;
+}
+.wg-ltg.on .wg-big {
+  color: #facc15;
+}
+.wg-now {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wg-ic {
+  color: var(--wg-accent);
+  display: flex;
+}
+.wg-temp {
+  font-size: 40px;
+  font-weight: 700;
+  line-height: 1;
+}
+.wg-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.wg-meta b {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wg-meta small {
+  color: var(--wg-muted);
+}
+.wg-hours {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  margin-top: 8px;
+  text-align: center;
+  gap: 2px;
+}
+.wg-hours div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.wg-hours small {
+  color: var(--wg-muted);
+  font-size: 10px;
+}
+.wg-hours .pop {
+  color: #60a5fa;
+}
+.wg-foot {
+  color: var(--wg-muted);
+  font-size: 10px;
+  margin-top: 4px;
+}
+.wg-tick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wg-ticker.warn .wg-tick > svg {
+  color: #f87171;
+}
+.wg-tick-track {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.wg-tick-text {
+  display: inline-block;
+  padding-left: 100%;
+  animation: wg-marquee linear infinite;
+  font-weight: 600;
+}
+.wg-ticker.warn .wg-tick-text {
+  color: #fecaca;
+}
+:root[data-theme="light"] .wg-ticker.warn .wg-tick-text {
+  color: #b91c1c;
+}
+@keyframes wg-marquee {
+  to {
+    transform: translateX(-100%);
+  }
+}
+.wg-time {
+  font-size: 34px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.wg-age {
+  font-size: 12px;
+  color: #34d399;
+  margin-top: 2px;
+}
+.wg-age.old {
+  color: #fbbf24;
+}
+.wg-radar .wg-body {
+  padding: 0;
+  position: relative;
+}
+.wg-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  -webkit-app-region: no-drag;
+}
+.wg-radar-info {
+  position: absolute;
+  left: 6px;
+  bottom: 5px;
+  font-size: 10.5px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #e7edf4;
+  padding: 1px 6px;
+  border-radius: 6px;
+}

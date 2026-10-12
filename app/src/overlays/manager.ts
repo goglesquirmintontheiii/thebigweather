@@ -60,9 +60,9 @@ function addOverlay(m: MLMap, id: string) {
     baseFilter.set(spec0.id, (spec0 as any).filter); // history replay
     const spec: any = { ...spec0 };
     if (user.minzoom) spec.minzoom = Math.max(spec.minzoom ?? 0, user.minzoom);
-    const under = !user.top && (spec.type === "fill" || spec.type === "heatmap" || (spec.type === "line" && !id.startsWith("file:")));
+    const under = !user.top && !(def as any)?.rasterTop /* radar 0.6: Level II analysis layers draw above the radar */ && (spec.type === "fill" || spec.type === "heatmap" || (spec.type === "line" && !id.startsWith("file:")));
     // layers 0.5: raster overlays sit right under the weather picture (above the basemap) unless "draw above weather"
-    const rasterAt = spec.type === "raster" ? (user.top ? below : m.getStyle().layers.find((l) => !l.id.startsWith("base-"))?.id) : null;
+    const rasterAt = spec.type === "raster" ? ((def as any)?.rasterTop /* radar 0.6: hail swath right above the radar */ ? (m.getLayer("ovl-counties") ? "ovl-counties" : undefined) : user.top ? below : m.getStyle().layers.find((l) => !l.id.startsWith("base-"))?.id) : null;
     try {
       m.addLayer(spec as any, rasterAt !== null ? rasterAt : under ? below : m.getLayer("ovl-tools-line") ? "ovl-tools-line" : undefined);
     } catch (e) {
@@ -75,7 +75,7 @@ function signature(id: string): string {
   const def = overlayDef(id);
   const o = settings.value.ovl[id] ?? {};
   // METAR labels depend on temperature units
-  return JSON.stringify([o.color, o.opacity, o.size, o.labels, o.minzoom, o.top, def ? optsFor(def) : null, id === "metar" ? settings.value.units : 0, histKey()]);
+  return JSON.stringify([o.color, o.opacity, o.size, o.labels, o.minzoom, o.top, def ? optsFor(def) : null, id === "metar" || id === "pws" /* data 0.6 */ ? settings.value.units : 0, histKey()]);
 }
 
 function viewParams(def: OverlayDef, m: MLMap): Record<string, string> | null {

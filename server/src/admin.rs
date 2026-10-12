@@ -510,6 +510,7 @@ fn mem_caches(st: &AppState) -> Vec<crate::caches::CacheInfo> {
     v.extend(st.grids.cache_stats());
     v.push(st.intl.cache_stats());
     v.push(st.overlays.cache_stats());
+    v.extend(st.overlays.extra_cache_stats());
     v
 }
 
@@ -548,7 +549,7 @@ async fn caches_clear(State(st): St, Query(q): Query<HashMap<String, String>>) -
                     st.overlays.clear_cache();
                     true
                 }
-                x => st.radar.clear_cache(x) || st.grids.clear_cache(x),
+                x => st.radar.clear_cache(x) || st.grids.clear_cache(x) || st.overlays.clear_extra(x),
             };
             if ok {
                 cleared.push(c.id);

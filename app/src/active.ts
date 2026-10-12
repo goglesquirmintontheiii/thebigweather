@@ -47,7 +47,7 @@ export const isForecast = computed(() => {
   const w = settings.value.weather;
   if (w.kind !== "grid") return false;
   const s = gridDef(w.id)?.source;
-  return s === "model" || s === "ndfd" || s === "future";
+  return s === "model" || s === "ndfd" || s === "future" || s === "nowcast"; // data 0.6: nowcast
 });
 
 export const activeLegend = computed<{ table: ColorTable; units: string; grid: boolean } | null>(() => {

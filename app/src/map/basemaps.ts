@@ -244,3 +244,49 @@ export async function googleSession(key: string): Promise<string> {
   if (!r.ok) throw new Error(`Google tiles: HTTP ${r.status}`);
   return (await r.json()).session;
 }
+
+/* ---------- workflow 0.6: terrain hillshade + 3D terrain (keyless AWS Terrain Tiles, terrarium) ---------- */
+import type { Map as MLMap } from "maplibre-gl";
+
+export const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+const DEM_ATTR = 'Terrain: <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md">Mapzen / AWS Terrain Tiles</a>';
+
+/** Add/remove the hillshade layer (under the weather layers) and MapLibre 3D terrain. */
+export function applyTerrain(map: MLMap, t: { on: boolean; hillshade: boolean; exag: number; tilt: boolean }, dark: boolean) {
+  if (!map.style) return;
+  const want = t.on;
+  const hsId = "base-wf6-hillshade";
+  if (want && !map.getSource("wf6-dem-hs")) map.addSource("wf6-dem-hs", { type: "raster-dem", tiles: [DEM_TILES], tileSize: 256, maxzoom: 15, encoding: "terrarium", attribution: DEM_ATTR });
+  if (want && t.tilt && !map.getSource("wf6-dem")) map.addSource("wf6-dem", { type: "raster-dem", tiles: [DEM_TILES], tileSize: 256, maxzoom: 14, encoding: "terrarium" });
+  if (want && t.hillshade) {
+    // first layer above the basemap fills: weather (grid/radar/gibs), overlays and labels stay on top
+    // (layer order only — getStyle() would serialise every GeoJSON source)
+    const before = map.getLayersOrder().find((id) => !id.startsWith("base-") || id.startsWith("base-road") || id === "base-building");
+    const paint = {
+      "hillshade-exaggeration": Math.max(0, Math.min(1, 0.4 + t.exag * 0.2)),
+      "hillshade-shadow-color": dark ? "#000000" : "#4b5563",
+      "hillshade-highlight-color": dark ? "rgba(200,215,235,0.5)" : "#ffffff",
+      "hillshade-accent-color": dark ? "#0b0e13" : "#7c8590",
+    } as any;
+    if (!map.getLayer(hsId)) map.addLayer({ id: hsId, type: "hillshade", source: "wf6-dem-hs", paint }, before);
+    else for (const [k, v] of Object.entries(paint)) map.setPaintProperty(hsId, k as any, v);
+  } else if (map.getLayer(hsId)) map.removeLayer(hsId);
+  if (want && t.tilt) {
+    map.setTerrain({ source: "wf6-dem", exaggeration: Math.max(0.5, Math.min(5, t.exag)) });
+    map.setMaxPitch(70);
+    map.dragRotate.enable();
+  } else {
+    if (map.getTerrain()) map.setTerrain(null);
+    if (map.getPitch() > 0) map.easeTo({ pitch: 0, bearing: 0, duration: 300 });
+    map.setMaxPitch(0);
+    map.dragRotate.disable();
+  }
+  if (!want) {
+    if (map.getSource("wf6-dem-hs") && !map.getLayer(hsId)) map.removeSource("wf6-dem-hs");
+  }
+  if (!(want && t.tilt) && map.getSource("wf6-dem")) map.removeSource("wf6-dem");
+}
+
+/** Basemap hosts whose tiles, TileJSON and glyphs can be stored for offline use (Settings → Offline maps). */
+export const OFFLINE_HOSTS = /^https:\/\/([a-d]\.basemaps\.cartocdn\.com|tiles\.openfreemap\.org|s3\.amazonaws\.com\/elevation-tiles-prod|server\.arcgisonline\.com\/ArcGIS\/rest\/services\/(World_Terrain_Base|World_Shaded_Relief))\//;
+/* ---------- end workflow 0.6 ---------- */

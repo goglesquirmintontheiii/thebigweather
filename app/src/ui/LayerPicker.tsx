@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { settings, update } from "../store";
-import { gridLayers, GIBS, activeLabel, selectWeather, gridDef, type GridLayerDef } from "../weather";
+import { gridLayers, GIBS, activeLabel, selectWeather, gridDef, isWaterDef, type GridLayerDef } from "../weather";
 import { currentSite } from "../radar/controller";
-import { Layers, ChevronDown, Search, Radar, Satellite, Grid3x3, CloudSun, Thermometer, CalendarClock, FastForward, Globe } from "lucide-preact";
+import { Layers, ChevronDown, Search, Radar, Satellite, Grid3x3, CloudSun, Thermometer, CalendarClock, FastForward, Globe, Waves } from "lucide-preact";
 import { intlSources, intlErrors, intlListLoading, loadIntlList, selectIntl, flyForGrid, intlRegion, INTL_REGIONS, INTL_NAMES, groupOf, allIdOf, groupName, errKey, curPrecip, setIntlPrecip, type IntlSource, type Precip } from "../intl/radar"; // intl & forecast tools
 import { noLevel3 } from "../intl/sites";
 
-type Cat = "radar" | "world" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs";
+type Cat = "radar" | "world" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs" | "water" /* data 0.6 */;
 const CATS: { id: Cat; name: string; icon: any }[] = [
   { id: "radar", name: "Radar", icon: Radar },
   { id: "world", name: "World", icon: Globe },
@@ -18,9 +18,12 @@ const CATS: { id: Cat; name: string; icon: any }[] = [
   { id: "models", name: "Models", icon: CloudSun },
   { id: "ndfd", name: "Forecast", icon: CalendarClock },
   { id: "obs", name: "Surface", icon: Thermometer },
+  { id: "water", name: "Water", icon: Waves }, // data 0.6: flooding + marine
 ];
 
 function catOf(d: GridLayerDef): Cat {
+  if (isWaterDef(d)) return "water"; // data 0.6
+  if (d.source === "nowcast") return "future"; // data 0.6
   return ({ mrms: "mrms", goes: "sat", model: "models", ndfd: "ndfd", metar: "obs", future: "future", opera: "world", cwa: "world" } as const)[d.source] ?? (d.group === "International radar" ? "world" : "mrms");
 }
 
@@ -96,6 +99,7 @@ export function LayerPicker() {
                 {cat === "models" && <ModelList pick={pick} />}
                 {(cat === "mrms" || cat === "ndfd" || cat === "obs") && <GroupedList cat={cat} pick={pick} />}
                 {cat === "future" && <FutureList pick={pick} />}
+                {cat === "water" && <WaterList pick={pick} />}
               </div>
             </div>
           )}
@@ -164,9 +168,14 @@ const FUTURE_SUB: Record<string, string> = {
 
 function FutureList({ pick }: { pick: Pick }) {
   const defs = gridLayers.value.filter((d) => d.source === "future");
-  if (!defs.length) return <div class="muted small">Connect to a server to list layers.</div>;
+  const now = gridLayers.value.filter((d) => d.source === "nowcast"); // data 0.6
+  if (!defs.length && !now.length) return <div class="muted small">Connect to a server to list layers.</div>;
   return (
     <>
+      {now.length > 0 && <label class="lbl">Nowcast · next hour (forecast)</label>}
+      {now.map((d) => (
+        <Item key={d.id} on={isGrid(d.id)} name={d.name} sub="Extrapolated · forecast frames" onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />
+      ))}
       <label class="lbl">From now forward · model forecasts</label>
       {defs.map((d) => (
         <Item key={d.id} on={isGrid(d.id)} name={d.name} sub={FUTURE_SUB[d.id]} onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />
@@ -174,6 +183,39 @@ function FutureList({ pick }: { pick: Pick }) {
     </>
   );
 }
+
+/* ---------- data 0.6: flooding & marine ---------- */
+function WaterList({ pick }: { pick: Pick }) {
+  const defs = gridLayers.value.filter(isWaterDef);
+  const groups = [...new Set(defs.map((d) => d.group))].sort((a, b) => (/flood|flash|hydro/i.test(a) ? -1 : 0) - (/flood|flash|hydro/i.test(b) ? -1 : 0));
+  const w = settings.value.weather;
+  const sst = GIBS.filter((g) => g.id === "sst-mur" || g.id === "sst-anom");
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g}>
+          <label class="lbl">{g.replace(/^(MRMS|Models) · /, "")}</label>
+          <div class="lp-grid">
+            {defs
+              .filter((d) => d.group === g)
+              .map((d) => (
+                <Item key={d.id} on={isGrid(d.id)} name={d.name} onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />
+              ))}
+          </div>
+        </div>
+      ))}
+      {!defs.length && <div class="muted small">No flooding or wave layers on this server yet.</div>}
+      <label class="lbl">Sea surface (NASA)</label>
+      <div class="lp-grid">
+        {sst.map((x) => (
+          <Item key={x.id} on={w.kind === "gibs" && w.id === x.id} name={x.name} sub="Daily" onClick={() => pick(() => selectWeather({ kind: "gibs", id: x.id }))} />
+        ))}
+      </div>
+      <div class="muted small lp-note">Wave arrows and contours: layer settings under the legend.</div>
+    </>
+  );
+}
+/* ---------- end data 0.6 ---------- */
 
 function GroupedList({ cat, pick }: { cat: Cat; pick: Pick }) {
   const defs = gridLayers.value.filter((d) => catOf(d) === cat);

@@ -13,10 +13,32 @@ import { CenterModal } from "./CenterModal";
 import { RefreshCw, MapPin, CloudSun, Sunrise, Sunset, PanelLeft, TriangleAlert, Droplets, Wind, Gauge, Eye, Sun, Activity } from "lucide-preact";
 import { Ensembles } from "./EnsemblePlume"; // intl & forecast tools
 import { openSounding } from "../sounding/state";
+/* ---------- data 0.6 ---------- */
+import { ModelCompare } from "./Meteogram";
+import { HealthTab, StarsTab } from "./OutdoorTabs";
+import { ClimatePanel } from "./ClimatePanel";
+/* ---------- end data 0.6 ---------- */
 
 export const forecastOpen = signal(false);
 /** Forecast / Ensembles tab (kept across reopening) */
-const fccTab = signal<"fc" | "ens">("fc");
+type FccTab = "fc" | "ens" | "models" | "health" | "stars" | "climate"; // data 0.6: more tabs
+export const fccTab = signal<FccTab>("fc");
+/* ---------- data 0.6: open the window at a point (map right-click) ---------- */
+export const fccAt = signal<{ lat: number; lon: number; n: number } | null>(null);
+export function openForecastAt(lat: number, lon: number, tab: FccTab) {
+  update((x) => (x.forecast.point = "center"));
+  fccAt.value = { lat, lon, n: (fccAt.value?.n ?? 0) + 1 };
+  fccTab.value = tab;
+  forecastOpen.value = true;
+}
+(window as any).__tbwFcc = { openForecastAt, fccTab }; // console / screenshots
+const D6_TABS: [FccTab, string][] = [
+  ["models", "Models"],
+  ["health", "Health"],
+  ["stars", "Stars"],
+  ["climate", "Climate"],
+];
+/* ---------- end data 0.6 ---------- */
 
 // ---------- data ----------
 
@@ -532,7 +554,8 @@ export function ForecastCenter() {
 function ForecastBody() {
   const s = settings.value;
   const sel = s.forecast.point;
-  const [center, setCenter] = useState<[number, number] | null>(() => (mapRef.value ? [mapRef.value.getCenter().lng, mapRef.value.getCenter().lat] : null));
+  const [center, setCenter] = useState<[number, number] | null>(() => (fccAt.value ? [fccAt.value.lon, fccAt.value.lat] : mapRef.value ? [mapRef.value.getCenter().lng, mapRef.value.getCenter().lat] : null)); // data 0.6: fccAt
+  useEffect(() => void (fccAt.value && setCenter([fccAt.value.lon, fccAt.value.lat])), [fccAt.value?.n]); // data 0.6
   const [fc, setFc] = useState<Fc | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -540,11 +563,11 @@ function ForecastBody() {
   const [on, setOn] = useState<Set<string>>(() => new Set(["temp", "feels", "dew", "pop", "precip", "wind", "gust", "cloud", "pres"]));
   const [dsel, setDsel] = useState<string | null>(null);
   const tab = fccTab.value; // intl & forecast tools
-  const setTab = (t: "fc" | "ens") => (fccTab.value = t);
+  const setTab = (t: FccTab) => (fccTab.value = t);
   const where = useMemo(() => {
     const p = s.points.find((x) => x.id === sel);
     if (p) return { lat: p.lat, lon: p.lon, name: p.name };
-    return center ? { lat: center[1], lon: center[0], name: "Map center" } : null;
+    return center ? { lat: center[1], lon: center[0], name: fccAt.value && center[0] === fccAt.value.lon && center[1] === fccAt.value.lat ? `${center[1].toFixed(2)}, ${center[0].toFixed(2)}` : "Map center" } : null; // data 0.6
   }, [sel, center, s.points]);
   const load = () => {
     if (!where) return;
@@ -585,6 +608,11 @@ function ForecastBody() {
             <button class={tab === "ens" ? "on" : ""} onClick={() => setTab("ens")}>
               Ensembles
             </button>
+            {D6_TABS.map(([k, n]) => (
+              <button key={k} class={tab === k ? "on" : ""} onClick={() => setTab(k)}>
+                {n}
+              </button>
+            ))}
           </div>
           {where && (
             <button class="btn sm ghost" title="Skew-T sounding for this point" onClick={() => openSounding(where.lat, where.lon)}>
@@ -614,6 +642,11 @@ function ForecastBody() {
       }
     >
       {tab === "ens" && where && <Ensembles lat={where.lat} lon={where.lon} />}
+      {/* data 0.6 */}
+      {tab === "models" && where && <ModelCompare lat={where.lat} lon={where.lon} />}
+      {tab === "health" && where && <HealthTab lat={where.lat} lon={where.lon} />}
+      {tab === "stars" && where && <StarsTab lat={where.lat} lon={where.lon} />}
+      {tab === "climate" && where && <ClimatePanel lat={where.lat} lon={where.lon} />}
       {tab === "fc" && err && !fc?.hours.length && <div class="err-text">{err}</div>}
       {tab === "fc" && !fc && !err && <div class="muted">Loading forecast…</div>}
       {tab === "fc" && fc && (

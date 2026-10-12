@@ -25,6 +25,9 @@ import { alerts } from "../alerts";
 import { alertStyle, alertVisible, alertKind, patternId, registerPatterns } from "../alertstyle";
 import { api } from "../api";
 import { distance, bearing, compass, fmtDist, circle, destination } from "../util";
+/* workflow 0.6: offline tiles, terrain, route/plugin layers, precip effect */
+import { offlineTransform } from "../offline/tiles";
+import { attachWf6 } from "./wf6map";
 
 export const mapRef = signal<MLMap | null>(null);
 export const hover = signal<{ lat: number; lon: number; value: number; range: number; az: number; height: number; x: number; y: number } | null>(null);
@@ -448,6 +451,7 @@ export function createMap(container: HTMLElement): MLMap {
     fadeDuration: 0,
     // arrow keys step frames / tilts instead of panning
     keyboard: false,
+    transformRequest: offlineTransform, // workflow 0.6
   } as any);
   map.touchZoomRotate.disableRotation();
   registerPatterns(map);
@@ -462,6 +466,7 @@ export function createMap(container: HTMLElement): MLMap {
   mapRef.value = map;
   attachOverlays(map);
   attachDraw(map);
+  attachWf6(map); // workflow 0.6
   (window as any).__tbw = { map, radarLayer, gridLayer, liveSweep, frames, liveState, extraFrames };
 
   // FPS: count rendered map frames per second

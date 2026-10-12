@@ -20,7 +20,7 @@ pub struct LayerDef {
     pub nodata: Vec<f32>,
     #[serde(skip)]
     pub min_valid: Option<f32>,
-    /// source kind: mrms | model | ndfd | metar | goes | future | opera | cwa
+    /// source kind: mrms | model | ndfd | metar | goes | future | nowcast | opera | cwa
     pub source: &'static str,
     /// model id for model layers
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -66,7 +66,41 @@ const MRMS: &[M] = &[
     M("rqpe1h", "Precip Accumulation", "Radar-only QPE 1 hr", "RadarOnly_QPE_01H_00.00", "mm", "PRECIPMM"),
 ];
 
+/// MRMS FLASH (flash-flood) products: id, name, product dir, units, cmap. 10-minute cadence.
+const FLASH: &[(&str, &str, &str, &str, &str)] = &[
+    ("flash_crest_unit", "CREST Max Unit Streamflow", "FLASH_CREST_MAXUNITSTREAMFLOW_00.00", "m³/s/km²", "FLASH"),
+    ("flash_crest_q", "CREST Max Streamflow", "FLASH_CREST_MAXSTREAMFLOW_00.00", "m³/s", "STREAMFLOW"),
+    ("flash_crest_soil", "CREST Max Soil Saturation", "FLASH_CREST_MAXSOILSAT_00.00", "%", "RH"),
+    ("flash_sac_unit", "SAC-SMA Max Unit Streamflow", "FLASH_SAC_MAXUNITSTREAMFLOW_00.00", "m³/s/km²", "FLASH"),
+    ("flash_hp_unit", "Hydrophobic Max Unit Streamflow", "FLASH_HP_MAXUNITSTREAMFLOW_00.00", "m³/s/km²", "FLASH"),
+    ("flash_arimax", "QPE Return Period (max)", "FLASH_QPE_ARIMAX_00.00", "yr", "FLASHRP"),
+    ("flash_ari30m", "QPE Return Period 30 min", "FLASH_QPE_ARI30M_00.00", "yr", "FLASHRP"),
+    ("flash_ari01h", "QPE Return Period 1 hr", "FLASH_QPE_ARI01H_00.00", "yr", "FLASHRP"),
+    ("flash_ari03h", "QPE Return Period 3 hr", "FLASH_QPE_ARI03H_00.00", "yr", "FLASHRP"),
+    ("flash_ari06h", "QPE Return Period 6 hr", "FLASH_QPE_ARI06H_00.00", "yr", "FLASHRP"),
+    ("flash_ari12h", "QPE Return Period 12 hr", "FLASH_QPE_ARI12H_00.00", "yr", "FLASHRP"),
+    ("flash_ari24h", "QPE Return Period 24 hr", "FLASH_QPE_ARI24H_00.00", "yr", "FLASHRP"),
+    ("flash_ffgmax", "QPE / Flash Flood Guidance (max)", "FLASH_QPE_FFGMAX_00.00", "ratio", "FFGRATIO"),
+    ("flash_ffg01h", "QPE / Flash Flood Guidance 1 hr", "FLASH_QPE_FFG01H_00.00", "ratio", "FFGRATIO"),
+    ("flash_ffg03h", "QPE / Flash Flood Guidance 3 hr", "FLASH_QPE_FFG03H_00.00", "ratio", "FFGRATIO"),
+    ("flash_ffg06h", "QPE / Flash Flood Guidance 6 hr", "FLASH_QPE_FFG06H_00.00", "ratio", "FFGRATIO"),
+];
+
 pub fn mrms_layers() -> Vec<LayerDef> {
+    let flash = FLASH.iter().map(|f| LayerDef {
+        id: format!("mrms/{}", f.0),
+        group: "MRMS · Flooding".into(),
+        name: f.1.to_string(),
+        units: f.3,
+        cmap: f.4,
+        product: f.2.to_string(),
+        transform: Transform::None,
+        nodata: vec![-9999.0, -999.0, -99.0],
+        min_valid: Some(0.0),
+        source: "mrms",
+        model: None,
+        step_min: 10,
+    });
     MRMS.iter()
         .map(|m| LayerDef {
             id: format!("mrms/{}", m.0),
@@ -88,6 +122,7 @@ pub fn mrms_layers() -> Vec<LayerDef> {
             model: None,
             step_min: 2,
         })
+        .chain(flash)
         .collect()
 }
 
@@ -137,6 +172,8 @@ pub const MODELS: &[ModelDef] = &[
     ModelDef { id: "hrdps", name: "CMC HRDPS", group: "Convection-allowing", bucket: "https://dd.weather.gc.ca", file: "", run_prefix: "{ymd}/WXO-DD/model_hrdps/continental/2.5km/{hh}/", cycles: &[0, 6, 12, 18], index: "msc", resolution: "2.5 km" },
     // DWD open data ICON-EU on its regular lat/lon grid (ICON global is icosahedral only).
     // Each cycle directory holds only that cycle's latest run; files are .bz2.
+    // GFS-Wave (WAVEWATCH III) global 0.25°: hourly to 120 h, then 3-hourly
+    ModelDef { id: "gfswave", name: "GFS-Wave", group: "Marine", bucket: "noaa-gfs-bdp-pds", file: "gfs.{ymd}/{hh}/wave/gridded/gfswave.t{hh}z.global.0p25.f{fh3}.grib2", run_prefix: "gfs.{ymd}/{hh}/wave/gridded/gfswave.t{hh}z.global.0p25.f", cycles: &[0, 6, 12, 18], index: "ncep", resolution: "0.25°" },
     ModelDef { id: "iconeu", name: "ICON-EU", group: "Regional", bucket: "https://opendata.dwd.de/weather/nwp/icon-eu/grib", file: "{hh}/{dir}/icon-eu_europe_regular-lat-lon_{kind}_{ymd}{hh}_{fh3}_{name}.grib2.bz2", run_prefix: "{hh}/t_2m/", cycles: &[0, 3, 6, 9, 12, 15, 18, 21], index: "dwd", resolution: "0.0625°" },
 ];
 
@@ -204,6 +241,12 @@ pub const VARS: &[VarDef] = &[
     // HRRR-Smoke (wrfsfc): "|organic" prefers the smoke (organic matter) record when several aerosols share the level
     VarDef { id: "smoke", name: "Near-Surface Smoke", group: "Smoke", units: "µg/m³", cmap: "SMOKE", transform: Transform::KgM3ToUgM3, ncep: Match::Ncep(&["MASSDEN:8 m above ground|organic"]), ecmwf: None, accum: false },
     VarDef { id: "colsmoke", name: "Vertically Integrated Smoke", group: "Smoke", units: "mg/m²", cmap: "SMOKE", transform: Transform::KgM2ToMgM2, ncep: Match::Ncep(&["COLMD:entire atmosphere|organic"]), ecmwf: None, accum: false },
+    // GFS-Wave
+    VarDef { id: "htsgw", name: "Significant Wave Height", group: "Waves", units: "m", cmap: "WAVE", transform: Transform::None, ncep: Match::Ncep(&["HTSGW:surface"]), ecmwf: None, accum: false },
+    VarDef { id: "wvhgt", name: "Wind Wave Height", group: "Waves", units: "m", cmap: "WAVE", transform: Transform::None, ncep: Match::Ncep(&["WVHGT:surface"]), ecmwf: None, accum: false },
+    VarDef { id: "swell1", name: "Primary Swell Height", group: "Waves", units: "m", cmap: "WAVE", transform: Transform::None, ncep: Match::Ncep(&["SWELL:1 in sequence"]), ecmwf: None, accum: false },
+    VarDef { id: "perpw", name: "Peak Wave Period", group: "Waves", units: "s", cmap: "WAVEPER", transform: Transform::None, ncep: Match::Ncep(&["PERPW:surface"]), ecmwf: None, accum: false },
+    VarDef { id: "dirpw", name: "Peak Wave Direction", group: "Waves", units: "°", cmap: "WAVEDIR", transform: Transform::None, ncep: Match::Ncep(&["DIRPW:surface"]), ecmwf: None, accum: false },
     // GEFS: precipitation comes in 6-hour (3-hour early on) buckets, not run totals
     VarDef { id: "apcp6", name: "6-hr Precipitation", group: "Precip", units: "mm", cmap: "PRECIPMM", transform: Transform::None, ncep: Match::Ncep(&["APCP:surface"]), ecmwf: None, accum: true },
 ];
@@ -280,6 +323,7 @@ pub fn model_vars(model: &str) -> Vec<&'static VarDef> {
         "ecmwf" => &["apcp", "t2m", "td2m", "wind10", "gust", "mslp", "tcc", "mucape", "pwat", "t850", "hgt500", "wind250"],
         "hafsa" | "hafsb" => &["refc", "apcp", "t2m", "wind10", "gust", "mslp", "pwat"],
         "gefs" => &["apcp6", "t2m", "rh2m", "wind10", "mslp", "pwat", "t850", "hgt500", "wind250"],
+        "gfswave" => &["htsgw", "wvhgt", "swell1", "perpw", "dirpw"],
         "gdps" => &["apcp", "t2m", "td2m", "rh2m", "wind10", "mslp", "t850", "hgt500", "wind250"],
         "hrdps" => &["apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "cape", "t850", "hgt500", "wind250"],
         "iconeu" => &["apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "mlcape", "pwat", "t850", "hgt500", "wind250"],
@@ -681,6 +725,27 @@ pub fn find_ncep_minutes(idx: &[(u64, Option<u64>, Vec<String>)], pattern: &str,
         .map(|c| (c.0, c.1))
 }
 
+/// Radar nowcast layers: extrapolated MRMS frames (product = the MRMS layer they come from).
+pub fn nowcast_layers() -> Vec<LayerDef> {
+    [("mrms_cref", "Radar Nowcast · 60 min (composite)", "mrms/cref"), ("mrms_lowalt", "Radar Nowcast · 60 min (lowest altitude)", "mrms/lowalt")]
+        .iter()
+        .map(|(id, name, src)| LayerDef {
+            id: format!("nowcast/{id}"),
+            group: "Future".into(),
+            name: name.to_string(),
+            units: "dBZ",
+            cmap: "REF",
+            product: src.to_string(),
+            transform: Transform::None,
+            nodata: vec![],
+            min_valid: None,
+            source: "nowcast",
+            model: None,
+            step_min: 10,
+        })
+        .collect()
+}
+
 pub fn all_layers() -> Vec<LayerDef> {
     let mut v = mrms_layers();
     v.extend(goes_layers());
@@ -688,6 +753,7 @@ pub fn all_layers() -> Vec<LayerDef> {
     v.extend(metar_layers());
     v.extend(ndfd_layers());
     v.extend(future_layers());
+    v.extend(nowcast_layers());
     v.extend(super::intl::layers());
     v
 }

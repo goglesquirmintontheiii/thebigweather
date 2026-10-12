@@ -6,6 +6,7 @@ import { Trash2, Check, Plus, Server } from "lucide-preact";
 import { playAlertSound } from "../../sound";
 import { ACCENTS } from "../../theme"; // workflow
 import { ServerSettingsSection } from "../ServerSettings"; // shake/stats/server 0.6
+import { LookSection, KioskSection, OfflineSection, PluginsSection } from "../Wf6Settings"; // workflow 0.6
 
 const KEY_LABELS: Record<string, string> = {
   google_maps: "Google Map Tiles",
@@ -142,6 +143,11 @@ export function SettingsPanel() {
       </section>
       <ServerSettingsSection /> {/* shake/stats/server 0.6 */}
       <AppearanceSection />
+      {/* workflow 0.6 */}
+      <KioskSection />
+      <OfflineSection />
+      <PluginsSection />
+      {/* end workflow 0.6 */}
       <section>
         <label class="lbl">Data use</label>
         <Toggle label="Bandwidth saver" on={!!s.saver} set={(v) => update((x) => (x.saver = v))} />
@@ -238,6 +244,7 @@ function AppearanceSection() {
   return (
     <section>
       <label class="lbl">Appearance</label>
+      <LookSection /> {/* workflow 0.6: theme, radar look, terrain, precip effect */}
       <div class="row accent-row">
         <span>Accent</span>
         <div class="swatches">

@@ -4,17 +4,24 @@
 //! and cached briefly; feeds that need polling (lightning, recon, ships) only run while someone
 //! has the overlay turned on.
 
+pub mod agsquery;
 pub mod arcgis;
 pub mod aviation;
 pub mod cameras;
 pub mod camdb;
+pub mod climate;
+pub mod damage;
 pub mod extra;
 pub mod misc;
 pub mod more;
 pub mod noaa;
 pub mod obs;
+pub mod placefile;
+pub mod pws;
+pub mod roads;
 pub mod ships;
 pub mod sounding;
+pub mod space;
 pub mod traffic;
 pub mod vdm;
 
@@ -58,6 +65,12 @@ pub struct Overlays {
     pub hist: Arc<crate::hist::Hist>,
     /// offline testing: `<id>.json` files served instead of live data
     pub fixtures: parking_lot::RwLock<Option<PathBuf>>,
+    /// proxied placefiles and icon sheets (`/api/placefile`)
+    pub placefiles: placefile::PlaceCache,
+    /// SPC historical tornado database (`tornadohist`)
+    pub tornadoes: damage::TornadoDb,
+    /// CWOP stations from APRS-IS (`pws`)
+    pub pws: pws::Pws,
 }
 
 /// Overlays and how long a fetched copy stays fresh (seconds).
@@ -124,6 +137,14 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("raobsta", 86400),
     ("roadwork", 0),
     ("trafficflow", 0),
+    ("dat", 600),
+    ("tornadohist", 86400),
+    ("nhcwsp", 900),
+    ("roadcond", 300),
+    ("climate", 6 * 3600),
+    ("climaterec", 6 * 3600),
+    ("pws", 30),
+    ("swpc", 120),
 ];
 
 pub fn ttl(id: &str) -> Option<u64> {
@@ -182,6 +203,9 @@ impl Overlays {
             traffic: traffic::Traffic::default(),
             hist: Arc::new(crate::hist::Hist::new(data_dir)),
             fixtures: parking_lot::RwLock::new(None),
+            placefiles: placefile::PlaceCache::default(),
+            tornadoes: damage::TornadoDb::default(),
+            pws: pws::Pws::default(),
         })
     }
 
@@ -385,6 +409,18 @@ impl Overlays {
             "raobsta" => sounding::stations_geojson(self).await,
             "roadwork" => traffic::roadwork(self, p("bbox"), p("kinds")).await,
             "trafficflow" => traffic::trafficflow(self, p("bbox")).await,
+            "dat" => damage::dat(self, p("days"), p("bbox")).await,
+            "tornadohist" => damage::tornado_hist(self, p("bbox"), p("from"), p("to"), p("minmag")).await,
+            "nhcwsp" => damage::nhc_wsp(self, p("kt")).await,
+            "roadcond" => roads::roadcond(self, p("bbox"), p("adverse") == "1").await,
+            "climate" => {
+                let lat: f64 = p("lat").parse().map_err(|_| anyhow!("lat required"))?;
+                let lon: f64 = p("lon").parse().map_err(|_| anyhow!("lon required"))?;
+                climate::climate(self, lat, lon).await
+            }
+            "climaterec" => climate::records(self, p("date"), p("bbox")).await,
+            "pws" => pws::pws(self, p("bbox"), p("minutes")).await,
+            "swpc" => space::swpc(self).await,
             _ => bail!("unknown overlay {id}"),
         }
     }
@@ -443,6 +479,13 @@ fn label(id: &str) -> String {
         "raobsta" => "RAOB stations (IEM)",
         "roadwork" => "Road work & incidents (WZDx / CHP / CHART)",
         "trafficflow" => "Traffic speeds (Digitraffic / CHART / NYC DOT)",
+        "dat" => "NWS Damage Assessment Toolkit",
+        "tornadohist" => "SPC tornado database",
+        "nhcwsp" => "NHC wind speed probabilities",
+        "roadcond" => "Winter road conditions (IA / Midwest / PennDOT)",
+        "climate" | "climaterec" => "Climate data (NOAA RCC ACIS)",
+        "pws" => "Personal weather stations (CWOP / APRS-IS)",
+        "swpc" => "SWPC space weather",
         _ => id,
     };
     n.to_string()

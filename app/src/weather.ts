@@ -12,7 +12,7 @@ export interface GridLayerDef {
   name: string;
   units: string;
   cmap: string;
-  source: "mrms" | "model" | "ndfd" | "metar" | "goes" | "future" | "opera" | "cwa";
+  source: "mrms" | "model" | "ndfd" | "metar" | "goes" | "future" | "opera" | "cwa" | "nowcast" /* data 0.6 */;
   model?: string;
   step_min: number;
 }
@@ -73,6 +73,8 @@ export const GIBS: GibsLayer[] = [
   { id: "aod", sat: "polar", name: "Aerosol Optical Depth (MODIS)", group: "Satellite · Polar & global", layer: "MODIS_Combined_Value_Added_AOD", level: 6, format: "png", step: 1440 },
   { id: "omps-ai", sat: "polar", name: "Aerosol Index (OMPS)", group: "Satellite · Polar & global", layer: "OMPS_Aerosol_Index", level: 6, format: "png", step: 1440 },
   { id: "sst-mur", sat: "polar", name: "Sea Surface Temp (MUR)", group: "Satellite · Polar & global", layer: "GHRSST_L4_MUR_Sea_Surface_Temperature", level: 7, format: "png", step: 1440 },
+  // data 0.6: marine
+  { id: "sst-anom", sat: "polar", name: "SST Anomaly (MUR)", group: "Satellite · Polar & global", layer: "GHRSST_L4_MUR_Sea_Surface_Temperature_Anomalies", level: 7, format: "png", step: 1440 },
 ];
 
 export const gridLayers = signal<GridLayerDef[]>([]);
@@ -115,6 +117,18 @@ export function selectWeather(sel: WeatherSel) {
 export function gridTable(cmap: string) {
   return BUILTIN[cmap] ?? BUILTIN.REF;
 }
+
+/* ---------- data 0.6 ---------- */
+/** catalog layers that are forecasts (models, NDFD, future radar, nowcasts) */
+export function isForecastDef(d: GridLayerDef | undefined): boolean {
+  return !!d && (d.source === "model" || d.source === "ndfd" || d.source === "future" || d.source === "nowcast");
+}
+/** marine / hydrology layers (GFS-Wave, RTOFS, MRMS FLASH, NWM): the picker's "Water" tab */
+export function isWaterDef(d: GridLayerDef): boolean {
+  const g = d.group.toLowerCase();
+  return /flood|flash|hydro|marine|wave|ocean|sea/.test(g) || /^model\/(gfswave|ww3|rtofs|gwes)\//.test(d.id) || d.model === "gfswave";
+}
+/* ---------- end data 0.6 ---------- */
 
 // screenshot / console handle (intl & forecast tools)
 (window as any).__tbwWeather = { gridLayers };

@@ -14,6 +14,7 @@ import { NO_KEY } from "../overlays/traffic";
 import { configModal } from "./OverlayList";
 import { compass } from "../util";
 import { Table2, X } from "lucide-preact";
+import { spaceOpen } from "./SpacePanel"; // data 0.6
 
 export const stormTableOpen = signal(false);
 
@@ -88,6 +89,10 @@ export function LayerExtra({ id }: { id: string }) {
       <section>
         <label class="lbl">Geomagnetic activity</label>
         <KpBox />
+        {/* data 0.6 */}
+        <button class="btn sm" style={{ marginTop: "8px" }} onClick={() => ((spaceOpen.value = true), (configModal.value = null))}>
+          Space weather: sun, solar wind, alerts
+        </button>
       </section>
     );
   if (id === "stormattr")

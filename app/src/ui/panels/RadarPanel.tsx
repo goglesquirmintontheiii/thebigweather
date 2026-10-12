@@ -205,6 +205,7 @@ function DisplayOptions() {
       </div>
       <Slider label="Smoothing" value={r.smooth} min={0} max={1} step={0.05} fmt={smoothLabel} set={(v) => update((s) => (s.radar.smooth = v))} />
       {r.source === "L2" && <Toggle label="RapidSweep (live chunks)" on={r.live} set={(v) => update((s) => (s.radar.live = v))} />}
+      {/* radar 0.6: velocity dealiasing (VEL and SRV) */ r.source === "L2" && r.product === "VEL" && <DealiasToggle />}
     </section>
   );
 }
@@ -308,3 +309,17 @@ function HistoryBox() {
     </section>
   );
 }
+
+/* ---------- radar 0.6 ---------- */
+import { dealiasState } from "../../radar/dealias";
+function DealiasToggle() {
+  const st = dealiasState.value;
+  const on = !!settings.value.radar6?.dealias;
+  return (
+    <>
+      <Toggle label="Dealias" hint="Unfold aliased velocities for display (also storm-relative velocity). Uses the scan's Nyquist velocity." on={on} set={(v) => update((s) => (s.radar6 = { ...s.radar6, dealias: v }))} />
+      {on && <div class="row muted small r6-dealias-note">{st.busy ? "Dealiasing…" : st.error ? `Dealias failed: ${st.error}` : st.last ? `Nyquist ${st.last.vn.toFixed(1)} m/s · ${st.last.ms} ms` : ""}</div>}
+    </>
+  );
+}
+/* ---------- end radar 0.6 ---------- */

@@ -4,16 +4,17 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { settings, update, openPanel, type PaneCfg } from "../store";
 import { mountPane, paneConfigured, paneStatus, resizePanes } from "../map/panes";
 import { L2_MOMENTS, l3Products, sites, productName } from "../radar/controller";
-import { gridLayers, selectWeather, activeLabel } from "../weather";
+import { gridLayers, selectWeather, activeLabel, GIBS } from "../weather";
+import { SwipeDivider } from "./CompareSwipe"; // data 0.6
 import { noLevel3 } from "../intl/sites";
 import { fmtTime } from "../util";
-import { LayoutGrid, Columns2, Rows2, Square, Grid2x2, Link2, Link2Off, AppWindow, MonitorSmartphone } from "lucide-preact";
+import { LayoutGrid, Columns2, Rows2, Square, Grid2x2, Link2, Link2Off, AppWindow, MonitorSmartphone, SquareSplitHorizontal } from "lucide-preact";
 import { popout, canPopout } from "../popout";
 import { mapRef } from "../map/mapview";
 import { linkOn, linkLayers, peers, isSecondWindow, setLink } from "../linkwin";
 
 /** Product dropdown options: Level II moments, Level III families (for the site's radar type), gridded layers. */
-function ProductOptions({ site, current, value, label }: { site: string; current?: string; value: string; label?: string }) {
+function ProductOptions({ site, current, value, label, sat }: { site: string; current?: string; value: string; label?: string; /* data 0.6 */ sat?: boolean }) {
   const st = sites.value.find((x) => x.id === site);
   const tdwr = st?.type === "TDWR";
   const l3 = noLevel3(st) ? [] : l3Products.value.filter((p) => !!p.tdwr === tdwr);
@@ -28,7 +29,8 @@ function ProductOptions({ site, current, value, label }: { site: string; current
   const known =
     (value.startsWith("r:L2:") && L2_MOMENTS.some((m) => `r:L2:${m.id}` === value)) ||
     (value.startsWith("r:L3:") && l3.some((p) => `r:L3:${p.id}` === value)) ||
-    (value.startsWith("g:") && gridLayers.value.some((l) => `g:${l.id}` === value));
+    (value.startsWith("g:") && gridLayers.value.some((l) => `g:${l.id}` === value)) ||
+    (!!sat && value.startsWith("s:") && GIBS.some((g) => `s:${g.id}` === value)); // data 0.6
   return (
     <>
       {!known && <option value={value}>{label ?? value.replace(/^\w:(L[23]:)?/, "")}</option>}
@@ -64,6 +66,16 @@ function ProductOptions({ site, current, value, label }: { site: string; current
             ))}
         </optgroup>
       ))}
+      {sat /* data 0.6: imagery in panes */ &&
+        [...new Set(GIBS.map((g) => g.group))].map((g) => (
+          <optgroup key={g} label={`${g} (imagery)`}>
+            {GIBS.filter((x) => x.group === g).map((x) => (
+              <option key={x.id} value={`s:${x.id}`}>
+                {x.name}
+              </option>
+            ))}
+          </optgroup>
+        ))}
     </>
   );
 }
@@ -161,7 +173,7 @@ export function MainPaneHead() {
   );
 }
 
-export const PANE_COUNT: Record<string, number> = { "1": 0, "2": 1, "2v": 1, "3": 2, "4": 3 };
+export const PANE_COUNT: Record<string, number> = { "1": 0, "2": 1, "2v": 1, "3": 2, "4": 3, swipe: 1 /* data 0.6 */ };
 
 function defaultCfg(i: number): PaneCfg {
   const second = ["VEL", "ZDR", "RHO"][i - 1] ?? "VEL";
@@ -173,10 +185,10 @@ function PaneBox({ idx }: { idx: number }) {
   useEffect(() => mountPane(idx, ref.current!), [idx]);
   const cfg = settings.value.panes.list[idx - 1] ?? defaultCfg(idx);
   const st = paneStatus.value[idx] ?? {};
-  const value = cfg.weather.kind === "grid" ? `g:${cfg.weather.id}` : `r:${cfg.source ?? "L2"}:${cfg.product ?? "REF"}`;
+  const value = cfg.weather.kind === "grid" ? `g:${cfg.weather.id}` : cfg.weather.kind === "gibs" ? `s:${cfg.weather.id}` /* data 0.6 */ : `r:${cfg.source ?? "L2"}:${cfg.product ?? "REF"}`;
   const set = (v: string) => {
     const [, src, prod] = v.split(":");
-    const next: PaneCfg = v.startsWith("g:") ? { weather: { kind: "grid", id: v.slice(2) } } : { weather: { kind: "radar" }, source: src as "L2" | "L3", product: prod, tilt: settings.value.radar.tiltAngle, site: cfg.site };
+    const next: PaneCfg = v.startsWith("g:") ? { weather: { kind: "grid", id: v.slice(2) } } : v.startsWith("s:") /* data 0.6 */ ? { weather: { kind: "gibs", id: v.slice(2) } } : { weather: { kind: "radar" }, source: src as "L2" | "L3", product: prod, tilt: settings.value.radar.tiltAngle, site: cfg.site };
     update((s) => {
       while (s.panes.list.length < idx) s.panes.list.push(defaultCfg(s.panes.list.length + 1));
       s.panes.list[idx - 1] = next;
@@ -188,7 +200,7 @@ function PaneBox({ idx }: { idx: number }) {
       <div ref={ref} class="pane-map" />
       <div class="pane-head glass">
         <select value={value} onChange={(e) => set((e.target as HTMLSelectElement).value)} title="Product for this pane">
-          <ProductOptions site={cfg.site ?? settings.value.radar.site} current={cfg.product} value={value} />
+          <ProductOptions site={cfg.site ?? settings.value.radar.site} current={cfg.product} value={value} sat />
         </select>
         <span class="pane-time" title={st.error ?? ""}>{st.loading ? "Loading…" : st.error ? st.error : st.time ? fmtTime(st.time, true) : ""}</span>
       </div>
@@ -218,6 +230,7 @@ export function PaneGrid({ mapEl }: { mapEl: any }) {
       {Array.from({ length: n }, (_, i) => (
         <PaneBox key={`${layout}-${i + 1}`} idx={i + 1} />
       ))}
+      {layout === "swipe" && <SwipeDivider /> /* data 0.6 */}
     </div>
   );
 }
@@ -228,8 +241,9 @@ const LAYOUTS: [PaneCfgLayout, any, string][] = [
   ["2v", Rows2, "Two stacked"],
   ["3", LayoutGrid, "Three"],
   ["4", Grid2x2, "Four"],
+  ["swipe", SquareSplitHorizontal, "Swipe compare: drag the divider to compare two layers"], // data 0.6
 ];
-type PaneCfgLayout = "1" | "2" | "2v" | "3" | "4";
+type PaneCfgLayout = "1" | "2" | "2v" | "3" | "4" | "swipe";
 
 export function PaneButton() {
   const [open, setOpen] = useState(false);

@@ -60,6 +60,23 @@ impl Overlays {
     pub fn clear_cache(&self) {
         self.cache.lock().clear();
     }
+    /// Phase 6 caches: placefiles, SPC tornado table, CWOP stations.
+    pub fn extra_cache_stats(&self) -> Vec<crate::caches::CacheInfo> {
+        use crate::caches::CacheInfo;
+        let (tb, tn) = self.tornadoes.mem_bytes();
+        let (pb, pn) = self.pws.mem_bytes();
+        vec![self.placefiles.stats(), CacheInfo::mem("tornado-db", "SPC tornado database", tb, tn, 0), CacheInfo::mem("pws-stations", "CWOP weather stations", pb, pn, 0)]
+    }
+    /// Clear one of the caches above (true if the id is one of them).
+    pub fn clear_extra(&self, id: &str) -> bool {
+        match id {
+            "placefiles" => self.placefiles.clear(),
+            "tornado-db" => self.tornadoes.clear(),
+            "pws-stations" => self.pws.stations.write().clear(),
+            _ => return false,
+        }
+        true
+    }
 }
 
 // ---------- NDBC ----------

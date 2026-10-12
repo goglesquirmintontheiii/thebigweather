@@ -253,6 +253,15 @@ Object.assign(BUILTIN, {
   WV: T("WV", "Water Vapor", "K", 180, 280, [S(180, "#ffffff"), S(200, "#b02be3"), S(210, "#2b5fd6"), S(220, "#3fa0f0"), S(228, "#e6e6e6"), S(238, "#7f7f7f"), S(248, "#f2e30c"), S(258, "#e8650a"), S(268, "#6b2a0b"), S(280, "#000000")]),
   SWIR: T("SWIR", "Shortwave IR", "K", 200, 350, [S(200, "#ffffff"), S(240, "#a0a0a0"), S(280, "#404040"), S(300, "#101010"), S(310, "#f2e30c"), S(325, "#e41b14"), S(350, "#ffffff")]),
   VISGRAY: T("VISGRAY", "Reflectance", "", 0, 1.1, [S(0, "#000000"), S(0.15, "#3a3a3a"), S(0.4, "#9a9a9a"), S(0.8, "#e6e6e6"), S(1.1, "#ffffff")]),
+  /* ---------- data 0.6: flooding & marine ---------- */
+  FLASH: T("FLASH", "Unit Streamflow", "m³/s/km²", 0, 20, [S(0, "#000000", 0), S(0.2, "#3b4d5c", 90), S(0.5, "#2f6fa8", 160), S(1, "#2fb6d9"), S(2, "#16c45a"), S(3, "#f2e30c"), S(5, "#f2a105"), S(7, "#e41b14"), S(10, "#ff2ab4"), S(15, "#b02be3"), S(20, "#ffffff")]),
+  FLASHRP: T("FLASHRP", "Return Period", "yr", 0, 100, [S(0, "#000000", 0), S(1, "#2f6fa8", 140), S(2, "#16c45a"), S(5, "#f2e30c"), S(10, "#f2a105"), S(25, "#e41b14"), S(50, "#ff2ab4"), S(100, "#ffffff")]),
+  WAVE: T("WAVE", "Wave Height", "m", 0, 15, [S(0, "#0b1d3a", 120), S(0.5, "#123a6b"), S(1, "#1f5fd6"), S(1.5, "#3fa0f0"), S(2, "#3fbf8a"), S(3, "#9ccf2b"), S(4, "#f2e30c"), S(5, "#f2a105"), S(6, "#e8650a"), S(8, "#d6150f"), S(10, "#b02be3"), S(15, "#ffffff")]),
+  WAVEPER: T("WAVEPER", "Wave Period", "s", 0, 25, [S(0, "#0b1d3a", 120), S(4, "#1f5fd6"), S(7, "#3fa0f0"), S(10, "#3fbf8a"), S(13, "#f2e30c"), S(16, "#f2a105"), S(19, "#d6150f"), S(25, "#ff2ab4")]),
+  WAVEDIR: T("WAVEDIR", "Wave Direction", "°", 0, 360, [S(0, "#d6150f"), S(90, "#f2e30c"), S(180, "#16c45a"), S(270, "#2b5fd6"), S(360, "#d6150f")]),
+  SSTA: T("SSTA", "SST Anomaly", "°C", -5, 5, [S(-5, "#2a0b6b"), S(-3, "#2b5fd6"), S(-1.5, "#3fa0f0"), S(-0.5, "#cfe8f5"), S(0, "#f2f2f2"), S(0.5, "#f5e3c0"), S(1.5, "#f2a105"), S(3, "#d6150f"), S(5, "#6b0b2a")]),
+  STREAMFLOW: T("STREAMFLOW", "Streamflow", "m³/s", 0, 5000, [S(0, "#000000", 0), S(10, "#2f6fa8", 140), S(100, "#2fb6d9"), S(500, "#16c45a"), S(1000, "#f2e30c"), S(2000, "#f2a105"), S(3500, "#e41b14"), S(5000, "#ff2ab4")]),
+  /* ---------- end data 0.6 ---------- */
 });
 
 /** Colorblind-friendly alternatives (blue/orange diverging, cividis-like sequential). */

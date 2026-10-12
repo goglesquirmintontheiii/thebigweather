@@ -36,6 +36,12 @@ import { ServerSettings } from "./ServerSettings"; // shake/stats/server 0.6
 import "../shake";
 // layers 0.5: more overlays, rotation scan bar, storm table
 import "../overlays/moredefs";
+// radar 0.6: Level II analysis layers, placefiles, inspector
+import "../radar/r6defs";
+import "../radar/placefiles";
+import { isPlacefileFile, addPlacefileFile } from "../radar/placefiles";
+import { Inspector } from "./Inspector";
+import { PlacefileHover } from "./PlacefilePanel";
 import { ScanBar } from "./ScanBar";
 import { StormTable } from "./LayerExtras";
 // intl & forecast tools
@@ -49,6 +55,19 @@ import "../overlays/cambadges";
 import { XSection } from "./XSection";
 import { MetarPanels } from "./MetarPanels";
 import { TrackPanel } from "./TrackPanel";
+/* data 0.6 */
+import "../overlays/p6defs";
+import "../grid/contours";
+import { LinesControl } from "./LinesControl";
+import { SpacePanel } from "./SpacePanel";
+/* end data 0.6 */
+/* workflow 0.6 */
+import { Wf6Overlays } from "./Wf6Overlays";
+import { startRules } from "../rules/engine";
+import { startWidgets } from "../widgets/manager";
+import { startPlugins } from "../plugins/host";
+import { kioskFromArgs, kiosk } from "../kiosk";
+/* end workflow 0.6 */
 
 export function App() {
   const mapEl = useRef<HTMLDivElement>(null);
@@ -57,25 +76,32 @@ export function App() {
     startAlerts();
     loadFiles();
     (window as any).__tbwImport = importFile;
+    /* workflow 0.6 */
+    startRules();
+    startWidgets();
+    startPlugins();
+    kioskFromArgs();
   }, []);
   useHotkeys();
   const noServer = settings.value.servers.length === 0;
 
   return (
     <div
-      class="app"
+      class={`app${kiosk.value ? " kiosk" : ""}` /* workflow 0.6 */}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault();
         for (const f of [...(e.dataTransfer?.files ?? [])]) {
           if (isMapFile(f)) importFile(f);
-          else openLocalFile(f);
+          else isPlacefileFile(f).then((pf) => (pf ? addPlacefileFile(f) : openLocalFile(f))); // radar 0.6: placefiles
         }
       }}
     >
       <PaneGrid mapEl={mapEl} />
       <Crosshair />
       <CursorValue />
+      <Inspector /> {/* radar 0.6 */}
+      <PlacefileHover /> {/* radar 0.6 */}
       <TopBar />
       <ScanBar /> {/* layers 0.5 */}
       <StormTable /> {/* layers 0.5 */}
@@ -83,6 +109,7 @@ export function App() {
       <Rail />
       <SidePanel />
       <Legend />
+      <LinesControl /> {/* data 0.6 */}
       <IntlLegend /> {/* intl & forecast tools */}
       <View3D /> {/* 3D */}
       <div class="bottom-dock">
@@ -98,8 +125,10 @@ export function App() {
       <XSection /> {/* workflow */}
       <MetarPanels /> {/* workflow */}
       <TrackPanel /> {/* workflow */}
+      <Wf6Overlays /> {/* workflow 0.6 */}
       <ConfigModal />
       <ForecastCenter />
+      <SpacePanel /> {/* data 0.6 */}
       <SoundingCenter /> {/* intl & forecast tools */}
       <RadioCenter />
       <HistStorms /> {/* history 0.6 */}

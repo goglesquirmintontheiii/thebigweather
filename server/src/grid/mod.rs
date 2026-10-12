@@ -5,11 +5,13 @@
 //! Web Mercator raster of the requested size, so any projection renders the same way and
 //! the app can still read exact values and apply color tables on the GPU.
 
+pub mod contour;
 pub mod decode;
 pub mod goes;
 pub mod intl;
 pub mod rgb;
 pub mod metar;
+pub mod nowcast;
 pub mod service;
 pub mod sources;
 
@@ -110,6 +112,19 @@ fn wrap180(mut d: f64) -> f64 {
 }
 
 impl Proj {
+    /// The projection of every `stride`-th cell (cell 0 unchanged); `nx` = new row length.
+    pub fn strided(&self, stride: usize, nx: usize) -> Proj {
+        let k = stride as f64;
+        match *self {
+            Proj::LatLon { lat0, lon0, dlat, dlon, global, .. } => Proj::LatLon { lat0, lon0, dlat: dlat * k, dlon: dlon * k, nx, global },
+            Proj::Lambert { n, f, r, lov, x0, y0, dx, dy } => Proj::Lambert { n, f, r, lov, x0, y0, dx: dx * k, dy: dy * k },
+            Proj::PolarStereo { r, lov, lad, south, x0, y0, dx, dy } => Proj::PolarStereo { r, lov, lad, south, x0, y0, dx: dx * k, dy: dy * k },
+            Proj::Geos { h, r_eq, r_pol, lon0, x0, dx, y0, dy } => Proj::Geos { h, r_eq, r_pol, lon0, x0, dx: dx * k, y0, dy: dy * k },
+            Proj::Laea(l) => Proj::Laea(Laea { dx: l.dx * k, dy: l.dy * k, ..l }),
+            Proj::RotLatLon { lat0, lon0, dlat, dlon, sp_lat, sp_lon } => Proj::RotLatLon { lat0, lon0, dlat: dlat * k, dlon: dlon * k, sp_lat, sp_lon },
+        }
+    }
+
     pub fn lambert(lat1: f64, lon1: f64, latin1: f64, latin2: f64, lov: f64, dx: f64, dy: f64, r: f64) -> Proj {
         let r1 = latin1.to_radians();
         let r2 = latin2.to_radians();
@@ -354,14 +369,7 @@ impl Grid {
                 *o = self.data[(j * stride) * self.nx + i * stride];
             }
         });
-        let proj = match self.proj {
-            Proj::LatLon { lat0, lon0, dlat, dlon, global, .. } => Proj::LatLon { lat0, lon0, dlat: dlat * stride as f64, dlon: dlon * stride as f64, nx, global },
-            Proj::Lambert { n, f, r, lov, x0, y0, dx, dy } => Proj::Lambert { n, f, r, lov, x0, y0, dx: dx * stride as f64, dy: dy * stride as f64 },
-            Proj::PolarStereo { r, lov, lad, south, x0, y0, dx, dy } => Proj::PolarStereo { r, lov, lad, south, x0, y0, dx: dx * stride as f64, dy: dy * stride as f64 },
-            Proj::Geos { h, r_eq, r_pol, lon0, x0, dx, y0, dy } => Proj::Geos { h, r_eq, r_pol, lon0, x0, dx: dx * stride as f64, y0, dy: dy * stride as f64 },
-            Proj::Laea(l) => Proj::Laea(Laea { dx: l.dx * stride as f64, dy: l.dy * stride as f64, ..l }),
-            Proj::RotLatLon { lat0, lon0, dlat, dlon, sp_lat, sp_lon } => Proj::RotLatLon { lat0, lon0, dlat: dlat * stride as f64, dlon: dlon * stride as f64, sp_lat, sp_lon },
-        };
+        let proj = self.proj.strided(stride, nx);
         Grid { nx, ny, proj, data, ..self }
     }
 }

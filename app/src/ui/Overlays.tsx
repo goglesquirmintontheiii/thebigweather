@@ -8,6 +8,7 @@ import { toast, update, uid } from "../store";
 import { camType } from "../overlays/mycams";
 import { signal } from "@preact/signals";
 import { useState } from "preact/hooks";
+import { openForecastAt } from "./ForecastCenter"; // data 0.6
 
 /** "Add camera" dialog: at a map position, or linked to a ship (cruise bridge cams). */
 export const camDialog = signal<{ lat?: number; lon?: number; ship?: string } | null>(null);
@@ -101,6 +102,23 @@ export function ContextMenu() {
         }}
       >
         Sounding here
+      </button>
+      {/* data 0.6 */}
+      <button
+        onClick={() => {
+          openForecastAt(m.lat, m.lon, "models");
+          close();
+        }}
+      >
+        Compare models here
+      </button>
+      <button
+        onClick={() => {
+          openForecastAt(m.lat, m.lon, "climate");
+          close();
+        }}
+      >
+        Climate here
       </button>
       <button
         onClick={() => {

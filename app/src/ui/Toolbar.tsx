@@ -18,6 +18,13 @@ import { SrvControl } from "./SrvControl";
 import { WorkspaceMenu } from "./panels/WorkspacePanel";
 import { startXSection, xsLine } from "./XSection";
 import { trackPanel, recording } from "../gps";
+import { ScanSearch, Zap } from "lucide-preact"; // radar 0.6
+import { LightningChip, toggleInspector } from "./Inspector"; // radar 0.6
+/* workflow 0.6 */
+import { Megaphone, Tv, Navigation, ListChecks, AppWindow } from "lucide-preact";
+import { runBriefing, briefing } from "../briefing";
+import { enterKiosk } from "../kiosk";
+/* end workflow 0.6 */
 
 let locMarker: maplibregl.Marker | null = null;
 
@@ -123,6 +130,15 @@ export function Toolbar() {
             {item(loopDialog.value || !!loopProgress.value, "Export loop (GIF / MP4)", "", () => (loopDialog.value = !loopDialog.value), <Film size={16} />, frameCount.value < 1 || !!loopProgress.value)}
             {item(trackPanel.value, recording.value ? "GPS track · recording" : "GPS track & chasers", "", () => (trackPanel.value = !trackPanel.value), <Route size={16} />)}
             {item(wsOpen, "Workspaces", "", () => setWsOpen(!wsOpen), <Bookmark size={16} />)}
+            {/* radar 0.6 */ item(!!settings.value.radar6?.inspector, "Inspector (all moments)", "I", toggleInspector, <ScanSearch size={16} />)}
+            {/* radar 0.6 */ item(!!settings.value.radar6?.ltgWatch, "Lightning near my points", "", () => update((s) => (s.radar6 = { ...s.radar6, ltgWatch: !s.radar6?.ltgWatch })), <Zap size={16} />)}
+            {/* workflow 0.6 */}
+            {item(!!briefing.value, "Briefing (spoken summary)", "", () => runBriefing(), <Megaphone size={16} />)}
+            {item(openPanel.value === "route", "Route weather", "", () => (openPanel.value = openPanel.value === "route" ? null : "route"), <Navigation size={16} />)}
+            {item(openPanel.value === "rules", "Notification rules", "", () => (openPanel.value = openPanel.value === "rules" ? null : "rules"), <ListChecks size={16} />)}
+            {item(openPanel.value === "widgets", "Desktop widgets", "", () => (openPanel.value = openPanel.value === "widgets" ? null : "widgets"), <AppWindow size={16} />)}
+            {item(false, "Wall / kiosk mode", "", enterKiosk, <Tv size={16} />)}
+            {/* end workflow 0.6 */}
           </div>
         </>
       )}
@@ -144,6 +160,7 @@ export function Toolbar() {
             {recording.value && <i class="tb-dot rec" />}
           </span>,
         )}
+        <LightningChip /> {/* radar 0.6 */}
         {settings.value.saver && btn(true, "Bandwidth saver on · click to turn off", () => update((s) => (s.saver = false)), <Leaf size={19} />)}
       </div>
     </div>
