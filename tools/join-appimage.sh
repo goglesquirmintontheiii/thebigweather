@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Rebuilds TheBigWeather AppImage from its zipped parts and checks it.
-# Usage: put this next to the 5 part zips (and SHA256.txt), then: bash join-appimage.sh
+# Usage: put this next to the part zips (and SHA256.txt), then: bash join-appimage.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 first=$(ls -1 TheBigWeather-*-x86_64.AppImage.part0.zip 2>/dev/null | sort -V | tail -1)
