@@ -4,6 +4,7 @@
 //! and cached briefly; feeds that need polling (lightning, recon, ships) only run while someone
 //! has the overlay turned on.
 
+pub mod arcgis;
 pub mod aviation;
 pub mod cameras;
 pub mod camdb;
@@ -13,6 +14,8 @@ pub mod more;
 pub mod noaa;
 pub mod obs;
 pub mod ships;
+pub mod sounding;
+pub mod vdm;
 
 use crate::grid::service::GridService;
 use crate::health::Health;
@@ -46,6 +49,8 @@ pub struct Overlays {
     pub shake: crate::shake::Shake,
     /// proxied traffic tiles/incidents
     pub tiles: more::TileCache,
+    /// proxied ArcGIS raster tiles / legends (NOHRSC, HeatRisk)
+    pub arcgis: more::TileCache,
     /// offline testing: `<id>.json` files served instead of live data
     pub fixtures: parking_lot::RwLock<Option<PathBuf>>,
 }
@@ -110,6 +115,8 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("kp", 600),
     ("atcf", 1800),
     ("shake", 86400),
+    ("vdm", 120),
+    ("raobsta", 86400),
 ];
 
 pub fn ttl(id: &str) -> Option<u64> {
@@ -164,6 +171,7 @@ impl Overlays {
             full,
             shake: crate::shake::Shake::default(),
             tiles: more::TileCache::default(),
+            arcgis: more::TileCache::default(),
             fixtures: parking_lot::RwLock::new(None),
         })
     }
@@ -364,6 +372,8 @@ impl Overlays {
             "kp" => more::kp(self).await,
             "atcf" => more::atcf(self, p("storm")).await,
             "shake" => more::shake_stations(self).await,
+            "vdm" => vdm::vdm(self).await,
+            "raobsta" => sounding::stations_geojson(self).await,
             _ => bail!("unknown overlay {id}"),
         }
     }
@@ -418,6 +428,8 @@ fn label(id: &str) -> String {
         "kp" => "SWPC Kp index",
         "atcf" => "NHC model tracks (ATCF)",
         "shake" => "Raspberry Shake",
+        "vdm" => "Recon center fixes (NHC VDMs)",
+        "raobsta" => "RAOB stations (IEM)",
         _ => id,
     };
     n.to_string()

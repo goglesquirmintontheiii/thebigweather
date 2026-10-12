@@ -30,6 +30,20 @@ pub enum Proj {
     Geos { h: f64, r_eq: f64, r_pol: f64, lon0: f64, x0: f64, dx: f64, y0: f64, dy: f64 },
     /// Lambert azimuthal equal-area (ellipsoidal, Snyder): x = x0 + i*dx, y = y0 + j*dy (m)
     Laea(Laea),
+    /// Rotated lat/lon (GRIB template 3.1): rotated lat = lat0 + j*dlat, lon = lon0 + i*dlon,
+    /// with the rotated south pole at (sp_lat, sp_lon)
+    RotLatLon { lat0: f64, lon0: f64, dlat: f64, dlon: f64, sp_lat: f64, sp_lon: f64 },
+}
+
+/// Geographic → rotated lat/lon (degrees) for a grid whose south pole sits at (sp_lat, sp_lon).
+/// The rotated origin (0, 0) is the geographic point (sp_lat + 90, sp_lon).
+pub fn to_rotated(lat: f64, lon: f64, sp_lat: f64, sp_lon: f64) -> (f64, f64) {
+    let (p, l) = (lat.to_radians(), (lon - sp_lon).to_radians());
+    let (x, y, z) = (p.cos() * l.cos(), p.cos() * l.sin(), p.sin());
+    let th = (90.0 + sp_lat).to_radians();
+    let x2 = th.cos() * x + th.sin() * z;
+    let z2 = -th.sin() * x + th.cos() * z;
+    (z2.clamp(-1.0, 1.0).asin().to_degrees(), y.atan2(x2).to_degrees())
 }
 
 /// Ellipsoidal LAEA parameters (oblique aspect) plus the grid placement.
@@ -147,6 +161,37 @@ impl Proj {
         }
     }
 
+    /// Angle (radians) between true north and the grid's +y axis at a point: winds given
+    /// relative to the grid rotate to earth-relative with
+    /// u = cos a * ug + sin a * vg, v = -sin a * ug + cos a * vg. 0 for regular lat/lon.
+    pub fn north_angle(&self, lat: f64, lon: f64) -> f64 {
+        let xy = |la: f64| -> Option<(f64, f64)> {
+            match *self {
+                Proj::Lambert { .. } => Some(self.lambert_xy(la, lon)),
+                Proj::PolarStereo { .. } => Some(self.polar_xy(la, lon)),
+                Proj::RotLatLon { sp_lat, sp_lon, .. } => {
+                    let (rl, ro) = to_rotated(la, lon, sp_lat, sp_lon);
+                    Some((ro * rl.to_radians().cos(), rl))
+                }
+                _ => None,
+            }
+        };
+        let (Some(a), Some(b)) = (xy(lat - 0.005), xy(lat + 0.005)) else { return 0.0 };
+        let (mut dx, dy) = (b.0 - a.0, b.1 - a.1);
+        if let Proj::RotLatLon { .. } = self {
+            // longitudes wrap at ±180 in rotated coordinates
+            if dx > 180.0 {
+                dx -= 360.0;
+            } else if dx < -180.0 {
+                dx += 360.0;
+            }
+        }
+        if dx == 0.0 && dy == 0.0 {
+            return 0.0;
+        }
+        (-dx).atan2(dy)
+    }
+
     /// Fractional grid index of a lat/lon, or None outside the projection's domain.
     #[inline]
     pub fn ij(&self, lat: f64, lon: f64) -> Option<(f64, f64)> {
@@ -170,6 +215,10 @@ impl Proj {
             Proj::PolarStereo { x0, y0, dx, dy, .. } => {
                 let (x, y) = self.polar_xy(lat, lon);
                 Some(((x - x0) / dx, (y - y0) / dy))
+            }
+            Proj::RotLatLon { lat0, lon0, dlat, dlon, sp_lat, sp_lon } => {
+                let (rl, ro) = to_rotated(lat, lon, sp_lat, sp_lon);
+                Some((wrap180(ro - lon0) / dlon, (rl - lat0) / dlat))
             }
             Proj::Laea(ref l) => {
                 let (x, y) = l.xy(lat, lon);
@@ -210,6 +259,8 @@ pub struct Grid {
     pub offset: f32,
     pub valid_ms: i64,
     pub ref_ms: i64,
+    /// vector components are relative to the grid axes (GRIB resolution/component flag 0x08)
+    pub grid_rel: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -241,7 +292,7 @@ impl Grid {
             .par_iter()
             .map(|&v| if v.is_finite() { 1 + ((v - lo) / scale).round().clamp(0.0, 65533.0) as u16 } else { 0 })
             .collect();
-        Grid { nx, ny, proj, data, scale, offset: lo, valid_ms, ref_ms }
+        Grid { nx, ny, proj, data, scale, offset: lo, valid_ms, ref_ms, grid_rel: false }
     }
 
     #[inline]
@@ -309,6 +360,7 @@ impl Grid {
             Proj::PolarStereo { r, lov, lad, south, x0, y0, dx, dy } => Proj::PolarStereo { r, lov, lad, south, x0, y0, dx: dx * stride as f64, dy: dy * stride as f64 },
             Proj::Geos { h, r_eq, r_pol, lon0, x0, dx, y0, dy } => Proj::Geos { h, r_eq, r_pol, lon0, x0, dx: dx * stride as f64, y0, dy: dy * stride as f64 },
             Proj::Laea(l) => Proj::Laea(Laea { dx: l.dx * stride as f64, dy: l.dy * stride as f64, ..l }),
+            Proj::RotLatLon { lat0, lon0, dlat, dlon, sp_lat, sp_lon } => Proj::RotLatLon { lat0, lon0, dlat: dlat * stride as f64, dlon: dlon * stride as f64, sp_lat, sp_lon },
         };
         Grid { nx, ny, proj, data, ..self }
     }
@@ -420,6 +472,31 @@ mod tests {
         // last point from pygrib: (50.1024611, -60.88202274) at i=2144, j=1376
         let (i, j) = p.ij(50.1024611, -60.88202274).unwrap();
         assert!((i - 2144.0).abs() < 0.05 && (j - 1376.0).abs() < 0.05, "{i} {j}");
+    }
+
+    #[test]
+    fn rotated_hrdps_corner() {
+        // HRDPS continental: first point rotated (-12.302501, 345.17878), south pole
+        // (-36.08852, 245.305142); MSC documents the first point as about 39N 134W
+        let p = Proj::RotLatLon { lat0: -12.302501, lon0: 345.17878 - 360.0, dlat: 0.0225, dlon: 0.0225, sp_lat: -36.08852, sp_lon: 245.305142 - 360.0 };
+        let (i, j) = p.ij(39.0, -134.0).unwrap();
+        assert!(i.abs() < 40.0 && j.abs() < 40.0, "{i} {j}");
+        // rotated origin is (sp_lat + 90, sp_lon)
+        let (a, b) = to_rotated(90.0 - 36.08852, 245.305142, -36.08852, 245.305142);
+        assert!(a.abs() < 1e-6 && b.abs() < 1e-6);
+        // wind rotation angle is small near the centre meridian and grows away from it
+        assert!(p.north_angle(53.9, -114.7).abs() < 0.01);
+        assert!(p.north_angle(45.0, -70.0).abs() > 0.3);
+    }
+
+    #[test]
+    fn lambert_north_angle() {
+        let p = Proj::lambert(21.138, -122.72, 38.5, 38.5, -97.5, 3000.0, 3000.0, 6_371_229.0);
+        let n = 38.5f64.to_radians().sin();
+        for lon in [-120.0, -97.5, -75.0] {
+            let a = p.north_angle(40.0, lon);
+            assert!((a - n * (lon + 97.5f64).to_radians()).abs() < 1e-3, "{lon}: {a}");
+        }
     }
 
     #[test]

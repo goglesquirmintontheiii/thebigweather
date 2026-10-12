@@ -129,7 +129,24 @@ pub const MODELS: &[ModelDef] = &[
     // Forecast "hours" in keys for this model are minutes.
     ModelDef { id: "hrrrsub", name: "HRRR", group: "Hidden", bucket: "noaa-hrrr-bdp-pds", file: "hrrr.{ymd}/conus/hrrr.t{hh}z.wrfsubhf{fh2}.grib2", run_prefix: "hrrr.{ymd}/conus/hrrr.t{hh}z.wrfsubhf", cycles: &[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23], index: "ncep", resolution: "3 km" },
     ModelDef { id: "hafsb", name: "HAFS-B", group: "Tropical", bucket: "noaa-nws-hafs-pds", file: "hfsb/{ymd}/{hh}/{storm}.{ymd}{hh}.hfsb.parent.atm.f{fh3}.grb2", run_prefix: "hfsb/{ymd}/{hh}/", cycles: &[0, 6, 12, 18], index: "ncep", resolution: "6 km" },
+    // GEFS ensemble mean (0.5°, 3-hourly to 240 h then 6-hourly)
+    ModelDef { id: "gefs", name: "GEFS Mean", group: "Global", bucket: "noaa-gefs-pds", file: "gefs.{ymd}/{hh}/atmos/pgrb2ap5/geavg.t{hh}z.pgrb2a.0p50.f{fh3}", run_prefix: "gefs.{ymd}/{hh}/atmos/pgrb2ap5/geavg.t{hh}z.pgrb2a.0p50.f", cycles: &[0, 6, 12, 18], index: "ncep", resolution: "0.5°" },
+    // MSC Datamart: one GRIB2 file per field in a directory per forecast hour; fields are
+    // found by name in that directory's listing ("bucket" is the HTTP base).
+    ModelDef { id: "gdps", name: "CMC GDPS", group: "Global", bucket: "https://dd.weather.gc.ca", file: "", run_prefix: "{ymd}/WXO-DD/model_gdps/15km/{hh}/", cycles: &[0, 12], index: "msc", resolution: "15 km" },
+    ModelDef { id: "hrdps", name: "CMC HRDPS", group: "Convection-allowing", bucket: "https://dd.weather.gc.ca", file: "", run_prefix: "{ymd}/WXO-DD/model_hrdps/continental/2.5km/{hh}/", cycles: &[0, 6, 12, 18], index: "msc", resolution: "2.5 km" },
+    // DWD open data ICON-EU on its regular lat/lon grid (ICON global is icosahedral only).
+    // Each cycle directory holds only that cycle's latest run; files are .bz2.
+    ModelDef { id: "iconeu", name: "ICON-EU", group: "Regional", bucket: "https://opendata.dwd.de/weather/nwp/icon-eu/grib", file: "{hh}/{dir}/icon-eu_europe_regular-lat-lon_{kind}_{ymd}{hh}_{fh3}_{name}.grib2.bz2", run_prefix: "{hh}/t_2m/", cycles: &[0, 3, 6, 9, 12, 15, 18, 21], index: "dwd", resolution: "0.0625°" },
 ];
+
+/// Frame spacing hint (minutes) for a model's layers.
+pub fn model_step_min(id: &str) -> u32 {
+    match id {
+        "gefs" => 180,
+        _ => 60,
+    }
+}
 
 /// How to find a variable in a model's index.
 #[derive(Debug, Clone)]
@@ -141,6 +158,12 @@ pub enum Match {
     /// ECMWF: param, levtype, levelist
     Ec(&'static str, &'static str, &'static str),
     EcUv(&'static str, &'static str),
+    /// MSC Datamart: any of these substrings in a file name of the forecast-hour directory
+    Msc(&'static [&'static str]),
+    MscUv(&'static [&'static str], &'static [&'static str]),
+    /// DWD open data: (directory, "single-level" | "pressure-level", file-name tail)
+    Dwd(&'static str, &'static str, &'static str),
+    DwdUv((&'static str, &'static str, &'static str), (&'static str, &'static str, &'static str)),
 }
 
 pub struct VarDef {
@@ -178,12 +201,77 @@ pub const VARS: &[VarDef] = &[
     VarDef { id: "t850", name: "850 mb Temperature", group: "Upper air", units: "°C", cmap: "TEMP", transform: Transform::KToC, ncep: Match::Ncep(&["TMP:850 mb"]), ecmwf: Some(Match::Ec("t", "pl", "850")), accum: false },
     VarDef { id: "hgt500", name: "500 mb Height", group: "Upper air", units: "m", cmap: "HGT500", transform: Transform::None, ncep: Match::Ncep(&["HGT:500 mb"]), ecmwf: Some(Match::Ec("gh", "pl", "500")), accum: false },
     VarDef { id: "wind250", name: "250 mb Wind", group: "Upper air", units: "m/s", cmap: "JET", transform: Transform::None, ncep: Match::NcepUv("UGRD:250 mb", "VGRD:250 mb"), ecmwf: Some(Match::EcUv("u", "v")), accum: false },
+    // HRRR-Smoke (wrfsfc): "|organic" prefers the smoke (organic matter) record when several aerosols share the level
+    VarDef { id: "smoke", name: "Near-Surface Smoke", group: "Smoke", units: "µg/m³", cmap: "PRECIPMM", transform: Transform::KgM3ToUgM3, ncep: Match::Ncep(&["MASSDEN:8 m above ground|organic"]), ecmwf: None, accum: false },
+    VarDef { id: "colsmoke", name: "Vertically Integrated Smoke", group: "Smoke", units: "mg/m²", cmap: "PRECIPMM", transform: Transform::KgM2ToMgM2, ncep: Match::Ncep(&["COLMD:entire atmosphere|organic"]), ecmwf: None, accum: false },
+    // GEFS: precipitation comes in 6-hour (3-hour early on) buckets, not run totals
+    VarDef { id: "apcp6", name: "6-hr Precipitation", group: "Precip", units: "mm", cmap: "PRECIPMM", transform: Transform::None, ncep: Match::Ncep(&["APCP:surface"]), ecmwf: None, accum: true },
 ];
+
+/// How MSC (GDPS/HRDPS) and DWD (ICON-EU) files carry a variable, plus a unit conversion
+/// that replaces the variable's default when the source stores it differently.
+pub fn alt_match(index: &str, var: &str) -> Option<(Match, Option<Transform>)> {
+    let m = match (index, var) {
+        ("msc", "t2m") => Match::Msc(&["_TMP_AGL-2m_", "_AirTemp_AGL-2m_"]),
+        ("msc", "td2m") => Match::Msc(&["_DPT_AGL-2m_", "_DewPoint_AGL-2m_", "_DewPointTemp_AGL-2m_"]),
+        ("msc", "rh2m") => Match::Msc(&["_RH_AGL-2m_", "_RelativeHumidity_AGL-2m_"]),
+        ("msc", "wind10") => Match::MscUv(&["_UGRD_AGL-10m_", "_WindU_AGL-10m_"], &["_VGRD_AGL-10m_", "_WindV_AGL-10m_"]),
+        ("msc", "gust") => Match::Msc(&["_GUST_AGL-10m_", "_WindGust_AGL-10m_"]),
+        ("msc", "mslp") => Match::Msc(&["_PRMSL_MSL_", "_MSLP_", "_Pressure_MSL_", "_PressureMSL_"]),
+        ("msc", "apcp") => Match::Msc(&["_APCP_Sfc_", "_Precip-Accum_Sfc_", "_PrecipAccum_Sfc_", "_TotalPrecip_Sfc_"]),
+        ("msc", "cape") => Match::Msc(&["_CAPE_Sfc_", "_CAPE_"]),
+        ("msc", "t850") => Match::Msc(&["_TMP_ISBL_0850_", "_AirTemp_IsbL-0850_"]),
+        ("msc", "hgt500") => Match::Msc(&["_HGT_ISBL_0500_", "_GeopotentialHeight_IsbL-0500_"]),
+        ("msc", "wind250") => Match::MscUv(&["_UGRD_ISBL_0250_", "_WindU_IsbL-0250_"], &["_VGRD_ISBL_0250_", "_WindV_IsbL-0250_"]),
+        ("dwd", "t2m") => Match::Dwd("t_2m", "single-level", "T_2M"),
+        ("dwd", "td2m") => Match::Dwd("td_2m", "single-level", "TD_2M"),
+        ("dwd", "rh2m") => Match::Dwd("relhum_2m", "single-level", "RELHUM_2M"),
+        ("dwd", "wind10") => Match::DwdUv(("u_10m", "single-level", "U_10M"), ("v_10m", "single-level", "V_10M")),
+        ("dwd", "gust") => Match::Dwd("vmax_10m", "single-level", "VMAX_10M"),
+        ("dwd", "mslp") => Match::Dwd("pmsl", "single-level", "PMSL"),
+        ("dwd", "apcp") => Match::Dwd("tot_prec", "single-level", "TOT_PREC"),
+        ("dwd", "vis") => Match::Dwd("vis", "single-level", "VIS"),
+        ("dwd", "tcc") => Match::Dwd("clct", "single-level", "CLCT"),
+        ("dwd", "mlcape") => Match::Dwd("cape_ml", "single-level", "CAPE_ML"),
+        ("dwd", "pwat") => Match::Dwd("tqv", "single-level", "TQV"),
+        ("dwd", "t850") => Match::Dwd("t", "pressure-level", "850_T"),
+        ("dwd", "hgt500") => return Some((Match::Dwd("fi", "pressure-level", "500_FI"), Some(Transform::GeopotToM))),
+        ("dwd", "wind250") => Match::DwdUv(("u", "pressure-level", "250_U"), ("v", "pressure-level", "250_V")),
+        _ => return None,
+    };
+    Some((m, None))
+}
+
+/// Wind levels offered by /api/grid/wind.
+pub const WIND_LEVELS: &[&str] = &["10m", "850", "500", "250"];
+
+/// U and V component matchers for a model's wind at one level.
+pub fn wind_match(index: &str, level: &str) -> Option<(Match, Match)> {
+    Some(match (index, level) {
+        ("ncep", "10m") => (Match::Ncep(&["UGRD:10 m above ground"]), Match::Ncep(&["VGRD:10 m above ground"])),
+        ("ncep", "850") => (Match::Ncep(&["UGRD:850 mb"]), Match::Ncep(&["VGRD:850 mb"])),
+        ("ncep", "500") => (Match::Ncep(&["UGRD:500 mb"]), Match::Ncep(&["VGRD:500 mb"])),
+        ("ncep", "250") => (Match::Ncep(&["UGRD:250 mb"]), Match::Ncep(&["VGRD:250 mb"])),
+        ("ecmwf", "10m") => (Match::Ec("10u", "sfc", ""), Match::Ec("10v", "sfc", "")),
+        ("ecmwf", "850") => (Match::Ec("u", "pl", "850"), Match::Ec("v", "pl", "850")),
+        ("ecmwf", "500") => (Match::Ec("u", "pl", "500"), Match::Ec("v", "pl", "500")),
+        ("ecmwf", "250") => (Match::Ec("u", "pl", "250"), Match::Ec("v", "pl", "250")),
+        ("msc", "10m") => (Match::Msc(&["_UGRD_AGL-10m_", "_WindU_AGL-10m_"]), Match::Msc(&["_VGRD_AGL-10m_", "_WindV_AGL-10m_"])),
+        ("msc", "850") => (Match::Msc(&["_UGRD_ISBL_0850_", "_WindU_IsbL-0850_"]), Match::Msc(&["_VGRD_ISBL_0850_", "_WindV_IsbL-0850_"])),
+        ("msc", "500") => (Match::Msc(&["_UGRD_ISBL_0500_", "_WindU_IsbL-0500_"]), Match::Msc(&["_VGRD_ISBL_0500_", "_WindV_IsbL-0500_"])),
+        ("msc", "250") => (Match::Msc(&["_UGRD_ISBL_0250_", "_WindU_IsbL-0250_"]), Match::Msc(&["_VGRD_ISBL_0250_", "_WindV_IsbL-0250_"])),
+        ("dwd", "10m") => (Match::Dwd("u_10m", "single-level", "U_10M"), Match::Dwd("v_10m", "single-level", "V_10M")),
+        ("dwd", "850") => (Match::Dwd("u", "pressure-level", "850_U"), Match::Dwd("v", "pressure-level", "850_V")),
+        ("dwd", "500") => (Match::Dwd("u", "pressure-level", "500_U"), Match::Dwd("v", "pressure-level", "500_V")),
+        ("dwd", "250") => (Match::Dwd("u", "pressure-level", "250_U"), Match::Dwd("v", "pressure-level", "250_V")),
+        _ => return None,
+    })
+}
 
 /// Variables offered for each model (others aren't in that model's files).
 pub fn model_vars(model: &str) -> Vec<&'static VarDef> {
     let ids: &[&str] = match model {
-        "hrrr" => &["refc", "refd1", "apcp", "snow", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "srh01", "uh25", "pwat", "t850", "hgt500", "wind250"],
+        "hrrr" => &["refc", "refd1", "apcp", "snow", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "srh01", "uh25", "pwat", "t850", "hgt500", "wind250", "smoke", "colsmoke"],
         "rrfs" => &["refc", "refd1", "apcp", "snow", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "srh01", "uh25", "pwat", "t850", "hgt500", "wind250"],
         "nam3" => &["refc", "refd1", "apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "srh01", "uh25", "pwat", "t850", "hgt500", "wind250"],
         "nam12" | "rap" => &["refc", "apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "pwat", "t850", "hgt500", "wind250"],
@@ -191,6 +279,10 @@ pub fn model_vars(model: &str) -> Vec<&'static VarDef> {
         "nbm" => &["apcp", "snow", "t2m", "td2m", "rh2m", "wind10", "gust", "vis", "tcc"],
         "ecmwf" => &["apcp", "t2m", "td2m", "wind10", "gust", "mslp", "tcc", "mucape", "pwat", "t850", "hgt500", "wind250"],
         "hafsa" | "hafsb" => &["refc", "apcp", "t2m", "wind10", "gust", "mslp", "pwat"],
+        "gefs" => &["apcp6", "t2m", "rh2m", "wind10", "mslp", "pwat", "t850", "hgt500", "wind250"],
+        "gdps" => &["apcp", "t2m", "td2m", "rh2m", "wind10", "mslp", "t850", "hgt500", "wind250"],
+        "hrdps" => &["apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "cape", "t850", "hgt500", "wind250"],
+        "iconeu" => &["apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "mlcape", "pwat", "t850", "hgt500", "wind250"],
         _ => &[],
     };
     ids.iter().filter_map(|id| VARS.iter().find(|v| v.id == *id)).collect()
@@ -232,7 +324,13 @@ pub fn parse_ncep_idx(text: &str) -> Vec<(u64, Option<u64>, Vec<String>)> {
 }
 
 /// Pick the byte range for a variable in an NCEP idx.
+/// A pattern may end in `|text`: among several matching records, prefer one whose extra
+/// fields (e.g. the aerosol type) contain `text` (case-insensitive).
 pub fn find_ncep(idx: &[(u64, Option<u64>, Vec<String>)], pattern: &str, fh: u32, accum: bool) -> Option<(u64, Option<u64>)> {
+    let (pattern, prefer) = match pattern.split_once('|') {
+        Some((p, t)) => (p, Some(t.to_ascii_lowercase())),
+        None => (pattern, None),
+    };
     let (var, level) = pattern.split_once(':')?;
     let mut cands: Vec<&(u64, Option<u64>, Vec<String>)> = idx
         .iter()
@@ -245,6 +343,12 @@ pub fn find_ncep(idx: &[(u64, Option<u64>, Vec<String>)], pattern: &str, fh: u32
     let det: Vec<_> = cands.iter().copied().filter(|(_, _, f)| f.iter().skip(6).all(|x| x.is_empty())).collect();
     if !det.is_empty() {
         cands = det;
+    }
+    if let Some(t) = prefer {
+        let pref: Vec<_> = cands.iter().copied().filter(|(_, _, f)| f.iter().skip(6).any(|x| x.to_ascii_lowercase().contains(&t))).collect();
+        if !pref.is_empty() {
+            cands = pref;
+        }
     }
     if accum {
         let want = format!("0-{fh} hour acc");
@@ -440,7 +544,7 @@ pub fn model_layers() -> Vec<LayerDef> {
                 min_valid: None,
                 source: "model",
                 model: Some(m.id.into()),
-                step_min: 60,
+                step_min: model_step_min(m.id),
             });
         }
     }
@@ -620,6 +724,32 @@ mod tests {
         let fhs: Vec<u32> = (0..=5).collect();
         let st = future_steps(run + h + 20 * 60_000, run, &fhs, 60, 24, false);
         assert_eq!(st.iter().map(|x| x.1).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn smoke_records() {
+        let idx = "1:0:d=2026101012:MASSDEN:8 m above ground:1 hour fcst:aerosol=Dust Dry:aerosol_size <2e-05:\n2:100:d=2026101012:MASSDEN:8 m above ground:1 hour fcst:aerosol=Particulate Organic Matter Dry:aerosol_size <2.5e-06:\n3:200:d=2026101012:COLMD:entire atmosphere (considered as a single layer):1 hour fcst:aerosol=Particulate Organic Matter Dry:aerosol_size <2.5e-06:\n4:300:d=2026101012:TMP:2 m above ground:1 hour fcst:\n";
+        let p = parse_ncep_idx(idx);
+        assert_eq!(find_ncep(&p, "MASSDEN:8 m above ground|organic", 1, false), Some((100, Some(200))));
+        assert_eq!(find_ncep(&p, "COLMD:entire atmosphere|organic", 1, false), Some((200, Some(300))));
+        // without aerosol fields the plain record is used
+        let idx2 = "1:0:d=2026101012:MASSDEN:8 m above ground:1 hour fcst:\n2:50:d=2026101012:TMP:2 m above ground:1 hour fcst:\n";
+        assert_eq!(find_ncep(&parse_ncep_idx(idx2), "MASSDEN:8 m above ground|organic", 1, false), Some((0, Some(50))));
+        let l = model_layers();
+        assert!(l.iter().any(|x| x.id == "model/hrrr/smoke" && x.units == "µg/m³"));
+        for m in ["gefs", "gdps", "hrdps", "iconeu"] {
+            let d = model_def(m).unwrap();
+            for v in model_vars(m) {
+                if d.index != "ncep" {
+                    assert!(alt_match(d.index, v.id).is_some(), "{m} {}", v.id);
+                }
+            }
+            for lv in WIND_LEVELS {
+                assert!(wind_match(d.index, lv).is_some());
+            }
+        }
+        let f = fill_template(model_def("iconeu").unwrap().file, "20261011", 12, 7, "");
+        assert_eq!(f, "12/{dir}/icon-eu_europe_regular-lat-lon_{kind}_2026101112_007_{name}.grib2.bz2");
     }
 
     #[test]

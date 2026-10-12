@@ -83,6 +83,8 @@ pub struct GridService {
     rgbs: Mutex<(lru::LruCache<String, (Arc<RgbImage>, usize)>, usize, usize)>, // (cache, bytes, cap)
     /// MRMS 3D cubes (header + voxels), byte-capped
     cubes: Mutex<(lru::LruCache<String, Bytes>, usize, usize)>,
+    /// /api/grid/wind responses (short-lived, byte-capped): key → (made, body)
+    winds: Mutex<(lru::LruCache<String, (Instant, Bytes)>, usize)>,
     /// optional folder of local files used as frames (offline use / case studies):
     /// files are named "<layer id with / as _>__<original name>"
     pub local_dir: RwLock<Option<PathBuf>>,
@@ -94,6 +96,56 @@ fn safe(k: &str) -> String {
 
 fn ymd(t: chrono::DateTime<Utc>) -> String {
     format!("{:04}{:02}{:02}", t.year(), t.month(), t.day())
+}
+
+/// Link targets in an HTML directory index.
+fn hrefs(html: &str) -> impl Iterator<Item = &str> {
+    html.split("href=\"").skip(1).filter_map(|s| s.split('"').next())
+}
+
+/// Forecast hours of one run from a directory listing: MSC lists one "HHH/" directory per
+/// forecast hour; DWD lists files named "..._{YYYYMMDDHH}_{HHH}_{FIELD}.grib2.bz2".
+fn listing_fhs(index: &str, html: &str, ymd: &str, hh: u32) -> Vec<u32> {
+    let stamp = format!("_{ymd}{hh:02}_");
+    let mut fhs: Vec<u32> = hrefs(html)
+        .filter_map(|h| {
+            let name = h.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+            if index == "msc" {
+                (name.len() == 3 && h.ends_with('/')).then(|| name.parse().ok()).flatten()
+            } else {
+                let p = name.find(&stamp)? + stamp.len();
+                name.get(p..p + 3)?.parse().ok()
+            }
+        })
+        .collect();
+    fhs.sort_unstable();
+    fhs.dedup();
+    fhs
+}
+
+/// Header + interleaved u8 U/V for /api/grid/wind (see `GridService::wind`).
+pub fn encode_wind(hdr: &serde_json::Value, uv: &[u8]) -> Vec<u8> {
+    let h = serde_json::to_vec(hdr).unwrap_or_default();
+    let mut out = Vec::with_capacity(4 + h.len() + uv.len());
+    out.extend_from_slice(&(h.len() as u32).to_le_bytes());
+    out.extend_from_slice(&h);
+    out.extend_from_slice(uv);
+    out
+}
+
+/// Pick the (run, forecast hour) whose valid time is nearest `t`; ties go to the newer run.
+/// `runs` is newest first: (id, run time ms, forecast hours).
+pub fn nearest_step(runs: &[(String, i64, Vec<u32>, Vec<String>)], t: i64) -> Option<(String, i64, u32)> {
+    let mut best: Option<(i64, String, i64, u32)> = None;
+    for (id, rt, fhs, _) in runs {
+        for &fh in fhs {
+            let d = (rt + fh as i64 * 3_600_000 - t).abs();
+            if best.as_ref().map(|b| d < b.0).unwrap_or(true) {
+                best = Some((d, id.clone(), *rt, fh));
+            }
+        }
+    }
+    best.map(|b| (b.1, b.2, b.3))
 }
 
 impl GridService {
@@ -118,6 +170,7 @@ impl GridService {
             max_dim_goes: if full { 5424 } else { 2712 },
             rgbs: Mutex::new((lru::LruCache::unbounded(), 0, memory_mb * 1024 * 1024 * 3 / 10)),
             cubes: Mutex::new((lru::LruCache::unbounded(), 0, (memory_mb * 1024 * 1024 / 8).clamp(16 << 20, 64 << 20))),
+            winds: Mutex::new((lru::LruCache::unbounded(), 0)),
             local_dir: RwLock::new(None),
         })
     }
@@ -391,7 +444,14 @@ impl GridService {
             }
             let d = ymd(t);
             let prefix = sources::fill_template(m.run_prefix, &d, hh, 0, "");
-            let (fhs, storms) = if m.index == "ecmwf" {
+            let (fhs, storms) = if m.index == "msc" || m.index == "dwd" {
+                let url = format!("{}/{}", m.bucket, prefix);
+                let html = match self.text_cached(&url, 300).await {
+                    Ok(h) => h,
+                    Err(_) => continue,
+                };
+                (listing_fhs(m.index, &html, &d, hh), vec![])
+            } else if m.index == "ecmwf" {
                 let url = format!("{}/{}", m.bucket, prefix);
                 let html = match self.text_cached(&url, 300).await {
                     Ok(h) => h,
@@ -751,6 +811,7 @@ impl GridService {
                 })
                 .await
             }
+            Some("wcomp") if parts.len() == 6 => self.load_component(parts[1], parts[2], parts[3].parse()?, parts[4], parts[5]).await,
             Some("model") if parts.len() >= 5 => self.load_model(parts[1], parts[2], parts[3].parse()?, parts[4], parts.get(5).copied().unwrap_or("")).await,
             Some("ndfd") if parts.len() == 5 => {
                 let l = self.layer(parts[1])?.clone();
@@ -814,6 +875,29 @@ impl GridService {
             bail!("bad run");
         }
         let (d, hh) = (&run[..8], run[8..].parse::<u32>()?);
+        if m.index == "msc" || m.index == "dwd" {
+            let (matcher, tf) = sources::alt_match(m.index, var_id).ok_or_else(|| anyhow!("{} not in {}", v.name, m.name))?;
+            let opts = DecodeOpts { transform: tf.unwrap_or(v.transform), ..Default::default() };
+            let mut g = match &matcher {
+                Match::MscUv(a, b) => {
+                    let (ma, mb) = (Match::Msc(a), Match::Msc(b));
+                    let (bu, bv) = tokio::try_join!(self.alt_bytes(m, d, hh, fh, &ma), self.alt_bytes(m, d, hh, fh, &mb))?;
+                    self.blocking(move || decode::decode_speed(&decode::maybe_bunzip2(&bu)?, &decode::maybe_bunzip2(&bv)?, &opts)).await?
+                }
+                Match::DwdUv(a, b) => {
+                    let (ma, mb) = (Match::Dwd(a.0, a.1, a.2), Match::Dwd(b.0, b.1, b.2));
+                    let (bu, bv) = tokio::try_join!(self.alt_bytes(m, d, hh, fh, &ma), self.alt_bytes(m, d, hh, fh, &mb))?;
+                    self.blocking(move || decode::decode_speed(&decode::maybe_bunzip2(&bu)?, &decode::maybe_bunzip2(&bv)?, &opts)).await?
+                }
+                one => {
+                    let b = self.alt_bytes(m, d, hh, fh, one).await?;
+                    self.blocking(move || decode::decode(&decode::maybe_bunzip2(&b)?, 0, &opts)).await?
+                }
+            };
+            g.ref_ms = run_time_ms(d, hh)?;
+            g.valid_ms = g.ref_ms + fh as i64 * 3_600_000;
+            return Ok(g);
+        }
         // sub-hourly HRRR: `fh` is minutes; the file is the hour that step ends in
         let sub = m.id == "hrrrsub";
         let file = sources::fill_template(m.file, d, hh, if sub { fh.div_ceil(60) } else { fh }, storm);
@@ -861,10 +945,154 @@ impl GridService {
                 let (bu, bv) = tokio::try_join!(self.fetch(&url, Some((ou, Some(ou + nu))), true), self.fetch(&url, Some((ov, Some(ov + nv))), true))?;
                 self.blocking(move || decode::decode_speed(&bu, &bv, &opts)).await?
             }
+            _ => bail!("{} is not an index-based source", m.name),
         };
         g.valid_ms = valid;
         g.ref_ms = run_ms;
         Ok(g)
+    }
+
+    /// Raw bytes of one MSC / DWD field file (MSC: found by name in the forecast-hour listing).
+    async fn alt_bytes(&self, m: &sources::ModelDef, d: &str, hh: u32, fh: u32, mt: &Match) -> Result<Bytes> {
+        match mt {
+            Match::Msc(tokens) => {
+                let dir = format!("{}/{}{fh:03}/", m.bucket, sources::fill_template(m.run_prefix, d, hh, fh, ""));
+                let html = self.text_cached(&dir, 600).await.with_context(|| format!("{} F{fh:03} listing", m.name))?;
+                let name = hrefs(&html)
+                    .map(|h| h.rsplit('/').next().unwrap_or(""))
+                    .find(|n| n.ends_with(".grib2") && tokens.iter().any(|t| n.contains(t)))
+                    .ok_or_else(|| anyhow!("field not found in {} F{fh:03}", m.name))?
+                    .to_string();
+                self.fetch(&format!("{dir}{name}"), None, true).await
+            }
+            Match::Dwd(dir, kind, name) => {
+                let file = sources::fill_template(m.file, d, hh, fh, "").replace("{dir}", dir).replace("{kind}", kind).replace("{name}", name);
+                self.fetch(&format!("{}/{file}", m.bucket), None, true).await
+            }
+            _ => bail!("not a file-per-field source"),
+        }
+    }
+
+    /// One wind component ("u" | "v") at a level, as published (may be grid-relative).
+    async fn load_component(&self, model: &str, run: &str, fh: u32, level: &str, comp: &str) -> Result<Grid> {
+        let m = sources::model_def(model).ok_or_else(|| anyhow!("unknown model"))?;
+        if run.len() != 10 {
+            bail!("bad run");
+        }
+        let (d, hh) = (&run[..8], run[8..].parse::<u32>()?);
+        let (mu, mv) = sources::wind_match(m.index, level).ok_or_else(|| anyhow!("no {level} wind for {}", m.name))?;
+        let mt = if comp == "u" { mu } else { mv };
+        let opts = DecodeOpts::default();
+        let mut g = match &mt {
+            Match::Ncep(pats) => {
+                let url = s3::object_url(m.bucket, &sources::fill_template(m.file, d, hh, fh, ""));
+                let idx = self.text_cached(&format!("{url}.idx"), 3600).await.with_context(|| format!("{} index", m.name))?;
+                let rows = sources::parse_ncep_idx(&idx);
+                let range = sources::find_ncep(&rows, pats[0], fh, false).ok_or_else(|| anyhow!("{level} wind not found in {} F{fh:03}", m.name))?;
+                let b = self.fetch(&url, Some(range), true).await?;
+                self.blocking(move || decode::decode(&b, 0, &opts)).await?
+            }
+            Match::Ec(param, levtype, lv) => {
+                let url = format!("{}/{}", m.bucket, sources::fill_template(m.file, d, hh, fh, ""));
+                let idx = self.text_cached(&url.replace(".grib2", ".index"), 3600).await.with_context(|| format!("{} index", m.name))?;
+                let (o, n) = sources::find_ecmwf(&idx, param, levtype, lv).ok_or_else(|| anyhow!("{level} wind not found in ECMWF step {fh}"))?;
+                let b = self.fetch(&url, Some((o, Some(o + n))), true).await?;
+                self.blocking(move || decode::decode(&b, 0, &opts)).await?
+            }
+            other => {
+                let b = self.alt_bytes(m, d, hh, fh, other).await?;
+                self.blocking(move || decode::decode(&decode::maybe_bunzip2(&b)?, 0, &opts)).await?
+            }
+        };
+        g.ref_ms = run_time_ms(d, hh)?;
+        g.valid_ms = g.ref_ms + fh as i64 * 3_600_000;
+        Ok(g)
+    }
+
+    /// Earth-relative U/V wind on a regular lat/lon grid over `bbox` (w, s, e, n) for particle
+    /// animation. Body: u32 LE header length, JSON header, then nx*ny pairs of u8 (u, v),
+    /// x fastest (W→E), rows S→N. Byte 0 = no data; otherwise
+    /// value = min + (b - 1) / 254 * (max - min) m/s.
+    pub async fn wind(&self, model: &str, level: &str, time: Option<i64>, bbox: [f64; 4], max: usize) -> Result<Bytes> {
+        let m = sources::model_def(model).filter(|m| m.group != "Hidden" && !m.id.starts_with("hafs")).ok_or_else(|| anyhow!("unknown model {model}"))?;
+        if !sources::WIND_LEVELS.contains(&level) || sources::wind_match(m.index, level).is_none() {
+            bail!("level must be one of {}", sources::WIND_LEVELS.join("|"));
+        }
+        let runs = self.model_runs(m).await?;
+        let t = time.unwrap_or_else(|| Utc::now().timestamp_millis());
+        let (run, _, fh) = nearest_step(&runs, t).ok_or_else(|| anyhow!("no {} forecast hours available", m.name))?;
+        let [w, s, e, n] = bbox;
+        let ck = format!("{model}|{run}|{fh}|{level}|{w:.3},{s:.3},{e:.3},{n:.3}|{max}");
+        {
+            let mut c = self.winds.lock();
+            if let Some((made, b)) = c.0.get(&ck) {
+                if made.elapsed() < Duration::from_secs(600) {
+                    return Ok(b.clone());
+                }
+            }
+        }
+        let ku = format!("wcomp|{model}|{run}|{fh}|{level}|u");
+        let kv = format!("wcomp|{model}|{run}|{fh}|{level}|v");
+        let (gu, gv) = tokio::try_join!(self.grid(&ku), self.grid(&kv))?;
+        if gu.data.len() != gv.data.len() {
+            bail!("U/V grids differ");
+        }
+        let (model_s, level_s) = (m.id.to_string(), level.to_string());
+        let body = self
+            .blocking(move || {
+                let (sx, sy) = (e - w, n - s);
+                let (nx, ny) = if sx >= sy { (max, ((max as f64 * sy / sx).round() as usize).max(2)) } else { (((max as f64 * sx / sy).round() as usize).max(2), max) };
+                let (dlon, dlat) = (sx / (nx - 1) as f64, sy / (ny - 1) as f64);
+                let mut u = vec![f32::NAN; nx * ny];
+                let mut v = vec![f32::NAN; nx * ny];
+                for j in 0..ny {
+                    let lat = s + j as f64 * dlat;
+                    for i in 0..nx {
+                        let lon = w + i as f64 * dlon;
+                        let (Some(a), Some(b)) = (gu.sample(lat, lon), gv.sample(lat, lon)) else { continue };
+                        let (a, b) = if gu.grid_rel {
+                            let r = gu.proj.north_angle(lat, lon) as f32;
+                            (r.cos() * a + r.sin() * b, -r.sin() * a + r.cos() * b)
+                        } else {
+                            (a, b)
+                        };
+                        u[j * nx + i] = a;
+                        v[j * nx + i] = b;
+                    }
+                }
+                let range = |x: &[f32]| x.iter().filter(|z| z.is_finite()).fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &z| (lo.min(z), hi.max(z)));
+                let ((umin, umax), (vmin, vmax)) = (range(&u), range(&v));
+                if !umin.is_finite() {
+                    bail!("bbox not found in the {} domain", model_s);
+                }
+                let q = |z: f32, lo: f32, hi: f32| -> u8 { if !z.is_finite() { 0 } else if hi > lo { 1 + ((z - lo) / (hi - lo) * 254.0).round().clamp(0.0, 254.0) as u8 } else { 1 } };
+                let mut uv = Vec::with_capacity(nx * ny * 2);
+                for k in 0..nx * ny {
+                    uv.push(q(u[k], umin, umax));
+                    uv.push(q(v[k], vmin, vmax));
+                }
+                let r3 = |x: f32| (x * 1000.0).round() / 1000.0;
+                let hdr = serde_json::json!({
+                    "nx": nx, "ny": ny, "lon0": w, "lat0": s, "dlon": dlon, "dlat": dlat,
+                    "time": gu.valid_ms, "run": gu.ref_ms, "model": model_s, "level": level_s, "units": "m/s",
+                    "umin": r3(umin), "umax": r3(umax), "vmin": r3(vmin), "vmax": r3(vmax), "nodata": 0,
+                });
+                Ok(encode_wind(&hdr, &uv))
+            })
+            .await?;
+        let b = Bytes::from(body);
+        let mut c = self.winds.lock();
+        if let Some((_, old)) = c.0.put(ck, (Instant::now(), b.clone())) {
+            c.1 -= old.len();
+        }
+        c.1 += b.len();
+        while c.1 > 16 << 20 && c.0.len() > 1 {
+            match c.0.pop_lru() {
+                Some((_, (_, old))) => c.1 -= old.len(),
+                None => break,
+            }
+        }
+        Ok(b)
     }
 
     // ---------- render ----------
@@ -1142,3 +1370,35 @@ impl Clone for MessageInfo {
     }
 }
 impl Copy for MessageInfo {}
+
+fn run_time_ms(d: &str, hh: u32) -> Result<i64> {
+    Utc.with_ymd_and_hms(d.get(..4).unwrap_or("").parse()?, d.get(4..6).unwrap_or("").parse()?, d.get(6..8).unwrap_or("").parse()?, hh, 0, 0).single().map(|t| t.timestamp_millis()).ok_or_else(|| anyhow!("bad run time"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn directory_listings() {
+        let msc = r#"<a href="?C=N;O=D">Name</a> <a href="/20261011/WXO-DD/model_gdps/">Parent</a> <a href="000/">000/</a> <a href="003/">003/</a> <a href="240/">240/</a>"#;
+        assert_eq!(listing_fhs("msc", msc, "20261011", 0), vec![0, 3, 240]);
+        let dwd = r#"<a href="icon-eu_europe_regular-lat-lon_single-level_2026101112_000_T_2M.grib2.bz2">x</a>
+<a href="icon-eu_europe_regular-lat-lon_single-level_2026101112_120_T_2M.grib2.bz2">x</a>
+<a href="icon-eu_europe_regular-lat-lon_single-level_2026101012_005_T_2M.grib2.bz2">x</a>"#;
+        assert_eq!(listing_fhs("dwd", dwd, "20261011", 12), vec![0, 120]);
+        assert!(listing_fhs("dwd", dwd, "20261011", 0).is_empty());
+    }
+
+    #[test]
+    fn nearest_run_step() {
+        let h = 3_600_000i64;
+        let runs = vec![("2026101112".to_string(), 12 * h, vec![0, 1, 2], vec![]), ("2026101106".to_string(), 6 * h, (0..=18).collect(), vec![])];
+        // 13:20 → newest run F001
+        assert_eq!(nearest_step(&runs, 13 * h + 20 * 60_000), Some(("2026101112".into(), 12 * h, 1)));
+        // 20:00 beyond the newest run's hours → older run F014
+        assert_eq!(nearest_step(&runs, 20 * h), Some(("2026101106".into(), 6 * h, 14)));
+        let b = encode_wind(&serde_json::json!({"nx": 1}), &[1, 2]);
+        assert_eq!(u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize, b.len() - 6);
+    }
+}

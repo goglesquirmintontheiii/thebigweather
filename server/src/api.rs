@@ -147,6 +147,11 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/grid/render", get(grid_render))
         .route("/grid/value", get(grid_value))
         .route("/grid/volume3d", get(grid_volume3d))
+        .route("/grid/wind", get(grid_wind))
+        .route("/sounding", get(sounding))
+        .route("/sounding/stations", get(sounding_stations))
+        .route("/arcgis/{service}/legend", get(arcgis_legend))
+        .route("/arcgis/{service}/{z}/{x}/{y}", get(arcgis_tile))
         .route("/metars", get(metars))
         .route("/ovl/{id}", get(overlay))
         .route("/camimg", get(camimg))
@@ -649,6 +654,87 @@ async fn grid_volume3d(State(st): St, Query(q): Query<Cube3dQ>) -> Result<Respon
     // a cube from the last few minutes may still be missing levels: don't let browsers keep it
     let settled = q.time.map(|t| chrono::Utc::now().timestamp_millis() - t > 15 * 60_000).unwrap_or(false);
     Ok(volume_response(body, settled))
+}
+
+#[derive(Deserialize)]
+struct WindQ {
+    layer: String,
+    level: Option<String>,
+    time: Option<i64>,
+    bbox: Option<String>,
+    max: Option<usize>,
+}
+
+/// Earth-relative U/V wind for particle animation (u32 header length, JSON, u8 u/v pairs).
+async fn grid_wind(State(st): St, Query(q): Query<WindQ>) -> Result<Response, ApiError> {
+    let b: Vec<f64> = q.bbox.as_deref().unwrap_or("-180,-85,180,85").split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    if b.len() != 4 || b[0] >= b[2] || b[1] >= b[3] || b[2] - b[0] > 360.0 || b[1] < -90.0 || b[3] > 90.0 {
+        return Err(bad("bbox=w,s,e,n required"));
+    }
+    let model = q.layer.trim_start_matches("model/").split('/').next().unwrap_or("").to_string();
+    let max = q.max.unwrap_or(256).clamp(8, 512);
+    let body = st.grids.wind(&model, q.level.as_deref().unwrap_or("10m"), q.time, [b[0], b[1], b[2], b[3]], max).await.map_err(|e| {
+        let msg = format!("{e:#}");
+        if msg.starts_with("unknown model") || msg.starts_with("level must") { bad(&msg) } else { ApiError::from(e) }
+    })?;
+    let mut r = Response::new(Body::from(body));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"));
+    Ok(r)
+}
+
+/// Observed (src=raob) or model (src=model) sounding as JSON levels.
+async fn sounding(State(st): St, Query(q): Query<std::collections::BTreeMap<String, String>>) -> Result<Response, ApiError> {
+    let mut q = q;
+    q.remove("token");
+    let v = crate::overlays::sounding::sounding(&st.overlays, &q).await.map_err(|e| {
+        let msg = format!("{e:#}");
+        if msg.contains("required") || msg.contains("bad ") || msg.contains("must be") { bad(&msg) } else { ApiError::from(e) }
+    })?;
+    let mut r = Json(v).into_response();
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"));
+    Ok(r)
+}
+
+/// RAOB stations (GeoJSON points with id, name).
+async fn sounding_stations(State(st): St) -> Result<Response, ApiError> {
+    let keys = st.cfg.read().keys.clone();
+    let b = st.overlays.get("raobsta", &Default::default(), &keys).await?;
+    let mut r = Response::new(Body::from(b));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"));
+    Ok(r)
+}
+
+/// NOAA ArcGIS raster tile (PNG): service nohrsc (layer=depth|swe) or heatrisk (day=1..7).
+async fn arcgis_tile(State(st): St, Path((service, z, x, y)): Path<(String, u32, u32, String)>, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+    if crate::overlays::arcgis::service(&service).is_none() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "unknown service".into()));
+    }
+    let y: u32 = y.trim_end_matches(".png").parse().map_err(|_| bad("bad tile"))?;
+    if z > 16 || x >= (1u32 << z) || y >= (1u32 << z) {
+        return Err(bad("bad tile"));
+    }
+    let g = |k: &str| q.get(k).map(|s| s.as_str()).unwrap_or("");
+    let b = crate::overlays::arcgis::tile(&st.overlays, &service, z, x, y, g("layer"), g("day")).await.map_err(|e| {
+        let msg = format!("{e:#}");
+        if msg.contains("must be") { bad(&msg) } else { ApiError::from(e) }
+    })?;
+    let mut resp = Response::new(Body::from(b));
+    resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=600"));
+    Ok(resp)
+}
+
+async fn arcgis_legend(State(st): St, Path(service): Path<String>) -> Result<Response, ApiError> {
+    if crate::overlays::arcgis::service(&service).is_none() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "unknown service".into()));
+    }
+    let b = crate::overlays::arcgis::legend(&st.overlays, &service).await?;
+    let mut resp = Response::new(Body::from(b));
+    resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=3600"));
+    Ok(resp)
 }
 
 async fn metars(State(st): St) -> Json<Value> {
