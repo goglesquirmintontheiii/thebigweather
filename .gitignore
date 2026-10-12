@@ -1,5 +1,8 @@
 server/target/
-server/data/
+server/data/*
+!server/data/camera_sources.json
+!server/data/level3_products.json
+!server/data/sites.json
 server/bin/
 app/node_modules/
 app/release/

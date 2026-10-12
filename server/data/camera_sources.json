@@ -1,0 +1,130 @@
+[
+  {
+    "id": "caltrans", "name": "Caltrans", "region": "US · California", "format": "json",
+    "urls": ["https://cwwp2.dot.ca.gov/data/d1/cctv/cctvStatusD01.json", "https://cwwp2.dot.ca.gov/data/d2/cctv/cctvStatusD02.json", "https://cwwp2.dot.ca.gov/data/d3/cctv/cctvStatusD03.json", "https://cwwp2.dot.ca.gov/data/d4/cctv/cctvStatusD04.json", "https://cwwp2.dot.ca.gov/data/d5/cctv/cctvStatusD05.json", "https://cwwp2.dot.ca.gov/data/d6/cctv/cctvStatusD06.json", "https://cwwp2.dot.ca.gov/data/d7/cctv/cctvStatusD07.json", "https://cwwp2.dot.ca.gov/data/d8/cctv/cctvStatusD08.json", "https://cwwp2.dot.ca.gov/data/d9/cctv/cctvStatusD09.json", "https://cwwp2.dot.ca.gov/data/d10/cctv/cctvStatusD10.json", "https://cwwp2.dot.ca.gov/data/d11/cctv/cctvStatusD11.json", "https://cwwp2.dot.ca.gov/data/d12/cctv/cctvStatusD12.json"],
+    "list": "data", "item": "cctv",
+    "fields": {"id": "index", "name": "location.locationName", "lat": "location.latitude", "lon": "location.longitude", "img": "imageData.static.currentImageURL", "video": "imageData.streamingVideoURL", "refresh_min": "imageData.static.currentImageUpdateFrequency", "on": "inService"},
+    "attribution": "Caltrans"
+  },
+  {
+    "id": "wsdot", "name": "WSDOT", "region": "US · Washington", "format": "json",
+    "urls": ["https://data.wsdot.wa.gov/mobile/Cameras.json"], "list": "cameras.items",
+    "fields": {"id": "id", "name": "title", "lat": "lat", "lon": "lon", "img": "url"},
+    "attribution": "WSDOT"
+  },
+  {
+    "id": "tripcheck", "name": "ODOT TripCheck", "region": "US · Oregon", "format": "arcgis",
+    "urls": ["https://tripcheck.com/Scripts/map/data/cctvinventory.js"],
+    "fields": {"id": "cameraId", "name": "title", "lat": "latitude", "lon": "longitude", "img": "filename"},
+    "img_template": "https://tripcheck.com/RoadCams/cams/{img}", "paged": false,
+    "attribution": "Oregon DOT"
+  },
+  {
+    "id": "iowadot", "name": "Iowa DOT", "region": "US · Iowa", "format": "arcgis",
+    "urls": ["https://services.arcgis.com/8lRhdTsQyJpO52F1/arcgis/rest/services/Traffic_Cameras_View/FeatureServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json"],
+    "fields": {"id": "COMMON_ID", "name": "Desc_", "lat": "latitude", "lon": "longitude", "img": "ImageURL", "video": "VideoURL"},
+    "paged": true, "attribution": "Iowa DOT"
+  },
+  {
+    "id": "kytc", "name": "KYTC", "region": "US · Kentucky", "format": "arcgis",
+    "urls": ["https://kygisserver.ky.gov/arcgis/rest/services/WGS84WM_Services/Ky_WebCams_WGS84WM/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json"],
+    "fields": {"id": "id", "name": "description", "lat": "latitude", "lon": "longitude", "img": "snapshot"},
+    "paged": true, "attribution": "Kentucky Transportation Cabinet"
+  },
+  {
+    "id": "modot", "name": "MoDOT", "region": "US · Missouri", "format": "json",
+    "urls": ["https://traveler.modot.org/timconfig/feed/desktop/StreamingCams2.json"], "list": "",
+    "fields": {"id": "location", "name": "location", "lat": "y", "lon": "x", "video": "html"},
+    "attribution": "Missouri DOT"
+  },
+  {
+    "id": "algo", "name": "ALGO Traffic", "region": "US · Alabama", "format": "json",
+    "urls": ["https://api.algotraffic.com/v4.0/Cameras"], "list": "",
+    "fields": {"id": "id", "name": "location.crossStreet", "lat": "location.latitude", "lon": "location.longitude", "img": "snapshotImageUrl", "video": "playbackUrls.hls"},
+    "attribution": "ALDOT / ALGO Traffic"
+  },
+  {
+    "id": "nycdot", "name": "NYC DOT", "region": "US · New York City", "format": "json",
+    "urls": ["https://webcams.nyctmc.org/api/cameras"], "list": "",
+    "fields": {"id": "id", "name": "name", "lat": "latitude", "lon": "longitude", "img": "imageUrl", "on": "isOnline"},
+    "refresh": 5, "attribution": "NYC DOT"
+  },
+  {
+    "id": "iem", "name": "Iowa TV station webcams", "region": "US · Iowa / Midwest", "format": "geojson",
+    "urls": ["https://mesonet.agron.iastate.edu/geojson/webcam.py?network=KCCI", "https://mesonet.agron.iastate.edu/geojson/webcam.py?network=KCRG", "https://mesonet.agron.iastate.edu/geojson/webcam.py?network=KELO"],
+    "fields": {"id": "cid", "name": "name", "img": "imgurl"},
+    "attribution": "Iowa Environmental Mesonet"
+  },
+  {
+    "id": "buoycam", "name": "NOAA BuoyCAMs", "region": "Ocean · NDBC", "format": "json",
+    "urls": ["https://www.ndbc.noaa.gov/buoycams.php"], "list": "",
+    "fields": {"id": "id", "name": "name", "lat": "lat", "lon": "lng", "img": "img"},
+    "img_template": "https://www.ndbc.noaa.gov/buoycam.php?station={id}", "require": ["img"], "kind": "buoy",
+    "refresh": 900, "attribution": "NOAA NDBC"
+  },
+  {
+    "id": "drivebc", "name": "DriveBC", "region": "Canada · British Columbia", "format": "json",
+    "urls": ["https://www.drivebc.ca/api/webcams/"], "list": "",
+    "fields": {"id": "id", "name": "name", "lat": "location.coordinates.1", "lon": "location.coordinates.0", "on": "is_on", "stale": "marked_stale"},
+    "img_template": "https://www.drivebc.ca/images/{id}.jpg",
+    "attribution": "DriveBC · Open Government Licence – British Columbia"
+  },
+  {
+    "id": "quebec", "name": "Québec 511", "region": "Canada · Québec", "format": "geojson",
+    "urls": ["https://ws.mapserver.transports.gouv.qc.ca/swtq?service=wfs&version=2.0.0&request=getfeature&typename=ms:infos_cameras&srsname=EPSG:4326&outputformat=geojson"],
+    "fields": {"id": "IDEcamera", "name": "DescriptionLocalisationEn", "page": "URL_FLUX_DONNEE"},
+    "img_template": "https://www.quebec511.info/Carte/Fenetres/camera.ashx?id={id}",
+    "attribution": "Ministère des Transports du Québec · CC BY 4.0"
+  },
+  {
+    "id": "digitraffic", "name": "Digitraffic weathercams", "region": "Finland", "format": "geojson",
+    "urls": ["https://tie.digitraffic.fi/api/weathercam/v1/stations"],
+    "headers": {"Digitraffic-User": "TheBigWeather/self-hosted"},
+    "fields": {"id": "id", "name": "name", "preset": "presets.0.id"},
+    "img_template": "https://weathercam.digitraffic.fi/{preset}.jpg", "refresh": 600,
+    "attribution": "Fintraffic / digitraffic.fi · CC BY 4.0"
+  },
+  {
+    "id": "iceland", "name": "Vegagerðin", "region": "Iceland", "format": "arcgis",
+    "urls": ["https://vegasja.vegagerdin.is/arcgis/rest/services/data/info/MapServer/1/query?where=1%3D1&outFields=*&outSR=4326&f=json"],
+    "fields": {"id": "OBJECTID", "name": "MYNDAVEL", "img": "SLOD"}, "geometry_xy": true,
+    "attribution": "Vegagerðin"
+  },
+  {
+    "id": "hongkong", "name": "HK Transport Dept", "region": "Hong Kong", "format": "xml",
+    "urls": ["https://static.data.gov.hk/td/traffic-snapshot-images/code/Traffic_Camera_Locations_En.xml"], "item": "image",
+    "fields": {"id": "key", "name": "description", "lat": "latitude", "lon": "longitude", "img": "url"},
+    "refresh": 120, "attribution": "Transport Department, HKSAR"
+  },
+  {
+    "id": "singapore", "name": "LTA traffic images", "region": "Singapore", "format": "json",
+    "urls": ["https://api.data.gov.sg/v1/transport/traffic-images"], "list": "items.0.cameras",
+    "fields": {"id": "camera_id", "lat": "location.latitude", "lon": "location.longitude", "img": "image"},
+    "ttl": 50, "proxy_image": true, "refresh": 60, "attribution": "Land Transport Authority · Singapore Open Data Licence"
+  },
+  {
+    "id": "nzta", "name": "NZTA", "region": "New Zealand", "format": "xml",
+    "urls": ["https://www.trafficnz.info/service/traffic/rest/4/cameras/all"], "item": "camera",
+    "fields": {"id": "id", "name": "name", "lat": "latitude", "lon": "longitude", "offline": "offline"},
+    "img_template": "https://www.trafficnz.info/camera/{id}.jpg",
+    "attribution": "Waka Kotahi NZ Transport Agency"
+  },
+  {
+    "id": "nsw", "name": "Live Traffic NSW", "region": "Australia · NSW", "format": "geojson",
+    "urls": ["https://data.livetraffic.com/cameras/traffic-cam.json"],
+    "fields": {"id": "id", "name": "title", "img": "href"}, "refresh": 60,
+    "attribution": "© Transport for NSW"
+  },
+  {
+    "id": "qld", "name": "QLDTraffic", "region": "Australia · Queensland", "format": "geojson",
+    "urls": ["https://api.qldtraffic.qld.gov.au/v1/webcams?apikey=3e83add325cbb69ac4d8e5bf433d770b"],
+    "fields": {"id": "id", "name": "description", "img": "image_url"},
+    "attribution": "© State of Queensland (TMR)"
+  },
+  {
+    "id": "otcm", "name": "OpenTrafficCamMap (community)", "region": "US · many states", "format": "otcm", "default_off": true,
+    "urls": ["https://raw.githubusercontent.com/AidanWelch/OpenTrafficCamMap/master/cameras/USA.json"],
+    "fields": {"name": "description", "lat": "latitude", "lon": "longitude", "url": "url", "format": "format"},
+    "attribution": "OpenTrafficCamMap contributors (MIT)"
+  }
+]
