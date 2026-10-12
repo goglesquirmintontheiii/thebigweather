@@ -57,6 +57,7 @@ import { MetarPanels } from "./MetarPanels";
 import { TrackPanel } from "./TrackPanel";
 /* data 0.6 */
 import "../overlays/p6defs";
+import "../overlays/p7defs"; // p7: power outages
 import "../grid/contours";
 import { LinesControl } from "./LinesControl";
 import { SpacePanel } from "./SpacePanel";

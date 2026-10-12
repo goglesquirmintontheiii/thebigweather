@@ -16,6 +16,7 @@ pub mod misc;
 pub mod more;
 pub mod noaa;
 pub mod obs;
+pub mod outages;
 pub mod placefile;
 pub mod pws;
 pub mod roads;
@@ -71,6 +72,8 @@ pub struct Overlays {
     pub tornadoes: damage::TornadoDb,
     /// CWOP stations from APRS-IS (`pws`)
     pub pws: pws::Pws,
+    /// utility outage maps (`outages`)
+    pub outages: outages::Outages,
 }
 
 /// Overlays and how long a fetched copy stays fresh (seconds).
@@ -145,6 +148,7 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("climaterec", 6 * 3600),
     ("pws", 30),
     ("swpc", 120),
+    ("outages", 60),
 ];
 
 pub fn ttl(id: &str) -> Option<u64> {
@@ -206,6 +210,7 @@ impl Overlays {
             placefiles: placefile::PlaceCache::default(),
             tornadoes: damage::TornadoDb::default(),
             pws: pws::Pws::default(),
+            outages: outages::Outages::default(),
         })
     }
 
@@ -421,6 +426,7 @@ impl Overlays {
             "climaterec" => climate::records(self, p("date"), p("bbox")).await,
             "pws" => pws::pws(self, p("bbox"), p("minutes")).await,
             "swpc" => space::swpc(self).await,
+            "outages" => outages::outages(self, p("bbox"), p("level")).await,
             _ => bail!("unknown overlay {id}"),
         }
     }
@@ -486,6 +492,7 @@ fn label(id: &str) -> String {
         "climate" | "climaterec" => "Climate data (NOAA RCC ACIS)",
         "pws" => "Personal weather stations (CWOP / APRS-IS)",
         "swpc" => "SWPC space weather",
+        "outages" => "Power outages (utility outage maps)",
         _ => id,
     };
     n.to_string()
