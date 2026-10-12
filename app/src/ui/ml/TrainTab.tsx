@@ -12,85 +12,72 @@ import { TIcon, WhereToggle, Field, Help, fmtDur } from "./common";
 const STATES = "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA PR RI SC SD TN TX UT VT VA WA WV WI WY".split(" ");
 const PLAINS = ["TX", "OK", "KS", "NE", "SD", "ND", "CO", "IA", "MO"];
 const DIXIE = ["LA", "MS", "AL", "TN", "AR", "GA", "KY"];
-const DEF_RADAR = ["REF", "VEL", "SW", "ZDR", "RHO", "KDP", "CREF", "ET", "VIL"];
-const DEF_MRMS = ["MESH", "AzShear_0-2km", "AzShear_3-6km", "RotationTrack60min", "VIL_Density", "EchoTop_50", "MergedReflectivityQCComposite", "PrecipRate", "QPE_01H", "FLASH_CREST_MAXUNITSTREAMFLOW"];
-const DEF_MODEL = ["MLCAPE", "MUCAPE", "SRH_0-1km", "SRH_0-3km", "Shear_0-6km", "STP", "SCP", "LCL", "PWAT", "RH_700", "Wind_10m", "Temp_2m", "Dewpoint_2m", "Vorticity_850", "SST"];
-const RADAR_NAMES: Record<string, string> = { REF: "Reflectivity", VEL: "Velocity", SW: "Spectrum width", ZDR: "ZDR", RHO: "Correlation coef.", KDP: "KDP", PHI: "Diff. phase", CREF: "Composite refl.", ET: "Echo tops", VIL: "VIL", AZSHEAR: "Az. shear (derived)", SRV: "Storm-rel. velocity" };
-const SRC_NAMES: Record<string, string> = {
-  ...RADAR_NAMES,
-  MESH: "MESH (hail size)",
-  "AzShear_0-2km": "Az. shear 0–2 km",
-  "AzShear_3-6km": "Az. shear 3–6 km",
-  RotationTrack60min: "Rotation track 60 min",
-  VIL_Density: "VIL density",
-  EchoTop_50: "50 dBZ echo top",
-  MergedReflectivityQCComposite: "Composite reflectivity",
-  PrecipRate: "Precip rate",
-  QPE_01H: "1-h QPE",
-  FLASH_CREST_MAXUNITSTREAMFLOW: "FLASH unit streamflow",
-  "SRH_0-1km": "SRH 0–1 km",
-  "SRH_0-3km": "SRH 0–3 km",
-  "Shear_0-6km": "Shear 0–6 km",
-  RH_700: "700 hPa RH",
-  Wind_10m: "10 m wind",
-  Temp_2m: "2 m temperature",
-  Dewpoint_2m: "2 m dewpoint",
-  Vorticity_850: "850 hPa vorticity",
-};
+// fallbacks when the catalog doesn't list them (ids as the server knows them)
+const DEF_RADAR = ["REF", "VEL", "SW", "ZDR", "RHO", "PHI", "CREF", "ET", "VIL"];
+const DEF_MRMS = ["azs02", "mesh", "vil", "et18", "cref", "posh", "rot2h", "qpe1h", "qpe6h", "prate"];
+const DEF_MODEL = ["cape", "mucape", "cin", "pwat", "rh700", "absv850", "shear_850_200", "sst", "mslp", "t2m", "rh2m", "wind10"];
+const SRC_NAMES: Record<string, string> = { REF: "Reflectivity", VEL: "Velocity", SW: "Spectrum width", ZDR: "ZDR", RHO: "Correlation coef.", PHI: "Diff. phase", KDP: "KDP", CREF: "Composite refl.", ET: "Echo tops", VIL: "VIL" };
 const opt = (x: string | { id: string; name: string }): [string, string] => (typeof x === "string" ? [x, SRC_NAMES[x] ?? x.replace(/_/g, " ")] : [x.id, x.name]);
 
 const TIME_LIMITS: [string, string][] = [["", "No limit"], ["30", "30 min"], ["60", "1 hour"], ["120", "2 hours"], ["240", "4 hours"], ["480", "8 hours"], ["1440", "24 hours"], ["c", "Custom…"]];
 
-/** client-side filter fields per target (used when the catalog doesn't define its own) */
-const EF = [["-1", "EFU+ (all)"], ["0", "EF0+"], ["1", "EF1+"], ["2", "EF2+ (significant)"], ["3", "EF3+"], ["4", "EF4+"]] as [string, string][];
+/** label filters per target (server ids: labels::Filters) */
+const EF = [["0", "EF0+"], ["1", "EF1+"], ["2", "EF2+ (significant)"], ["3", "EF3+"], ["4", "EF4+"]] as [string, string][];
+const BASINS: [string, string][] = [["al", "Atlantic"], ["ep", "East Pacific"]];
 const FILTERS: Record<string, FilterDef[]> = {
-  tornado: [{ id: "min_ef", name: "Tornado rating", type: "choice", options: EF, default: "0", help: "Only tornadoes rated at least this count as events" }],
-  debris: [{ id: "min_ef", name: "Tornado rating", type: "choice", options: EF, default: "2", help: "Debris signatures usually need EF2+ tornadoes" }],
+  tornado: [{ id: "min_mag", name: "Tornado rating", type: "choice", options: EF, default: 0, help: "Only tornadoes rated at least this count as events" }],
+  debris: [{ id: "min_mag", name: "Tornado rating", type: "choice", options: EF, default: 2, help: "Debris signatures usually need EF2+ tornadoes" }],
+  supercell: [{ id: "min_size_in", name: "Hail at least", type: "number", unit: "in", default: 1.5, min: 0.5, max: 5, step: 0.25 }],
   hail: [{ id: "min_size_in", name: "Hail at least", type: "number", unit: "in", default: 1, min: 0.5, max: 5, step: 0.25 }],
   sighail: [{ id: "min_size_in", name: "Hail at least", type: "number", unit: "in", default: 2, min: 1, max: 6, step: 0.25 }],
-  wind: [
-    { id: "min_gust_mph", name: "Gust at least", type: "number", unit: "mph", default: 58, min: 40, max: 120, step: 1 },
-    { id: "damage_reports", name: "Count damage reports without a measured gust", type: "bool", default: true },
-  ],
-  flashflood: [{ id: "reports_only", name: "Only events with flood reports (not just warnings)", type: "bool", default: false }],
-  tc_genesis: [{ id: "basins", name: "Basins", type: "multi", options: [["AL", "Atlantic"], ["EP", "East Pacific"], ["CP", "Central Pacific"]], default: ["AL", "EP"] }],
-  tc_possible: [
-    { id: "basins", name: "Basins", type: "multi", options: [["AL", "Atlantic"], ["EP", "East Pacific"], ["CP", "Central Pacific"]], default: ["AL", "EP"] },
-    { id: "lead_h", name: "Lead time before genesis", type: "number", unit: "h", default: 48, min: 6, max: 168, step: 6, help: "Disturbances that became a depression within this many hours count as events" },
-  ],
-  wildfire: [{ id: "min_acres", name: "Fire at least", type: "number", unit: "acres", default: 100, min: 1, max: 100000, step: 10 }],
+  wind: [{ id: "min_wind_kt", name: "Wind at least", type: "number", unit: "kt", default: 50, min: 30, max: 120, step: 1 }],
+  tropical_genesis: [{ id: "basins", name: "Basins", type: "multi", options: BASINS, default: ["al", "ep"] }],
+  tropical_possible: [{ id: "basins", name: "Basins", type: "multi", options: BASINS, default: ["al", "ep"] }],
+  wildfire: [{ id: "min_frp", name: "Fire power at least", type: "number", unit: "MW", default: 0, min: 0, max: 1000, step: 5 }],
 };
+const asList = (v: any): string[] => (Array.isArray(v) ? v.map(String) : typeof v === "string" ? v.split(",").map((x) => x.trim()).filter(Boolean) : []);
 
 function defaults(cat: Catalog, target: string, prev?: Partial<TrainSpec>): TrainSpec {
   const t = cat.targets.find((x) => x.id === target) ?? cat.targets[0];
+  const id = t?.id ?? target;
   const cand = t?.candidate ?? "radar_cell";
-  const ls = cat.label_sources.find((x) => x.id === t?.default_labels_source) ?? cat.label_sources.find((x) => x.targets?.includes(target)) ?? cat.label_sources[0];
-  const algo = cat.algos[0];
-  const filters: Record<string, any> = {};
-  for (const f of t?.filters ?? FILTERS[target] ?? []) filters[f.id] = f.default;
-  const yrs = ls?.years ?? [2015, 2024];
   const grid = cand === "grid_point";
+  // a preset for this target carries the server's fully resolved defaults (sources, grid, match…)
+  const pre = cat.presets.find((p) => p.target === id) ?? (id === "tropical_possible" ? cat.presets.find((p) => p.target === "tropical_genesis") : undefined);
+  const base: any = JSON.parse(JSON.stringify(pre?.spec ?? cat.defaults ?? {}));
+  delete base.preset;
+  let ls = asList(t?.default_labels_source);
+  if (!ls.length) ls = [(cat.label_sources.find((x) => x.targets?.includes(id)) ?? cat.label_sources[0])?.id].filter(Boolean) as string[];
+  const algo = cat.algos.find((a) => a.id === base.algo) ?? cat.algos[0];
+  const filters: Record<string, any> = { ...(pre ? base.filters : {}) };
+  for (const f of t?.filters ?? FILTERS[id] ?? []) if (filters[f.id] == null || (Array.isArray(filters[f.id]) && !filters[f.id].length)) filters[f.id] = f.default;
+  const yrs = cat.label_sources.find((x) => x.id === ls[0])?.years ?? [2015, new Date().getFullYear()];
+  const ids = (l: any[] | undefined, d: string[]) => (l ?? d).map((x) => opt(x)[0]);
   return {
+    ...base,
     name: prev?.name ?? "",
-    target: t?.id ?? target,
+    target: id,
     candidate: cand,
-    label_source: ls?.id ?? "",
-    years: [Math.max(yrs[0], yrs[1] - 7), yrs[1]],
-    region: {},
+    label_source: ls,
+    years: pre && Array.isArray(base.years) ? base.years : [Math.max(yrs[0], yrs[1] - 4), yrs[1] - 1],
+    region: base.region ?? {},
     filters,
-    max_events: 400,
-    neg_ratio: 3,
-    null_days: grid ? 20 : 10,
-    match: { radius_km: grid ? 150 : 15, before_min: grid ? 0 : 20, after_min: grid ? 0 : 10 },
-    sources: {
-      radar_products: grid ? [] : (cat.radar_products ?? DEF_RADAR).map((x) => opt(x)[0]).filter((x) => ["REF", "VEL", "ZDR", "RHO", "KDP", "VIL", "ET"].includes(x) || cat.radar_products != null),
-      mrms: grid ? [] : (cat.mrms ?? DEF_MRMS).map((x) => opt(x)[0]).slice(0, 5),
-      metar: !grid || target === "wildfire",
-      model: (cat.model_fields ?? DEF_MODEL).map((x) => opt(x)[0]).slice(0, grid ? 12 : 7),
-    },
+    max_events: base.max_events ?? 400,
+    neg_ratio: base.neg_ratio ?? 3,
+    null_days: base.null_days ?? (grid ? 20 : 10),
+    match: base.match ?? { radius_km: grid ? 150 : 15, before_min: grid ? 0 : 20, after_min: grid ? 0 : 10 },
+    sources: pre
+      ? { radar_products: base.sources?.radar_products ?? [], mrms: base.sources?.mrms ?? [], metar: !!base.sources?.metar, model: base.sources?.model ?? [] }
+      : {
+          radar_products: grid ? [] : ids(cat.radar_products, DEF_RADAR),
+          mrms: grid ? [] : ids(cat.mrms, DEF_MRMS).slice(0, 5),
+          metar: !grid || id === "wildfire",
+          model: grid ? ids(cat.model_fields, DEF_MODEL).slice(0, 12) : [],
+        },
+    features: base.features?.length ? base.features : undefined,
     algo: algo?.id ?? "gbdt",
-    params: Object.fromEntries((algo?.params ?? []).map((p) => [p.id, p.default])),
-    cv_folds: 5,
+    params: { ...Object.fromEntries((algo?.params ?? []).map((p) => [p.id, p.default])), ...(base.params ?? {}) },
+    cv_folds: base.cv_folds ?? 0,
     time_limit_min: null,
   };
 }
@@ -180,7 +167,7 @@ function Quick({ cat }: { cat: Catalog }) {
   const [limit, setLimit] = useState<number | null>(null);
   const [where, setWhere] = useWhere();
   const [busy, setBusy] = useState(false);
-  const autoName = sel ? `${sel.name} · ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}` : "";
+  const autoName = sel ? `${sel.name.replace(/\s*\(.*\)$/, "")} · ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}` : "";
   if (!presets.length) return <div class="ml-empty">The server offers no presets — use Custom.</div>;
   return (
     <div class="ml-quick">
@@ -273,7 +260,10 @@ function FilterInput({ f, value, onChange }: { f: FilterDef; value: any; onChang
   return (
     <Field label={`${f.name}${f.unit ? ` (${f.unit})` : ""}`} help={f.help}>
       {f.type === "choice" ? (
-        <select value={String(v)} onChange={(e) => onChange((e.target as HTMLSelectElement).value)}>
+        <select value={String(v)} onChange={(e) => {
+          const x = (e.target as HTMLSelectElement).value;
+          onChange(/^-?\d+(\.\d+)?$/.test(x) ? +x : x);
+        }}>
           {(f.options ?? []).map(([k, l]) => (
             <option key={k} value={k}>
               {l}
@@ -304,7 +294,7 @@ function Custom({ cat }: { cat: Catalog }) {
   const draft = trainDraft.value;
   const [s, setS] = useState<TrainSpec>(() => {
     const d = defaults(cat, draft?.target ?? cat.targets[0]?.id ?? "tornado", draft ?? undefined);
-    return draft ? ({ ...d, ...draft, match: { ...d.match, ...(draft.match ?? {}) }, sources: { ...d.sources, ...(draft.sources ?? {}) }, region: draft.region ?? {}, filters: { ...d.filters, ...(draft.filters ?? {}) } } as TrainSpec) : d;
+    return draft ? ({ ...d, ...draft, label_source: asList(draft.label_source).length ? asList(draft.label_source) : d.label_source, match: { ...d.match, ...(draft.match ?? {}) }, sources: { ...d.sources, ...(draft.sources ?? {}) }, region: draft.region ?? {}, filters: { ...d.filters, ...(draft.filters ?? {}) } } as TrainSpec) : d;
   });
   useEffect(() => () => void (trainDraft.value = null), []);
   const [where, setWhere] = useWhere();
@@ -313,7 +303,7 @@ function Custom({ cat }: { cat: Catalog }) {
   const tdef = cat.targets.find((t) => t.id === s.target);
   const cand = cat.candidates.find((c) => c.id === s.candidate);
   const lsrcs = cat.label_sources.filter((l) => !l.targets?.length || l.targets.includes(s.target));
-  const ls = cat.label_sources.find((l) => l.id === s.label_source);
+  const lsSel = cat.label_sources.filter((l) => s.label_source.includes(l.id));
   const algo = cat.algos.find((a) => a.id === s.algo);
   const filters = tdef?.filters ?? FILTERS[s.target] ?? [];
   const groups = useMemo(() => {
@@ -327,7 +317,7 @@ function Custom({ cat }: { cat: Catalog }) {
   }, [cand]);
   const allFeat = !s.features;
   const fsel = new Set(s.features ?? []);
-  const yrs = ls?.years ?? [1990, new Date().getFullYear()];
+  const yrs: [number, number] = lsSel.length ? [Math.max(...lsSel.map((l) => l.years[0])), Math.max(...lsSel.map((l) => l.years[1]))] : [1990, new Date().getFullYear()];
   const est = estimateMin(s);
   const pickRegion = async () => {
     const b = await pickBox();
@@ -369,14 +359,17 @@ function Custom({ cat }: { cat: Catalog }) {
                 ))}
               </select>
             </Field>
-            <Field label="Events (labels) from" help={ls?.help ?? "Where the historical 'yes' cases come from: storm reports, warnings, damage surveys, best tracks, fire perimeters…"}>
-              <select value={s.label_source} onChange={(e) => set({ label_source: (e.target as HTMLSelectElement).value })}>
-                {lsrcs.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.name} ({l.years[0]}–{l.years[1]})
-                  </option>
-                ))}
-              </select>
+            <Field label="Events (labels) from" wide help="Where the historical 'yes' cases come from: storm reports, warnings, best tracks, satellite fires… Pick one or more.">
+              <div class="ml-chips">
+                {lsrcs.map((l) => {
+                  const on = s.label_source.includes(l.id);
+                  return (
+                    <button key={l.id} class={`chip ${on ? "on" : ""}`} title={`${l.name} (${l.years[0]}–${l.years[1]})`} onClick={(e) => (e.preventDefault(), set({ label_source: on ? s.label_source.filter((x) => x !== l.id) : [...s.label_source, l.id] }))}>
+                      {l.name.replace(/\s*\(.*\)$/, "")}
+                    </button>
+                  );
+                })}
+              </div>
             </Field>
             <Field label="Years">
               <span class="ml-range">
@@ -466,7 +459,7 @@ function Custom({ cat }: { cat: Catalog }) {
               <Checks all={(cat.mrms ?? DEF_MRMS).map(opt)} sel={s.sources.mrms} onChange={(v) => set({ sources: { ...s.sources, mrms: v } })} cols={2} />
             </div>
             <div>
-              <span class="ml-flabel">Model analysis (RAP/RUC/ERA5)</span>
+              <span class="ml-flabel">Model analysis (GFS)</span>
               <Checks all={(cat.model_fields ?? DEF_MODEL).map(opt)} sel={s.sources.model} onChange={(v) => set({ sources: { ...s.sources, model: v } })} cols={2} />
               <label class="ml-check ml-metar">
                 <input type="checkbox" checked={s.sources.metar} onChange={(e) => set({ sources: { ...s.sources, metar: (e.target as HTMLInputElement).checked } })} /> Nearby METARs (surface obs)
@@ -547,8 +540,8 @@ function Custom({ cat }: { cat: Catalog }) {
                 <ParamInput p={p} value={s.params[p.id]} onChange={(v) => set({ params: { ...s.params, [p.id]: v } })} />
               </Field>
             ))}
-            <Field label="CV folds" help="Cross-validation folds, split by event day so the score reflects unseen storms">
-              <input type="number" min={2} max={20} value={s.cv_folds} onChange={(e) => set({ cv_folds: +(e.target as HTMLInputElement).value })} />
+            <Field label="CV folds" help="0 = one held-out set; 2–10 = cross-validation folds, split by event day so the score reflects unseen storms">
+              <input type="number" min={0} max={10} value={s.cv_folds} onChange={(e) => set({ cv_folds: +(e.target as HTMLInputElement).value })} />
             </Field>
           </div>
         </section>
@@ -575,7 +568,7 @@ function Custom({ cat }: { cat: Catalog }) {
           </div>
           <button
             class="btn ml-start"
-            disabled={busy || !s.target || !s.label_source || (!s.sources.radar_products.length && !s.sources.mrms.length && !s.sources.model.length && !s.sources.metar)}
+            disabled={busy || !s.target || !s.label_source.length || (!s.sources.radar_products.length && !s.sources.mrms.length && !s.sources.model.length && !s.sources.metar)}
             onClick={async () => {
               setBusy(true);
               const body: TrainSpec = { ...s, name: s.name.trim() || `${tmeta(s.target).name} model` };

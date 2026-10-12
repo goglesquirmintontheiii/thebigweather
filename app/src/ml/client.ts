@@ -5,8 +5,8 @@ import { signal, computed } from "@preact/signals";
 import { api, ApiError } from "../api";
 import { settings, activeServer, toast } from "../store";
 import { hasDesktop, localServer, BUILTIN_ID } from "../share/desktop";
-import type { Catalog, Detection, Ep, Job, Model, RunState, TrainSpec } from "./types";
-import { levelOf } from "./targets";
+import type { Catalog, Detection, Ep, Job, Metrics, Model, RunState, TrainSpec } from "./types";
+import { levelOf, normTarget } from "./targets";
 
 // ---------- endpoints ----------
 /** base URL of the app's bundled server once it is known to be running ("" = not running) */
@@ -14,7 +14,7 @@ export const localUrl = signal("");
 export const localState = signal<"off" | "starting" | "on" | "unavailable">("off");
 /** the active server already is the bundled one: "This computer" and "Server" are the same machine */
 export const localIsMain = computed(() => activeServer.value?.id === BUILTIN_ID);
-export const canLocal = () => hasDesktop() && !localIsMain.value;
+export const canLocal = () => hasDesktop() && !localIsMain.value && localState.value !== "unavailable";
 export const EP_NAME: Record<Ep, string> = { main: "Server", local: "This computer" };
 export const epName = (ep: Ep) => (ep === "main" && localIsMain.value ? "This computer" : ep === "main" ? activeServer.value?.name || "Server" : "This computer");
 
@@ -147,19 +147,38 @@ const tms = (v: any): number | undefined => {
   const n = Date.parse(v);
   return Number.isFinite(n) ? n : /^\d+$/.test(v) ? tms(+v) : undefined;
 };
+/** server metrics: list items carry {roc_auc, pr_auc, csi, …}; the full model {eval: {…, confusion,
+ *  reliability[{lo,hi,n,mean_pred,obs_freq}], best_csi_threshold}, dataset: {samples, positives}} */
+function normMetrics(raw: any): Metrics {
+  const r = raw ?? {};
+  const e = r.eval && typeof r.eval === "object" ? r.eval : r;
+  const out: Metrics = { ...e };
+  out.auc = e.auc ?? e.roc_auc ?? undefined;
+  const nn = (v: any) => (v == null || !Number.isFinite(+v) ? undefined : +v);
+  for (const k of ["auc", "pr_auc", "pod", "far", "csi", "brier", "threshold", "best_csi_threshold"] as const) (out as any)[k] = nn((out as any)[k]);
+  out.samples = nn(r.dataset?.samples ?? e.samples ?? e.n);
+  out.positives = nn(r.dataset?.positives ?? e.positives);
+  if (Array.isArray(e.reliability)) out.reliability = e.reliability.map((b: any) => ({ p: num(b.p ?? b.mean_pred), obs: num(b.obs ?? b.obs_freq), n: num(b.n) }));
+  else delete out.reliability;
+  if (r.eval_kind) out.eval_kind = r.eval_kind;
+  return out;
+}
 export function normModel(m: any, ep: Ep): Model {
+  const fs = Array.isArray(m.feature_schema) ? m.feature_schema : Array.isArray(m.feature_schema?.features) ? m.feature_schema.features : undefined;
+  const metrics = normMetrics(m.metrics);
   return {
     ...m,
     id: String(m.id),
     ep,
     name: m.name || "Untitled model",
     labels: Array.isArray(m.labels) ? m.labels.map(String) : [],
-    target: m.target || m.spec?.target || "custom",
+    target: normTarget(m.target || m.spec?.target || "custom"),
     created: tms(m.created),
     updated: tms(m.updated),
-    metrics: m.metrics ?? {},
+    feature_schema: fs,
+    metrics,
     importance: Array.isArray(m.importance) ? m.importance : [],
-    threshold: num(m.threshold, m.metrics?.best_csi_threshold ?? m.metrics?.threshold ?? 0.5),
+    threshold: num(m.threshold, metrics.best_csi_threshold ?? metrics.threshold ?? 0.5),
   };
 }
 export function normJob(j: any, ep: Ep): Job {
@@ -170,9 +189,10 @@ export function normJob(j: any, ep: Ep): Job {
     state: j.state || "queued",
     progress: num(j.progress, 0) > 1 ? num(j.progress) / 100 : num(j.progress, 0),
     started: tms(j.started),
+    finished: tms(j.finished),
     log: Array.isArray(j.log) ? j.log : [],
-    name: j.name ?? j.spec?.name,
-    target: j.target ?? j.spec?.target,
+    name: j.name || j.spec?.name || undefined,
+    target: normTarget(j.target || j.spec?.target || "custom"),
     counts: j.counts ?? {},
   };
 }
@@ -201,7 +221,7 @@ export function normDetection(f: any, ep: Ep): Detection | null {
     ep,
     model_id,
     model_name: p.model_name || "Model",
-    target: p.target || "custom",
+    target: normTarget(p.target || "custom"),
     prob,
     level: p.level === "low" || p.level === "med" || p.level === "high" ? p.level : levelOf(prob),
     site: p.site ?? "",
@@ -211,8 +231,28 @@ export function normDetection(f: any, ep: Ep): Detection | null {
     motion: p.motion && Number.isFinite(+p.motion.dir) ? { dir: +p.motion.dir, kt: num(p.motion.kt) } : undefined,
     lon: c[0],
     lat: c[1],
-    poly: g?.type === "Polygon" ? g.coordinates : g?.type === "MultiPolygon" ? g.coordinates[0] : p.poly ?? undefined,
+    poly: g?.type === "Polygon" ? g.coordinates : g?.type === "MultiPolygon" ? g.coordinates[0] : p.poly ?? (Array.isArray(p.outline) && p.outline.length >= 3 ? [[...p.outline, p.outline[0]]] : undefined),
   };
+}
+/** /api/ml/detections sends each detection as a Point (kind "point") plus, for cells, a Polygon
+ *  (kind "outline", id "<id>-outline"): pair them into one detection (centre + cell box). */
+export function detectionsFromFeatures(feats: any[], ep: Ep): Detection[] {
+  const outlines = new Map<string, any>();
+  for (const f of feats) if (f?.properties?.kind === "outline") outlines.set(String(f.properties.id ?? String(f.id ?? "").replace(/-outline$/, "")), f);
+  const out: Detection[] = [];
+  for (const f of feats) {
+    const p = f?.properties ?? {};
+    if (p.kind === "outline") {
+      // outline without its point (shouldn't happen): use it alone
+      if (feats.some((x) => x !== f && x?.properties?.id === p.id && x?.properties?.kind !== "outline")) continue;
+    }
+    const d = normDetection(f, ep);
+    if (!d) continue;
+    const o = p.kind !== "outline" ? outlines.get(String(p.id ?? f.id ?? "")) : undefined;
+    if (o?.geometry?.type === "Polygon") d.poly = o.geometry.coordinates;
+    out.push(d);
+  }
+  return out;
 }
 
 // ---------- shared state ----------
@@ -246,9 +286,12 @@ export async function loadCatalog(force = false) {
         algos: c.algos ?? [],
         label_sources: c.label_sources ?? [],
         presets: c.presets ?? [],
-        radar_products: c.radar_products,
-        mrms: c.mrms,
-        model_fields: c.model_fields,
+        // server: radar products are fixed; MRMS / model ids come as mrms_fields / model_vars
+        radar_products: c.radar_products ?? (c as any).defaults?.sources?.radar_products,
+        mrms: c.mrms ?? (c as any).mrms_fields,
+        model_fields: c.model_fields ?? (c as any).model_vars,
+        defaults: c.defaults,
+        server: c.server,
       };
       catalogErr.value = "";
       return;
@@ -259,7 +302,9 @@ export async function loadCatalog(force = false) {
   if (!eps.length) catalogErr.value = "No server configured";
 }
 
+let modelsSeq = 0;
 export async function loadModels() {
+  const seq = ++modelsSeq;
   modelsLoading.value = true;
   const out: Model[] = [];
   let err = "";
@@ -275,6 +320,8 @@ export async function loadModels() {
       }
     }),
   );
+  // an older, slower call must not overwrite a newer list (e.g. after an import)
+  if (seq !== modelsSeq) return;
   // keep details already fetched (metrics, importance) for unchanged models
   const old = new Map(models.value.map((m) => [mkey(m), m]));
   models.value = out
@@ -390,7 +437,9 @@ export async function copyModel(m: Model, to: Ep): Promise<Model | null> {
 }
 
 // ---------- jobs ----------
+let jobsSeq = 0;
 export async function loadJobs() {
+  const seq = ++jobsSeq;
   await probeLocal();
   const out: Job[] = [];
   let err = "";
@@ -405,6 +454,7 @@ export async function loadJobs() {
       }
     }),
   );
+  if (seq !== jobsSeq) return;
   // keep logs fetched by loadJob
   const old = new Map(jobs.value.map((j) => [`${j.ep}|${j.id}`, j]));
   jobs.value = out
@@ -458,6 +508,18 @@ export async function jobAction(j: Job, what: "stop" | "delete") {
   }
 }
 
+/** restart an interrupted / failed job (the server answers with a new job id) */
+export async function resumeJob(j: Job) {
+  try {
+    if (j.ep === "local" && !(await ensureLocal())) return;
+    await mlReq(j.ep, "POST", `/api/ml/jobs/${encodeURIComponent(j.id)}/resume`, {});
+    toast("Training resumed · see Jobs");
+    await loadJobs();
+  } catch (e: any) {
+    toast(`Resume failed: ${e.message}`, "error");
+  }
+}
+
 // ---------- runner ----------
 export async function loadRun() {
   await probeLocal();
@@ -466,7 +528,7 @@ export async function loadRun() {
     liveEps().map(async (ep) => {
       try {
         const r = await mlReq<any>(ep, "GET", "/api/ml/run");
-        out[ep] = { enabled: !!r?.enabled, models: (r?.models ?? []).map(String), radars: r?.radars ?? "all", interval_s: r?.interval_s, last_cycle: tms(r?.last_cycle), per_radar: r?.per_radar ?? {} };
+        out[ep] = { enabled: !!r?.enabled, models: (r?.models ?? []).map(String), radars: r?.radars ?? "all", sites: Array.isArray(r?.sites) ? r.sites : undefined, interval_s: r?.interval_s, last_cycle: tms(r?.last_cycle), per_radar: r?.per_radar ?? {} };
       } catch {
         /* no runner */
       }
@@ -486,12 +548,30 @@ export async function setRun(ep: Ep, body: { models: string[]; radars: any; enab
     return false;
   }
 }
+/** Score the newest volume of one radar once (POST /api/ml/run/test); detections are not stored on
+ *  the server — they're merged into the map layer here. */
+export async function testRun(ep: Ep, site: string, ids: string[]): Promise<{ n: number; cells?: number; ms?: number; error?: string } | null> {
+  try {
+    if (ep === "local" && !(await ensureLocal())) return null;
+    const r = await mlReq<any>(ep, "POST", "/api/ml/run/test", { models: ids, site });
+    const list = detectionsFromFeatures(r?.features ?? [], ep);
+    // shown regardless of the volume's age
+    const now = Date.now();
+    mergeDetections(list.map((d) => ({ ...d, key: `test|${d.key}`, test: true, t: Math.max(d.t, now - 60_000) })));
+    const st = r?.stats ?? {};
+    return { n: list.length, cells: st.cells, ms: st.ms, error: st.error };
+  } catch (e: any) {
+    toast(`Test failed: ${e.message}`, "error");
+    return null;
+  }
+}
+
 /** model key → number of radars it runs on */
 export const runningOn = computed(() => {
   const out = new Map<string, number>();
   for (const [ep, st] of Object.entries(runState.value) as [Ep, RunState][]) {
     if (!st?.enabled) continue;
-    const n = Object.keys(st.per_radar ?? {}).length || (Array.isArray(st.radars) ? st.radars.length : 0);
+    const n = st.sites?.length ?? (Object.keys(st.per_radar ?? {}).length || (Array.isArray(st.radars) ? st.radars.length : 0));
     for (const id of st.models) out.set(`${ep}|${id}`, n);
   }
   return out;
@@ -531,11 +611,7 @@ export async function pollDetections() {
       const since = Math.max(Date.now() - detMaxAgeMin.value * 60_000, (lastPoll[ep] ?? 0) - 10 * 60_000);
       try {
         const r = await mlReq<any>(ep, "GET", `/api/ml/detections?since=${Math.round(since)}`);
-        const feats = Array.isArray(r) ? r : r?.features ?? [];
-        for (const f of feats) {
-          const d = normDetection(f, ep);
-          if (d) got.push(d);
-        }
+        got.push(...detectionsFromFeatures(Array.isArray(r) ? r : r?.features ?? [], ep));
         lastPoll[ep] = Date.now();
       } catch (e: any) {
         if (ep === "main") err = e.message;
@@ -569,10 +645,25 @@ export function startDetections(kick = false): () => void {
     }
   };
 }
+// WebSocket pushes (main server): a detection (flat, with lat/lon/outline), a job update, a model change
 api.on("ml_detection", (m) => {
   const f = m.feature ?? m.detection ?? m;
   const list = Array.isArray(m.features) ? m.features : [f];
-  mergeDetections(list.map((x: any) => normDetection(x, "main")).filter(Boolean) as Detection[]);
+  mergeDetections(detectionsFromFeatures(list, "main"));
+});
+let wsModels: number | undefined;
+api.on("ml_model", () => {
+  if (!models.value.length && !mlOpen.value) return;
+  clearTimeout(wsModels);
+  wsModels = window.setTimeout(() => loadModels(), 500);
+});
+api.on("ml_job", (m) => {
+  const id = String(m.id ?? "");
+  const old = jobs.value.find((j) => j.ep === "main" && j.id === id);
+  if (!old) return void (mlOpen.value && loadJobs());
+  // a state change goes through loadJobs (it toasts "Training finished" and refreshes models)
+  if (m.state && m.state !== old.state) return void loadJobs();
+  jobs.value = jobs.value.map((j) => (j === old ? { ...j, phase: m.phase ?? j.phase, progress: m.progress != null ? num(m.progress) : j.progress } : j));
 });
 
 // settings group (store.ts declares `ml?`)

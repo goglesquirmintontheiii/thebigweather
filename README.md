@@ -2,7 +2,7 @@
 
 Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted server that does the heavy lifting.
 
-**Status:** Phase 6 of 7 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE6_CHECKLIST.md](docs/PHASE6_CHECKLIST.md) (covers 0.5.1 and 0.6.0). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+**Status:** Phase 7 of 9 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE7_CHECKLIST.md](docs/PHASE7_CHECKLIST.md). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ## Quick start
 
@@ -25,13 +25,25 @@ On Windows, run `start.cmd` (or `start.ps1 -Help` for options) instead of `start
 ### 2. Desktop app
 
 ```bash
-chmod +x TheBigWeather-0.6.0-x86_64.AppImage
-./TheBigWeather-0.6.0-x86_64.AppImage
+chmod +x TheBigWeather-0.7.0-x86_64.AppImage
+./TheBigWeather-0.7.0-x86_64.AppImage
 ```
 
 On first launch, paste the server URL and token. If the server runs on the same computer, click **Use the server on this computer** — no token needed (turn this off with `local_no_auth = false` under `[server]` in the config).
 
 The UI also works in a browser at the server URL (phones too, until the Android app exists).
+
+## Phase 7 features (0.7.0)
+
+- **Detection models:** train your own detectors for tornadoes, supercells, hail, wind, debris, flash floods, tropical genesis and wildfires on historical radar, MRMS, METAR and GFS data, then run them on any or all US radars. Training and running work on the server or this computer, and models can be exported and imported.
+- **Power outages:** utility outage maps by county, plus outage points.
+- **3D on laptops:** on-screen orbit controls, keys and Shift+drag.
+- **Radio:** small ↔ big player switch.
+- **Also:**
+  - Historical Storms gains a Tornadoes tab.
+  - Space weather gets its own menu, and the stats panel is compact.
+  - Canada station image viewer.
+  - Fixes from the Phase 6 checklist.
 
 ## Phase 6 features (0.6.0)
 

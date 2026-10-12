@@ -1,8 +1,8 @@
 // Detection models → Jobs: training jobs on the server and on this computer, live progress + log.
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { CircleStop, X, ExternalLink, Server, ChevronDown, ChevronRight, Trash2, RefreshCw } from "lucide-preact";
-import { jobs, jobsErr, loadJobs, loadJob, jobAction, selModel, mlTab, models, copyModel, loadModels, localIsMain } from "../../ml/client";
+import { CircleStop, X, ExternalLink, Server, ChevronDown, ChevronRight, Trash2, RefreshCw, RotateCcw } from "lucide-preact";
+import { jobs, jobsErr, loadJobs, loadJob, jobAction, resumeJob, selModel, mlTab, models, copyModel, loadModels, localIsMain } from "../../ml/client";
 import { tmeta } from "../../ml/targets";
 import type { Job } from "../../ml/types";
 import { TIcon, EpBadge, fmtDur, f2 } from "./common";
@@ -16,7 +16,7 @@ const STATE: Record<string, [string, string]> = {
   cancelled: ["Cancelled", "off"],
   interrupted: ["Interrupted", "bad"],
 };
-const PHASE: Record<string, string> = { events: "Finding events", labels: "Collecting labels", fetch: "Downloading data", download: "Downloading data", features: "Extracting features", train: "Training", cv: "Cross-validating", tune: "Tuning", calibrate: "Calibrating", save: "Saving" };
+const PHASE: Record<string, string> = { "collect events": "Finding events", "list volumes": "Listing radar volumes", "fetch & extract": "Downloading radar data", environment: "Environment data", label: "Labelling", events: "Finding events", labels: "Collecting labels", fetch: "Downloading data", download: "Downloading data", features: "Extracting features", train: "Training", cv: "Cross-validating", tune: "Tuning", calibrate: "Calibrating", save: "Saving" };
 
 export function JobsTab() {
   const [open, setOpen] = useState<string>("");
@@ -132,6 +132,11 @@ function JobCard({ j, open, toggle }: { j: Job; open: boolean; toggle: () => voi
               <Server size={13} /> Copy model to the main server
             </button>
           )}
+          {!live && j.resumable && (
+            <button class="btn sm" title="Start again with the same settings (downloaded data is cached)" onClick={() => resumeJob(j)}>
+              <RotateCcw size={13} /> Resume
+            </button>
+          )}
           {!live && (
             <button class="icon-btn danger" title="Remove from the list" onClick={() => jobAction(j, "delete")}>
               <Trash2 size={14} />
@@ -172,9 +177,9 @@ function JobCard({ j, open, toggle }: { j: Job; open: boolean; toggle: () => voi
             {c.positives.toLocaleString()}
           </span>
         )}
-        {j.best && (
-          <span>
-            <small>Best so far</small>AUC {f2(j.best.auc, 3)} · CSI {f2(j.best.csi)}
+        {j.train && live && (
+          <span title="Latest boosting round / epoch; validation loss should keep falling">
+            <small>Iteration {j.train.iteration ?? "—"}</small>loss {f2(j.train.train_loss, 3)} · val {f2(j.train.val_loss, 3)}
           </span>
         )}
         <span>

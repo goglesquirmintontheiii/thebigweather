@@ -438,7 +438,8 @@ function Importance({ m }: { m: Model }) {
 function SpecSummary({ m }: { m: Model }) {
   const s: any = m.spec ?? {};
   const cat = catalog.value;
-  const ls = cat?.label_sources.find((x) => x.id === s.label_source)?.name ?? s.label_source;
+  const lsIds: string[] = Array.isArray(s.label_source) ? s.label_source : typeof s.label_source === "string" ? s.label_source.split(",").filter(Boolean) : [];
+  const ls = lsIds.map((id) => cat?.label_sources.find((x) => x.id === id)?.name.replace(/\s*\(.*\)$/, "") ?? id).join(", ") || undefined;
   const src = s.sources ?? {};
   const rows: [string, string][] = [
     ["Labels from", ls ?? "—"],
@@ -453,9 +454,10 @@ function SpecSummary({ m }: { m: Model }) {
     ["Model fields", src.model?.length ? src.model.join(", ") : "—"],
     ["Features", s.features?.length ? `${s.features.length} selected` : m.feature_schema?.length ? `${m.feature_schema.length} (all)` : "all"],
     ["Algorithm", `${cat?.algos.find((a) => a.id === (s.algo ?? m.algo))?.name ?? s.algo ?? m.algo ?? "—"}${m.params || s.params ? ` (${Object.entries(m.params ?? s.params ?? {}).slice(0, 4).map(([k, v]) => `${k} ${v}`).join(", ")})` : ""}`],
-    ["CV folds", s.cv_folds != null ? String(s.cv_folds) : "—"],
+    ["Validation", s.cv_folds >= 2 ? `${s.cv_folds}-fold CV` : "held-out days"],
   ];
-  if (s.filters && Object.keys(s.filters).length) rows.splice(2, 0, ["Filters", Object.entries(s.filters).map(([k, v]) => `${k} ${Array.isArray(v) ? v.join("/") : v}`).join(", ")]);
+  const fl = Object.entries(s.filters ?? {}).filter(([, v]) => v != null && !(Array.isArray(v) && !v.length));
+  if (fl.length) rows.splice(2, 0, ["Filters", fl.map(([k, v]) => `${k} ${Array.isArray(v) ? v.join("/") : v}`).join(", ")]);
   return (
     <dl class="ml-spec">
       {rows.map(([k, v]) => (

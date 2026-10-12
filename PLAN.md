@@ -4,7 +4,7 @@
 - UI text should be kept short, uncluttered.
 - UI inspired by **RadarOmega**, with features from **RadarScope**.
 - More features = better, but must run well on the user's PC (96GB DDR5, Ryzen 9850X3D, NVMe) **and** on a 4-vCore / 16GB VPS (reduced functionality OK on low end). Use high-end hardware well, but don't continuously max it out.
-- Android app and VR app (Phase 7) are **planned only** — do NOT build until the user asks.
+- Android app and VR app (Phase 9) are **planned only** — do NOT build until the user asks.
 
 ## Stack (agreed)
 | Part | Choice | Why |
@@ -138,7 +138,9 @@ Synoptic, AirNow, aisstream.io, mPING, Spotter Network, EUMETSAT, KMA, Trafikver
 4. **Power features:** multi-pane, drawing, recording (radar + cameras), import/export, pop-out windows, audio alerts, Overpass search, forecast menu, radio menu.
 5. **International & niche radars.**
 6. **New features + Windows** (see "Phase 6 plan" below): a feature-development phase, plus a Windows app (.exe installer) and Windows support for the server.
-7. **Android + VR** — only when the user asks (see "Phase 7 plan").
+7. **Detection models + extras** (see "Phase 7 plan"): severe-weather detection models you train and run yourself, power outages, laptop-friendly 3D, radio player size switch.
+8. **Feature phase** (see "Phase 8 plan").
+9. **Android + VR** — only when the user asks (see "Phase 9 plan").
 
 Each phase ends with a working AppImage + server and a test checklist (from Phase 6 also a Windows .exe).
 
@@ -186,7 +188,56 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 - **Windows server:** build tbw-server for x86_64-pc-windows-msvc. Windows paths, config and data folders under %ProgramData%/TheBigWeather, a `start.ps1` equivalent of `start.sh` (prebuilt binary, optional ffmpeg and yt-dlp via winget, firewall rule, optional Windows service), and HTTPS via Caddy for Windows.
 - **Bundled local server:** the Windows and Linux apps can run a bundled server themselves for one-computer setups, so there is no separate install.
 
-## Phase 7 plan — Android + VR (only when asked)
+## Phase 7 plan — detection models + extras (done in 0.7.0)
+
+- **Detection models menu:**
+  - Create, train, manage and run your own models for tornadoes, supercells, hail, damaging wind, debris, flash floods, tropical genesis / possible formation, and wildfires.
+  - Training uses historical NEXRAD Level II, MRMS, METARs and GFS analyses, with labels from SPC reports, IEM storm reports and warnings, HURDAT2/IBTrACS and NOAA HMS fires.
+  - One-click presets plus a fully custom form.
+  - Training runs on the server or on this computer, has no time limit unless set, and can be stopped early.
+  - Models run on one, several or all US radars (TDWRs included). Detections are drawn with icons, probability rings and cell boxes.
+  - Models can be exported and imported.
+- **Power outages layer:** utility outage maps (KUBRA Storm Center utilities, Duke Energy, Hydro-Québec) as a county choropleth plus outage points.
+- **Better laptop support in 3D:** on-screen orbit controls, keyboard, Shift/Alt+drag, Orbit-drag mode and auto-rotate.
+- **Radio player size switch:** small ↔ big media player without interrupting playback.
+
+## Phase 8 plan — features (proposed)
+
+**Forecasting and verification**
+- **Warning verification:** each warning scored against later storm reports (hit, miss, false alarm, lead time), with per-office and per-season stats in the Historical Storms menu.
+- **Model verification:** for your saved points, past model runs vs observed METARs, ranking which model has been best lately.
+- **Ensemble probability maps:** chance of ≥ X inches of rain or snow, or ≥ Y mph gusts, from GEFS and ECMWF ensemble members (server-side), with a threshold picker.
+- **Severe-weather parameter maps:** SPC-mesoanalysis-style fields from HRRR/RAP — STP, SCP, bulk shear, SRH, lapse rates, DCAPE — plus composite overlays.
+- **Point forecast confidence:** spread between models on the forecast chart, with a plain-language confidence line.
+
+**Radar and detection**
+- **Automatic storm reports from your models:** detections that persist become "model reports" on a timeline, which you can export or share with your team.
+- **Model ensembles and A/B testing:** combine several of your detection models, or compare two on the same historical events (scorecards).
+- **Velocity and differential reflectivity "difference" products:** frame-to-frame change maps (growth/decay) and ZDR columns highlighted as updraft indicators.
+- **Lightning jump detection:** sudden increases in GLM flash rate per storm cell, flagged as a severe precursor.
+- **Radar data quality tools:** a clutter / biological echo filter using dual-pol (toggle) and a beam-blockage map per radar.
+
+**Situational awareness**
+- **Personal dashboard menu:** one screen per saved point with current conditions, warnings, nearby storms with ETA, a 12-hour mini-meteogram, radar thumbnail, AQI and pollen — and a printable or shareable summary card.
+- **Alert timeline:** a scrollable timeline of every warning, watch, MD, report and model detection for an area, with click-to-replay.
+- **Chaser toolkit:** live position sharing with storm-relative motion vectors, a "safe zone" guide (core/hook/inflow areas from the storm's motion), road-network flood and closure warnings along the route, and auto-saved chase logs (GPS + radar + photos).
+- **Shelters and emergency info:** open shelters (FEMA OpenFEMA and Red Cross where public), hospitals, cooling and warming centres near a point.
+- **Earthquake and tsunami alerts:** USGS ShakeMap intensity overlays and NOAA tsunami messages, linked to the seismograph menu.
+
+**Data and media**
+- **Satellite derived products:** GOES fire temperature hotspots, cloud-top cooling (overshooting tops), and fog/low-cloud probability.
+- **Webcam auto-timelapses:** daily timelapses for chosen cameras, with weather-event tags.
+- **Audio radio scanner:** cycle through several NOAA Weather Radio streams and stop on SAME alerts.
+- **Data export:** any layer's current data to CSV/GeoJSON/KML; radar sweeps to NetCDF; cross-sections and charts to PNG/SVG.
+
+**App and platform**
+- **Notification channels:** push to phone via ntfy.sh or Pushover (self-hostable), email (SMTP), Discord and Telegram, all driven by the rules engine on the server so alerts work when the app is closed.
+- **Server-side rules:** the rules engine can also run on the server (24/7), not just in the app.
+- **Multi-user server:** user accounts with roles (owner, member, viewer), per-user settings sync, and an audit log.
+- **Command palette:** Ctrl+K to search every layer, menu, setting, place, radar and command.
+- **Accessibility:** colour-vision-safe palettes everywhere, screen-reader labels, keyboard-only navigation and larger-text mode.
+
+## Phase 9 plan — Android + VR (only when asked)
 
 **Android:** Capacitor app reusing the UI with a mobile layout (see Stack). It adds push alerts for saved points and GPS, background location for "alerts where I am", widgets, and Android Auto / car-friendly mode.
 
@@ -215,7 +266,9 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 - Phase 5 notes: European single-site volumes come from the EUMETNET OPERA open data (24 h) and FMI. Composites cover Canada, Mexico, Japan, Taiwan and the Philippines. Hong Kong, Singapore, Malaysia, India and KMA were left out (licence, no georeferencing, or key). Niche US radars publish no open data.
 - Phase 5: user-tested; fixes and requested changes shipped as 0.5.1.
 - Phase 6: done (0.6.0). Test with `docs/PHASE6_CHECKLIST.md` (also covers 0.5.1). Not done from the Phase 6 list: "Glow" radar style, RTOFS ocean currents (only huge archives on AWS), surf/rip-current forecasts (no keyless source).
-- Next: Phase 7 (Android + VR) only when asked.
+- Phase 6: user-tested; fixes shipped with Phase 7.
+- Phase 7: done (0.7.0). Test with `docs/PHASE7_CHECKLIST.md`, which also lists the Phase 6 items not yet checked. Canada: ECCC sells single-site volumes (cost-recovered); only per-station GIF images and the national composite are open, so Canadian radars stay composite crops plus a per-station image viewer.
+- Next: Phase 8 (features, plan above) when asked. Phase 9 (Android + VR) only when asked.
 
 ---
 

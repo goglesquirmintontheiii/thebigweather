@@ -15,13 +15,16 @@ export const TARGETS: Record<string, TargetMeta> = {
   sighail: { code: "SIGH", name: "Significant hail", color: "#22d3ee" },
   wind: { code: "WIND", name: "Damaging wind", color: "#60a5fa" },
   debris: { code: "TDS", name: "Tornado debris", color: "#c084fc" },
-  flashflood: { code: "FFW", name: "Flash flood", color: "#3b82f6" },
-  tc_genesis: { code: "TCG", name: "Tropical genesis", color: "#f472b6" },
-  tc_possible: { code: "TC?", name: "Possible TC formation", color: "#fb7185" },
+  flash_flood: { code: "FFW", name: "Flash flood", color: "#3b82f6" },
+  tropical_genesis: { code: "TCG", name: "Tropical genesis", color: "#f472b6" },
+  tropical_possible: { code: "TC?", name: "Possible TC formation", color: "#fb7185" },
   wildfire: { code: "FIRE", name: "Wildfire", color: "#fb923c" },
   custom: { code: "DET", name: "Custom", color: "#a3e635" },
 };
-export const tmeta = (t: string): TargetMeta => TARGETS[t] ?? { code: (t || "DET").slice(0, 4).toUpperCase(), name: t || "Custom", color: "#a3e635" };
+/** older client ids → the server's target ids */
+const ALIAS: Record<string, string> = { flashflood: "flash_flood", tc_genesis: "tropical_genesis", tc_possible: "tropical_possible" };
+export const normTarget = (t: string) => ALIAS[t] ?? t;
+export const tmeta = (t: string): TargetMeta => TARGETS[normTarget(t)] ?? { code: (t || "DET").slice(0, 4).toUpperCase(), name: t || "Custom", color: "#a3e635" };
 export const LEVEL_COLOR = { low: "#facc15", med: "#fb923c", high: "#f43f5e" } as const;
 export const LEVEL_NAME = { low: "Low", med: "Moderate", high: "High" } as const;
 export const levelOf = (p: number, thr = 0.5): "low" | "med" | "high" => (p >= Math.max(0.75, thr + 0.25) ? "high" : p >= Math.max(0.5, thr) ? "med" : "low");
@@ -230,13 +233,13 @@ const DRAW: Record<string, Draw> = {
   sighail: hailstone("#22d3ee"),
   wind,
   debris,
-  flashflood: flood,
-  tc_genesis: cyclone("#f9a8d4", false),
-  tc_possible: cyclone("#fda4af", true),
+  flash_flood: flood,
+  tropical_genesis: cyclone("#f9a8d4", false),
+  tropical_possible: cyclone("#fda4af", true),
   wildfire: flame,
   custom: reticle,
 };
-export const drawFor = (t: string): Draw => DRAW[t] ?? reticle;
+export const drawFor = (t: string): Draw => DRAW[normTarget(t)] ?? reticle;
 export const ICON_TARGETS = Object.keys(DRAW);
 
 const R = 2;

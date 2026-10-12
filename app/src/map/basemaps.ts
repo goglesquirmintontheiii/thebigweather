@@ -252,7 +252,7 @@ export const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrariu
 const DEM_ATTR = 'Terrain: <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md">Mapzen / AWS Terrain Tiles</a>';
 
 /** Add/remove the hillshade layer (under the weather layers) and MapLibre 3D terrain. */
-export function applyTerrain(map: MLMap, t: { on: boolean; hillshade: boolean; exag: number; tilt: boolean }, dark: boolean) {
+export function applyTerrain(map: MLMap, t: { on: boolean; hillshade: boolean; exag: number; tilt: boolean }, dark: boolean, keepCamera = false) {
   if (!map.style) return;
   const want = t.on;
   const hsId = "base-wf6-hillshade";
@@ -273,13 +273,16 @@ export function applyTerrain(map: MLMap, t: { on: boolean; hillshade: boolean; e
   } else if (map.getLayer(hsId)) map.removeLayer(hsId);
   if (want && t.tilt) {
     map.setTerrain({ source: "wf6-dem", exaggeration: Math.max(0.5, Math.min(5, t.exag)) });
-    map.setMaxPitch(70);
+    if (!keepCamera || map.getMaxPitch() < 70) map.setMaxPitch(70);
     map.dragRotate.enable();
   } else {
     if (map.getTerrain()) map.setTerrain(null);
-    if (map.getPitch() > 0) map.easeTo({ pitch: 0, bearing: 0, duration: 300 });
-    map.setMaxPitch(0);
-    map.dragRotate.disable();
+    // keepCamera: the 3D view is on and restores pitch / rotation itself when it closes
+    if (!keepCamera) {
+      if (map.getPitch() > 0) map.easeTo({ pitch: 0, bearing: 0, duration: 300 });
+      map.setMaxPitch(0);
+      map.dragRotate.disable();
+    }
   }
   if (!want) {
     if (map.getSource("wf6-dem-hs") && !map.getLayer(hsId)) map.removeSource("wf6-dem-hs");

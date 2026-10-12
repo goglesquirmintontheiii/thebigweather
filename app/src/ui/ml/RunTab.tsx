@@ -3,8 +3,8 @@
 
 import { signal } from "@preact/signals";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { Power, MousePointerClick, RefreshCw, Crosshair, AlertTriangle } from "lucide-preact";
-import { models, loadModels, runState, loadRun, setRun, detections, startDetections, detStatus, mkey, mlTab, mlPrefs, canLocal, epName, localIsMain } from "../../ml/client";
+import { Power, MousePointerClick, RefreshCw, Crosshair, AlertTriangle, FlaskConical } from "lucide-preact";
+import { models, loadModels, runState, loadRun, setRun, testRun, detections, startDetections, detStatus, mkey, mlTab, mlPrefs, canLocal, localIsMain } from "../../ml/client";
 import { tmeta, LEVEL_COLOR } from "../../ml/targets";
 import { pickRadars, usSites, pickMode } from "../../ml/pick";
 import { settings, update } from "../../store";
@@ -30,7 +30,8 @@ function radarsOf(st?: RunState): { mode: RMode; states: string[]; picked: strin
   if (r && Array.isArray(r.states)) return { mode: "states", states: r.states, picked: [] };
   return { mode: "all", states: [], picked: [] };
 }
-const INTERVALS: [number, string][] = [[0, "Every new volume"], [120, "2 min"], [300, "5 min"], [600, "10 min"]];
+// the runner checks each radar for a new volume every interval_s (server: 15–3600 s, default 60)
+const INTERVALS: [number, string][] = [[60, "Every new volume"], [120, "2 min"], [300, "5 min"], [600, "10 min"]];
 
 export function RunTab() {
   const [where, setWhere0] = useState<Ep>(mlPrefs().runWhere === "local" && canLocal() ? "local" : "main");
@@ -40,7 +41,8 @@ export function RunTab() {
   const [mode, setMode] = useState<RMode>("all");
   const [states, setStates] = useState<string[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
-  const [interval, setIntv] = useState(0);
+  const [interval, setIntv] = useState(60);
+  const [test, setTest] = useState<{ busy?: boolean; text?: string }>({});
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     loadModels();
@@ -55,7 +57,7 @@ export function RunTab() {
     setMode(r.mode);
     setStates(r.states);
     setPicked(r.picked);
-    setIntv(st?.interval_s ?? 0);
+    setIntv(st?.interval_s ?? 60);
     if (preset.value) {
       setSel(preset.value.filter((k) => k.startsWith(`${where}|`)).map((k) => k.split("|")[1]));
       preset.value = null;
@@ -80,9 +82,17 @@ export function RunTab() {
   })();
   const apply = async (enabled: boolean) => {
     setBusy(true);
-    const ok = await setRun(where, { models: sel, radars: radars(), enabled, interval_s: interval || undefined });
+    const ok = await setRun(where, { models: sel, radars: radars(), enabled, interval_s: interval });
     setBusy(false);
     if (ok && enabled) enableDetectionLayer();
+  };
+  const cellModels = sel.filter((id) => mine.find((m) => m.id === id)?.candidate !== "grid_point");
+  const site = settings.value.radar.site;
+  const runTest = async () => {
+    setTest({ busy: true, text: `Scoring the newest ${site} volume…` });
+    const r = await testRun(where, site, cellModels);
+    if (r) enableDetectionLayer();
+    setTest({ text: !r ? "" : r.error ? `${site}: ${r.error}` : `${site}: ${r.cells ?? "?"} cells, ${r.n} detection${r.n === 1 ? "" : "s"}${r.ms != null ? ` · ${r.ms} ms` : ""}${r.n ? " · shown on the map" : ""}` });
   };
   const per = Object.entries(st?.per_radar ?? {}).sort((a, b) => +!!b[1].error - +!!a[1].error || (b[1].detections ?? 0) - (a[1].detections ?? 0) || a[0].localeCompare(b[0]));
   const c = mapRef.value?.getCenter();
@@ -101,7 +111,7 @@ export function RunTab() {
                 Running {st.models.length} model{st.models.length === 1 ? "" : "s"} on {Object.keys(st.per_radar ?? {}).length || "…"} radars{st.last_cycle ? ` · last cycle ${fmtAge(st.last_cycle)}` : ""}
               </span>
             ) : (
-              <span>Not running on {epName(where).toLowerCase() === "this computer" ? "this computer" : "the server"}</span>
+              <span>Not running on {where === "local" || localIsMain.value ? "this computer" : "the server"}</span>
             )}
           </div>
         </div>
@@ -187,6 +197,9 @@ export function RunTab() {
             </select>
           </Field>
           <div class="ml-run-btns">
+            <button class="btn ghost" disabled={busy || test.busy || !cellModels.length || !site} title={cellModels.length ? `Run the selected radar-cell models once on the newest ${site} volume and show the result on the map` : "Select a radar-cell model"} onClick={runTest}>
+              <FlaskConical size={14} /> {test.busy ? "Testing…" : `Test on ${site || "radar"}`}
+            </button>
             {st?.enabled && (
               <button class="btn ghost" disabled={busy} onClick={() => apply(false)}>
                 <Power size={14} /> Disable
@@ -197,6 +210,7 @@ export function RunTab() {
             </button>
           </div>
         </div>
+        {test.text && <div class="muted small ml-test-res">{test.text}</div>}
       </div>
 
       <div class="ml-run-out">

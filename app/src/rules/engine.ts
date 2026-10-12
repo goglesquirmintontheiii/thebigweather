@@ -197,7 +197,7 @@ export async function check(r: Rule): Promise<Hit | null> {
       const minp = (c.value ?? 50) / 100;
       const cut = Date.now() - 20 * 60_000;
       for (const d of dets) {
-        if (d.t < cut || d.prob < minp || (c.model && d.model_id !== c.model)) continue;
+        if (d.test || d.t < cut || d.prob < minp || (c.model && d.model_id !== c.model)) continue;
         for (const l of locs) {
           const dist = distance(l.lat, l.lon, d.lat, d.lon);
           if (dist <= R) {

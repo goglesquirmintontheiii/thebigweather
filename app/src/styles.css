@@ -9713,3 +9713,8 @@ html[data-theme="light"] .same-foot .same-hide.on {
     bottom: 150px;
   }
 }
+
+/* the … menu sits above centre windows while open */
+.bottom-dock:has(.toolbar-wrap.menu-open) {
+  z-index: 40;
+}

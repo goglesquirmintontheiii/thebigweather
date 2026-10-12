@@ -47,14 +47,27 @@ export function removeGeo(id: string) {
 
 export function attachWf6(m: MLMap) {
   map = m;
-  const terrain = () => applyTerrain(m, settings.value.wf6.terrain, isDarkBasemap(settings.value.basemap, settings.value.customBasemaps));
+  // terrain inputs only: the effect must not re-run (and flatten the camera) on unrelated settings
+  // changes such as the view save after every move
+  const sig = () => {
+    const s = settings.peek();
+    return JSON.stringify([s.wf6.terrain, isDarkBasemap(s.basemap, s.customBasemaps)]);
+  };
+  const terrain = () => {
+    const s = settings.peek();
+    // 3D volume view owns the camera (pitch / rotation) while it is on
+    applyTerrain(m, s.wf6.terrain, isDarkBasemap(s.basemap, s.customBasemaps), s.view3d.on);
+  };
   m.on("style.load", () => {
     for (const [id, d] of defs) add(id, d);
     terrain();
   });
+  let last = "";
   effect(() => {
-    void settings.value.wf6.terrain;
-    void settings.value.basemap;
+    void settings.value;
+    const k = sig();
+    if (k === last) return;
+    last = k;
     if (m.isStyleLoaded() || m.getLayer("ovl-states")) terrain();
   });
   attachPrecipFx(m);

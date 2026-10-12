@@ -104,7 +104,7 @@ export function Toolbar() {
   // a tool inside the menu is active
   const moreOn = t === "bearing" || t === "xsect" || crosshair.value || settings.value.ui.cursorValue || !!xsLine.value || trackPanel.value || loopDialog.value || !!loopProgress.value;
   return (
-    <div class="toolbar-wrap">
+    <div class={`toolbar-wrap ${more ? "menu-open" : ""}`}>
       {t === "measure" && (
         <div class="tool-readout glass">
           {measurePts.value.length < 2 ? "Click points to measure · right-click to finish" : `Total ${fmtDist(measureTotal())}`}

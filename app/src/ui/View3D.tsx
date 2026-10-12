@@ -356,11 +356,14 @@ function exit(map: MLMap) {
   for (const id of ["radar", "grid"]) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "visible");
   const s = saved;
   saved = null;
-  map.easeTo({ pitch: s?.pitch ?? 0, bearing: s?.bearing ?? 0, duration: 600, padding: { top: 0, bottom: 0, left: 0, right: 0 } });
+  // terrain tilt may have been toggled while 3D was on: its current state decides the 2D limits
+  const t = settings.peek().wf6.terrain;
+  const tilt = t.on && t.tilt;
+  map.easeTo({ pitch: tilt ? s?.pitch ?? 0 : 0, bearing: tilt ? s?.bearing ?? 0 : 0, duration: 600, padding: { top: 0, bottom: 0, left: 0, right: 0 } });
   map.once("moveend", () => {
     if (token !== modeToken) return;
-    map.setMaxPitch(s?.maxPitch ?? 0);
-    if (!s?.rotate) {
+    map.setMaxPitch(tilt ? 70 : 0);
+    if (!tilt) {
       map.dragRotate.disable();
       map.touchZoomRotate.disableRotation();
     }
@@ -523,9 +526,7 @@ function capture(e: PointerEvent) {
   }
 }
 
-/** The terrain code (basemaps.applyTerrain, run from wf6map on every style load and on every settings
- *  change) eases the camera flat, sets maxPitch to 0 and turns rotation off. In 3D that froze the view
- *  ("can't change the viewing angle"). While 3D is on, those resets are ignored (guardPitch). */
+/** after a style load (terrain re-applied): make sure the 3D camera limits still hold */
 function navReassert(map: MLMap) {
   if (!layer) return;
   if (map.getMaxPitch() < MAXP) map.setMaxPitch(MAXP);
@@ -533,32 +534,6 @@ function navReassert(map: MLMap) {
   map.touchZoomRotate.enableRotation();
   map.boxZoom.disable();
 }
-let guarded: MLMap | null = null;
-/** While 3D is on, ignore the terrain code's camera resets (they arrive on every settings change). */
-function guardPitch(map: MLMap) {
-  if (guarded) return;
-  guarded = map;
-  const m = map as any;
-  const setMax = map.setMaxPitch, ease = map.easeTo, rotOff = map.dragRotate.disable, touchOff = map.touchZoomRotate.disableRotation;
-  m.setMaxPitch = (v?: number | null) => setMax.call(map, layer && (v == null || v < MAXP) ? MAXP : v);
-  // applyTerrain's flatten: easeTo({ pitch: 0, bearing: 0, duration: 300 }) and nothing else
-  m.easeTo = (o: any, ev?: any) => {
-    if (layer && o && o.pitch === 0 && o.bearing === 0 && o.center === undefined && o.zoom === undefined && o.padding === undefined) return map;
-    return ease.call(map, o, ev);
-  };
-  m.dragRotate.disable = () => (layer ? undefined : rotOff.call(map.dragRotate));
-  m.touchZoomRotate.disableRotation = () => (layer ? undefined : touchOff.call(map.touchZoomRotate));
-}
-function unguardPitch(map: MLMap) {
-  if (guarded !== map) return;
-  guarded = null;
-  const m = map as any;
-  delete m.setMaxPitch;
-  delete m.easeTo;
-  delete m.dragRotate.disable;
-  delete m.touchZoomRotate.disableRotation;
-}
-
 let drag: { x: number; y: number; moved: boolean } | null = null;
 let swallowClick = false;
 const onDown = (e: MouseEvent) => {
@@ -672,7 +647,6 @@ function navAttach(map: MLMap) {
   if (saved) saved.box = map.boxZoom.isEnabled();
   map.boxZoom.disable();
   map.dragRotate.enable();
-  guardPitch(map);
 }
 function navDetach(map: MLMap) {
   const el = map.getContainer();
@@ -681,7 +655,6 @@ function navDetach(map: MLMap) {
   el.removeEventListener("wheel", onWheel, true);
   window.removeEventListener("keydown", onKey, true);
   onDragUp();
-  unguardPitch(map);
   if (saved?.box !== false) map.boxZoom.enable();
 }
 
