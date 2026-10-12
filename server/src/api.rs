@@ -69,7 +69,7 @@ fn bad(msg: &str) -> ApiError {
 }
 
 /// True for requests made directly from this machine (not forwarded by a proxy like Caddy).
-fn is_local(req: &Request) -> bool {
+pub(crate) fn is_local(req: &Request) -> bool {
     let direct = !req.headers().contains_key("x-forwarded-for") && !req.headers().contains_key("forwarded") && !req.headers().contains_key("x-real-ip");
     let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0.ip());
     direct && peer.map(|ip| ip.is_loopback()).unwrap_or(false)
@@ -172,10 +172,12 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/rec/{id}/file/{name}", get(rec_file))
         .route("/rec/{id}/timelapse", get(rec_timelapse))
         .route("/ws", get(ws))
+        // local admin API (Server settings): loopback only, see admin.rs
+        .merge(crate::admin::router(st.clone()))
         .layer(DefaultBodyLimit::max(400 * 1024 * 1024))
         .route_layer(middleware::from_fn_with_state(st.clone(), auth));
 
-    let web_dir = st.cfg.read().server.web_dir.clone();
+    let web_dir = crate::config::paths().web;
     let static_files = tower_http::services::ServeDir::new(&web_dir)
         .fallback(tower_http::services::ServeFile::new(web_dir.join("index.html")));
 
@@ -196,7 +198,8 @@ async fn health(State(st): St) -> Json<Value> {
     Json(json!({"ok": true, "app": "thebigweather", "version": VERSION, "name": st.cfg.read().server.name}))
 }
 
-async fn info(State(st): St) -> Json<Value> {
+async fn info(State(st): St, req: Request) -> Json<Value> {
+    let same_host = is_local(&req);
     let c = st.cfg.read();
     let keys: HashMap<&str, bool> = Keys::NAMES.iter().map(|k| (*k, c.keys.get(k).map(|v| !v.is_empty()).unwrap_or(false))).collect();
     Json(json!({
@@ -208,6 +211,7 @@ async fn info(State(st): St) -> Json<Value> {
         "keys_set": keys,
         "google_maps_key": c.keys.google_maps,
         "live_sites": st.live.active_sites(),
+        "same_host": same_host,
     }))
 }
 

@@ -5,8 +5,6 @@ import { fmtDist } from "../util";
 import { Play, Pause, LocateFixed, Camera, Compass, Crosshair, Ruler, RadioTower, PenTool, MousePointer2 } from "lucide-preact";
 import * as maplibregl from "maplibre-gl";
 import { DrawBar } from "./DrawBar";
-import { Box } from "lucide-preact"; // 3D
-import { toggle3D } from "./View3D"; // 3D
 import { PaneButton } from "./Panes";
 import { ScreenRecButton } from "./ScreenRecButton";
 import { CalendarClock } from "lucide-preact"; // history
@@ -137,7 +135,6 @@ export function Toolbar() {
         {btn(t === "measure", "Measure distance (M)", () => (tool.value = t === "measure" ? "none" : "measure"), <Ruler size={19} />)}
         <PaneButton />
         {btn(t === "draw", "Drawing mode (D)", () => (tool.value = t === "draw" ? "none" : "draw"), <PenTool size={19} />)}
-        {/* 3D */ btn(settings.value.view3d.on, "3D radar volume (Shift+3)", toggle3D, <Box size={19} />)}
         {btn(
           more || moreOn,
           "More tools",

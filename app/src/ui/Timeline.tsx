@@ -2,7 +2,7 @@
 // or time span, and the history picker.
 
 import { useRef, useState, useEffect } from "preact/hooks";
-import { frameIndex, playing, stepFrame, historyEnd, FPS_STEPS } from "../anim";
+import { frameIndex, playing, stepFrame, historyEnd, FPS_STEPS, playback } from "../anim";
 import { histPicker } from "../history";
 import { HistoryBadge } from "./HistoryBar";
 import { liveSweep, pinned, backToLatest } from "../radar/controller";
@@ -26,7 +26,7 @@ const UNITS: [string, number][] = [
   ["days", 1440],
 ];
 
-function fpsLabel(f: number) {
+export function fpsLabel(f: number) {
   return f < 1 ? `${f} fps` : `${f % 1 ? f.toFixed(1) : f} fps`;
 }
 
@@ -96,6 +96,8 @@ export function Timeline() {
   const track = useRef<HTMLDivElement>(null);
   const drag = useRef(false);
   const wheelAcc = useRef(0);
+  const hp = histPicker.value;
+  useEffect(() => void (hp && setPop(null)), [hp]); // loop and history settings: one popup at a time
   const hist = historyEnd.value;
   const prog = loadProgress.value;
   const showBars = settings.value.ui.loadBars;
@@ -117,11 +119,13 @@ export function Timeline() {
       {pop && (
         <div class="tl-pop glass">
           <div class="tl-pop-head">
-            <b>Animation</b>
+            <b>Loop settings</b>
+            <span class="muted small">live data</span>
             <button class="icon-btn" onClick={() => setPop(null)}>
               <X size={14} />
             </button>
           </div>
+          {hist && <p class="tl-note small">History mode is on: it uses its own range, frame step and speed (calendar → History). These loop settings come back when you return to live.</p>}
           <FramesBox />
         </div>
       )}
@@ -170,15 +174,21 @@ export function Timeline() {
           <SkipForward size={14} />
         </button>
         <span class="tl-sep" />
-        <button class={`tl-btn ${pop === "frames" ? "on" : ""}`} onClick={() => (setPop(pop === "frames" ? null : "frames"), (histPicker.value = false))} title="Frames, time span and speed">
+        <button class={`tl-btn loop-btn ${pop === "frames" ? "on" : ""} ${hist ? "dim" : ""}`} onClick={() => (setPop(pop === "frames" ? null : "frames"), (histPicker.value = false))} title={hist ? "Loop settings (live): not used while history mode is on" : "Loop settings (live): frames or time span, speed, pause on last"}>
           <SlidersHorizontal size={13} />
-          <span>{settings.value.anim.mode === "time" && !hist ? spanLabel(settings.value.anim.minutes) : `${n}`}</span>
-          <span class="muted">· {fpsLabel(settings.value.anim.fps)}</span>
+          {hist ? (
+            <span>Loop</span>
+          ) : (
+            <>
+              <span>{settings.value.anim.mode === "time" ? spanLabel(settings.value.anim.minutes) : `${n}`}</span>
+              <span class="muted">· {fpsLabel(playback().fps)}</span>
+            </>
+          )}
         </button>
         {hist ? (
           <HistoryBadge />
         ) : (
-          <button class={`tl-btn ${histPicker.value ? "on" : ""}`} onClick={() => (histPicker.value = !histPicker.value)} title="Historical mode: pick a date and time range">
+          <button class={`tl-btn ${histPicker.value ? "on" : ""}`} onClick={() => (histPicker.value = !histPicker.value, setPop(null))} title="History: pick a date and time range to replay">
             <CalendarClock size={13} />
           </button>
         )}

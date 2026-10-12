@@ -1,6 +1,8 @@
 // Drawing mode: freehand, lines, arrows, rectangles, circles, polygons and text, anchored to
 // map coordinates. Undo/redo, brush size and color, clear all, and optionally keep drawings
-// after leaving drawing mode (each kept drawing gets an × to delete it).
+// after leaving drawing mode. Every shape made in one drawing session (opening drawing mode →
+// closing it, or until "New drawing") belongs to one drawing (`group`), which gets a single ×
+// at its top-right corner that deletes the whole drawing.
 
 import { signal, effect } from "@preact/signals";
 import * as maplibregl from "maplibre-gl";
@@ -20,7 +22,11 @@ export interface Drawing {
   text?: string;
   /** arrow head polygon */
   head?: [number, number][];
+  /** the drawing (session) this shape belongs to; older shapes without one stand alone */
+  group?: string;
 }
+
+const groupOf = (d: Drawing) => d.group ?? d.id;
 
 export const drawTool = signal<DrawKind>("free");
 export const drawStyle = signal({ color: "#ff3b30", width: 3, fill: false });
@@ -30,6 +36,30 @@ const undoStack: Drawing[][] = [];
 const redoStack: Drawing[][] = [];
 export const canUndo = signal(false);
 export const canRedo = signal(false);
+/** the drawing new shapes join (null until drawing mode opens) */
+export const currentGroup = signal<string | null>(null);
+
+/** Start a separate drawing: later shapes form their own group with their own ×, and undo/redo
+ * only steps through the new drawing. */
+export function newDrawing() {
+  finishPoly();
+  currentGroup.value = uid();
+  undoStack.length = 0;
+  redoStack.length = 0;
+  canUndo.value = canRedo.value = false;
+  render();
+}
+
+/** shapes in the current drawing (for the bar's counter) */
+export function currentCount(): number {
+  const g = currentGroup.value;
+  return g ? drawings.value.filter((d) => d.group === g).length : 0;
+}
+
+function group(): string {
+  if (!currentGroup.value) currentGroup.value = uid();
+  return currentGroup.value;
+}
 
 let map: MLMap | null = null;
 let preview: Drawing | null = null;
@@ -40,6 +70,9 @@ const EMPTY = { type: "FeatureCollection", features: [] } as any;
 export const COLORS = ["#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#00c7be", "#0a84ff", "#bf5af2", "#ffffff", "#111111"];
 
 function commit(next: Drawing[]) {
+  const g = group();
+  const had = new Set(drawings.value.map((d) => d.id));
+  next = next.map((d) => (d.group || had.has(d.id) ? d : { ...d, group: g })); // new shapes join the current drawing
   undoStack.push(drawings.value);
   if (undoStack.length > 100) undoStack.shift();
   redoStack.length = 0;
@@ -100,28 +133,41 @@ function render() {
   refreshMarkers();
 }
 
-/** Delete buttons on kept drawings (only outside drawing mode). */
+/** One delete button per drawing, at the top-right corner of its bounding box. */
+let markerKey: [Drawing[] | null, boolean, string | null, MLMap | null] = [null, false, null, null];
 function refreshMarkers() {
+  const drawingMode = tool.value === "draw";
+  // previews re-render on every mouse move: rebuild the buttons only when something they show changed
+  const key: typeof markerKey = [drawings.value, drawingMode, currentGroup.value, map];
+  if (key.every((v, i) => v === markerKey[i])) return;
+  markerKey = key;
   for (const m of markers) m.remove();
   markers = [];
-  if (!map || tool.value === "draw") return;
+  if (!map) return;
+  const boxes = new Map<string, { x: number; y: number; n: number }>();
   for (const d of drawings.value) {
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const [x, y] of d.coords) {
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
+    const g = groupOf(d);
+    const b = boxes.get(g) ?? { x: -Infinity, y: -Infinity, n: 0 };
+    for (const [x, y] of [...d.coords, ...(d.head ?? [])]) {
+      if (x > b.x) b.x = x;
+      if (y > b.y) b.y = y;
     }
-    if (!Number.isFinite(maxX)) continue;
+    b.n++;
+    boxes.set(g, b);
+  }
+  for (const [g, b] of boxes) {
+    if (!Number.isFinite(b.x)) continue;
+    const cur = drawingMode && g === currentGroup.value;
     const el = document.createElement("button");
-    el.className = "draw-x";
-    el.title = "Delete drawing";
+    el.className = `draw-x${cur ? " cur" : ""}`;
+    el.title = `Delete this drawing (${b.n} shape${b.n === 1 ? "" : "s"})${cur ? " — the one you're drawing" : ""}`;
     el.textContent = "×";
+    el.onmousedown = (e) => e.stopPropagation();
     el.onclick = (e) => {
       e.stopPropagation();
-      commit(drawings.value.filter((x) => x.id !== d.id));
+      commit(drawings.value.filter((x) => groupOf(x) !== g));
     };
-    markers.push(new maplibregl.Marker({ element: el, anchor: "bottom-left", offset: [4, -4] }).setLngLat([maxX, maxY]).addTo(map));
+    markers.push(new maplibregl.Marker({ element: el, anchor: "bottom-left", offset: [4, -4] }).setLngLat([b.x, b.y]).addTo(map));
   }
 }
 
@@ -284,6 +330,7 @@ export function attachDraw(m: MLMap) {
 }
 
 // map interactions follow the tool: drawing tools take the left mouse button
+let wasOn = false;
 effect(() => {
   const on = tool.value === "draw";
   const t = drawTool.value;
@@ -297,9 +344,12 @@ effect(() => {
     map.doubleClickZoom.enable();
   }
   map.getCanvas().style.cursor = drawing ? (t === "erase" ? "not-allowed" : t === "text" ? "text" : "crosshair") : "";
+  if (on && !wasOn) newDrawing(); // every drawing session is a separate drawing
+  wasOn = on;
   if (!on) {
     active = null;
     preview = null;
+    currentGroup.value = null;
     // leaving drawing mode: keep or drop the drawings
     if (!settings.value.drawKeep && drawings.value.length) {
       drawings.value = [];

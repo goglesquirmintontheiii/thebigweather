@@ -1,5 +1,6 @@
-// NASA GIBS imagery layers (GeoColor, RGB composites, Himawari): one raster source per frame so
-// animation just flips opacities and tiles stay cached.
+// NASA GIBS imagery layers (GeoColor, RGB composites, Himawari) and EUMETView WMS: one raster source
+// per frame (per coverage part), bounded to the satellite's disc and capped at its native level.
+// Only one complete image time is ever drawn; far frames are visibility:none so they fetch nothing.
 
 import { signal, effect } from "@preact/signals";
 import type { Map as MLMap } from "maplibre-gl";
@@ -114,10 +115,47 @@ function clear(m: MLMap) {
   for (const id of Object.keys(style.sources)) if (id.startsWith("gibs-")) m.removeSource(id);
 }
 
+/** Geostationary coverage discs (lon/lat boxes; MapLibre bounds can't cross the antimeridian, so
+ * a disc that does is split into two sources). Polar/global layers have no bounds. */
+function coverage(g: (typeof GIBS)[number]): [number, number, number, number][] | null {
+  if (g.sat === "19") return [[-156, -81, 6, 81]];
+  if (g.sat === "18") return [[-180, -81, -56, 81], [142, -81, 180, 81]];
+  if (g.sat === "himawari") return [[59, -81, 180, 81], [-180, -81, -138, 81]];
+  if (g.sat === "meteosat") return g.layer.startsWith("msg_iodc") ? [[-36, -81, 127, 81]] : [[-81, -81, 81, 81]];
+  return null;
+}
+
+/** Layer ids (one per coverage part) of frame i. */
+let parts = 1;
+const lid = (i: number, p: number) => `wx-gibs-${i}${p ? `-${p}` : ""}`;
+const sid = (i: number, p: number) => `gibs-${i}${p ? `-${p}` : ""}`;
+
+/** Frames whose tiles for the current view have fully arrived (cleared when the view moves). */
+const ready = new Set<number>();
+
+/** Render count when each frame was last opened: MapLibre only marks a source "used" (and reports
+ * real tile state) after the next render, before that an unused source claims to be loaded. */
+let renders = 0;
+const opened = new Map<number, number>();
+
+function frameLoaded(m: MLMap, i: number): boolean {
+  if ((opened.get(i) ?? Infinity) >= renders) return false;
+  try {
+    for (let p = 0; p < parts; p++) {
+      if (!m.getSource(sid(i, p)) || m.getLayoutProperty(lid(i, p), "visibility") === "none") return false;
+      if (!m.isSourceLoaded(sid(i, p))) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 let buildGen = 0;
 async function build() {
   const gen = ++buildGen;
   held = -1;
+  ready.clear();
   const m = map;
   if (!m || !m.getStyle()) return;
   const w = settings.value.weather;
@@ -132,71 +170,110 @@ async function build() {
   const info = await resolve(g);
   if (gen !== buildGen || !m.getStyle()) return;
   clear(m);
+  ready.clear();
+  opened.clear();
+  held = -1;
   const end = historyEnd.value;
   const stepMs = g.step * 60_000;
   const n = g.step >= 1440 ? Math.min(settings.value.grid.frames, 10) : framesToRequest(Math.min(settings.value.grid.frames, 24), g.step, 36);
   const h = histRange.value;
   // history: the window's image times (every step, or a multiple of it to stay under the cap)
   const ts = h && g.step < 1440 ? histTimes(h.start, h.end, g.step, 36) : times(n, end ? Math.floor(end / stepMs) * stepMs : info.newest, g.step);
+  const cov = coverage(g);
+  parts = cov ? cov.length : 1;
   ts.forEach((t, i) => {
     const tiles = g.wms
       ? [`${g.wms}?service=WMS&version=1.3.0&request=GetMap&layers=${encodeURIComponent(g.layer)}&styles=&format=image/png&transparent=true&crs=EPSG:3857&bbox={bbox-epsg-3857}&width=256&height=256&time=${iso(t)}`]
       : [`${BASE}/${g.layer}/default/${gtime(t, g.step)}/GoogleMapsCompatible_Level${g.level}/{z}/{y}/{x}.${info.format}`];
-    m.addSource(`gibs-${i}`, {
-      type: "raster",
-      tiles,
-      tileSize: 256,
-      maxzoom: g.level,
-      attribution: g.attribution ? `Imagery: ${g.attribution}` : "Imagery: NASA EOSDIS GIBS",
-    });
-    m.addLayer({ id: `wx-gibs-${i}`, type: "raster", source: `gibs-${i}`, paint: { "raster-opacity": 0, "raster-fade-duration": 0 } }, before());
+    for (let p = 0; p < parts; p++) {
+      m.addSource(sid(i, p), {
+        type: "raster",
+        tiles,
+        tileSize: 256,
+        // the layer's native matrix level: MapLibre overzooms past it instead of asking for tiles that don't exist
+        maxzoom: g.level,
+        ...(cov ? { bounds: cov[p] } : {}),
+        attribution: g.attribution ? `Imagery: ${g.attribution}` : "Imagery: NASA EOSDIS GIBS",
+      });
+      // every frame starts hidden (no tile requests); show() opens the current one and a short preload window
+      m.addLayer({ id: lid(i, p), type: "raster", source: sid(i, p), layout: { visibility: "none" }, paint: { "raster-opacity": 0, "raster-fade-duration": 0 } }, before());
+    }
   });
   gibsTimes.value = ts;
   frameCount.value = ts.length;
-  setFrameReady((i) => {
-    try {
-      return !!m.getSource(`gibs-${i}`) && m.isSourceLoaded(`gibs-${i}`);
-    } catch {
-      return false;
-    }
-  });
+  setFrameReady((i) => ready.has(i) || (frameLoaded(m, i) && (ready.add(i), true)));
   frameIndex.value = ts.length - 1;
+  shownSig = "";
   show();
 }
 
+/** Show exactly one complete image time. The current frame and the next 1-3 are "visible" at
+ * opacity 0 so MapLibre fetches their tiles; until the current one has every tile for the view
+ * the previous complete frame stays up, so frames of different times never mix. */
 function show() {
   const m = map;
   const n = gibsTimes.value.length;
-  if (!m || !n) return;
+  if (!m || !n || !m.getLayer(lid(0, 0))) return;
   const op = settings.value.grid.opacity;
   const cur = Math.min(frameIndex.value, n - 1);
-  const sig = `${cur}|${op}`;
-  if (sig === shownSig) return;
-  shownSig = sig;
-  let loaded = false;
-  try {
-    loaded = m.isSourceLoaded(`gibs-${cur}`);
-  } catch {
-    /* not added yet */
+  const ahead = playing.value ? 3 : 1;
+  const want = new Set<number>([cur]);
+  for (let k = 1; k <= ahead && k < n; k++) want.add((cur + k) % n);
+  // open the preload window first so the current frame's loaded state is meaningful
+  for (let i = 0; i < n; i++)
+    for (let p = 0; p < parts; p++) {
+      const vis = want.has(i) || i === held ? "visible" : "none";
+      if (m.getLayoutProperty(lid(i, p), "visibility") !== vis) {
+        m.setLayoutProperty(lid(i, p), "visibility", vis);
+        if (vis === "visible") opened.set(i, renders);
+      }
+      if (vis === "none") ready.delete(i); // its tiles go back to the cache; re-check when it's reopened
+    }
+  const loaded = ready.has(cur) || frameLoaded(m, cur);
+  if (loaded && held !== cur && held >= 0 && !want.has(held)) {
+    // the previously held frame is no longer needed on screen
+    for (let p = 0; p < parts; p++) m.setLayoutProperty(lid(held, p), "visibility", "none");
+    ready.delete(held);
   }
-  // hold the previous image underneath until the new one has its tiles
-  const hold = !loaded && held >= 0 && held !== cur ? held : -1;
-  for (let i = 0; i < n; i++) {
-    if (!m.getLayer(`wx-gibs-${i}`)) continue;
-    // keep the next frames at a hair of opacity so their tiles are requested before they're needed
-    const ahead = (i - cur + n) % n;
-    m.setPaintProperty(`wx-gibs-${i}`, "raster-opacity", i === cur || i === hold ? op : ahead > 0 && ahead <= 2 ? 0.01 : 0);
+  if (loaded) {
+    ready.add(cur);
+    held = cur;
   }
-  if (loaded) held = cur;
-  else
-    m.once("idle", () => {
-      shownSig = "";
-      show();
-    });
+  const visible = loaded ? cur : held >= 0 ? held : cur; // first load: only the current time ever draws
+  const sig = `${cur}|${visible}|${op}`;
+  if (sig !== shownSig) {
+    shownSig = sig;
+    for (let i = 0; i < n; i++) for (let p = 0; p < parts; p++) m.setPaintProperty(lid(i, p), "raster-opacity", i === visible ? op : 0);
+  }
+}
+
+/** Tiles arriving or the view moving re-evaluate which frame can be shown. */
+let hooked: MLMap | null = null;
+function hook(m: MLMap) {
+  if (hooked === m) return;
+  hooked = m;
+  m.on("render", () => void renders++);
+  m.on("sourcedata", (e: { sourceId?: string; isSourceLoaded?: boolean }) => {
+    if (!e.sourceId?.startsWith("gibs-") || settings.value.weather.kind !== "gibs") return;
+    const i = Number(e.sourceId.split("-")[1]);
+    if (frameLoaded(m, i)) ready.add(i);
+    if (i === Math.min(frameIndex.value, gibsTimes.value.length - 1)) show();
+  });
+  m.on("idle", () => {
+    if (settings.value.weather.kind === "gibs") show();
+  });
+  // a new view needs new tiles: only frames that are being fetched can be ready again
+  m.on("moveend", () => {
+    if (settings.value.weather.kind !== "gibs") return;
+    ready.clear();
+    if (held >= 0) ready.add(held); // keep showing what is on screen while the rest catches up
+    show();
+  });
 }
 
 export function attachGibs(m: MLMap, beforeFn: () => string | undefined) {
   map = m;
+  hook(m);
   before = beforeFn;
 }
 
@@ -219,6 +296,7 @@ effect(() => {
 
 effect(() => {
   void frameIndex.value;
+  void playing.value;
   void settings.value.grid.opacity;
   if (settings.value.weather.kind === "gibs") show();
 });

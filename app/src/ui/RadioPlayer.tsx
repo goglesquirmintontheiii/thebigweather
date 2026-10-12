@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { players, closePlayer, type PlayerWin } from "../radio";
 import { X, Play, Pause, RotateCcw, Radio, Circle, Square, Download, Volume2, VolumeX } from "lucide-preact";
 import { fmtBytes } from "../util";
+import { ToolButtons, SamePanel, TranscriptPanel } from "./RadioTools";
 
 let z = 60;
 
@@ -23,10 +24,10 @@ function Player({ w }: { w: PlayerWin }) {
   const p = w.p;
   const s = p.snap.value;
   useEffect(() => {
-    p.audio.muted = muted;
+    p.setMuted(muted);
   }, [muted]);
   const onDown = (e: PointerEvent) => {
-    if ((e.target as HTMLElement).closest("button,input")) return;
+    if ((e.target as HTMLElement).closest("button,input,select,.rp-txbox,.rp-samelog")) return;
     const el = ref.current!;
     setZ(++z);
     const ox = e.clientX - el.offsetLeft;
@@ -108,6 +109,9 @@ function Player({ w }: { w: PlayerWin }) {
         )}
         <small class="muted rp-info">{s.mode === "dvr" ? `${s.type.replace("audio/", "").toUpperCase()} · ${s.kbps} kbps` : s.mode === "hls" ? "HLS" : s.mode === "plain" ? "Plain" : ""}</small>
       </div>
+      <ToolButtons p={p} />
+      <SamePanel p={p} />
+      <TranscriptPanel p={p} />
     </div>
   );
 }

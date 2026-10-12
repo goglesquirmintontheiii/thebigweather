@@ -404,6 +404,8 @@ export function refreshOverlay(id: string) {
 // ---------- history replay ----------
 /** each overlay layer's own filter, combined with the replay time filter */
 const baseFilter = new Map<string, any>();
+/** history 0.6: which feed data (window|time) each replayed overlay shows */
+const histRaw = new Map<string, { k: string }>();
 function histKey() {
   const h = histRange.value;
   return h ? `${h.start}-${h.end}` : "";
@@ -413,16 +415,24 @@ async function fetchHistOverlay(id: string, def: OverlayDef) {
   const hf = histFeedFor(def);
   if (!hf) return;
   const key = histKey();
+  const rm = hf.roundMs ?? 300_000; // history 0.6: METARs are fetched per hour (cached)
+  const at = hf.kind === "valid" ? Math.round(histTime.value / rm) * rm : undefined;
+  const raw0 = histRaw.get(id);
+  if (raw0 && raw0.k === `${key}|${at}` && data.has(id)) return; // same feed data already shown (e.g. same METAR hour)
   setStatus(id, { loading: true });
   try {
-    let fc = await histFeed(hf.feed, hf.kind === "valid" ? Math.round(histTime.value / 300_000) * 300_000 : undefined);
+    const raw = await histFeed(hf.feed, at, hf.param);
     if (!isOn(id) || key !== histKey()) return;
+    let fc = raw;
     if (def.prepare) fc = def.prepare(fc, optsFor(def)); // derived features (storm arrows) in replay too
+    histRaw.set(id, { k: `${key}|${at}` });
     setData(id, fc);
     applyHistFilter(id);
-    setStatus(id, { count: fc._count ?? fc.features?.length ?? 0, note: "Replay" });
+    setStatus(id, { count: fc._count ?? fc.features?.length ?? 0, note: hf.roundMs ? `Replay · ${new Date(at!).toISOString().slice(11, 16)}Z` : "Replay" });
   } catch (e: any) {
-    setStatus(id, { error: e.message });
+    histRaw.delete(id);
+    if (hf.errNote) setData(id, EMPTY); // history 0.6: degrade gracefully (no stale live data)
+    setStatus(id, { error: hf.errNote ? `${hf.errNote} (${e.message})` : e.message });
   }
 }
 

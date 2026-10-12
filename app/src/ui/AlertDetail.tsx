@@ -6,6 +6,8 @@ import { fmtTime } from "../util";
 import { zoomToGeometry } from "./panels/AlertsPanel";
 import { X, Maximize2, ChevronLeft, ChevronRight, ExternalLink } from "lucide-preact";
 import { useEffect } from "preact/hooks";
+import { History } from "lucide-preact"; // history 0.6
+import { replayAlert, beforeAfter } from "../histsearch"; // history 0.6
 
 function AlertBody({ id, nav }: { id: string; nav: any }) {
   const a = alerts.value.get(id);
@@ -31,6 +33,10 @@ function AlertBody({ id, nav }: { id: string; nav: any }) {
           </div>
           {nav}
         </div>
+        {/* history 0.6: replay this alert's event ± before/after */}
+        <button class="btn sm ghost ad-replay" title={`Replay this in history mode: from ${beforeAfter().before} min before it began to ${beforeAfter().after} min after it ended, on the nearest radar (change in Historical Storms)`} onClick={() => replayAlert(a)}>
+          <History size={13} /> Replay this
+        </button>
         <button class="icon-btn" title="Zoom to" onClick={() => zoomToGeometry(a.geometry)}>
           <Maximize2 size={15} />
         </button>

@@ -47,6 +47,8 @@ export interface OvlSettings {
   refresh?: number;
   /** draw above the radar/weather layer instead of below */
   top?: boolean;
+  /** starred in the Layers menu (0.6) */
+  fav?: boolean;
 }
 
 /** A camera or stream the user placed on the map (YouTube, HLS, image or web page). */
@@ -156,7 +158,9 @@ export interface Settings {
   notify: { mode: "points" | "all" | "off"; warningsOnly: boolean; desktop: boolean };
   points: SavedPoint[];
   view: { center: [number, number]; zoom: number };
-  panels: { stats: { open: boolean; x: number; y: number } };
+  panels: { stats: { open: boolean; x: number; y: number }; /* shake/stats/server 0.6 */ appstats?: { open: boolean; x: number; y: number } };
+  /* shake/stats/server 0.6: Seismographs window (favourite stations as "NET.STA") */
+  shake?: { favs: string[] };
   /* 3D volume view (ui/View3D.tsx) */
   view3d: { on: boolean; src: "radar" | "mrms"; thr: Record<string, number>; density: number; exag: number; res: "lo" | "hi"; floor: boolean; smooth: boolean; shade: boolean };
   /* legend, panes, keys: value filter per legend key (gate.ts) and layer shortcuts (keybinds.ts) */
@@ -172,6 +176,13 @@ export interface Settings {
   /** notify when a storm cell's path reaches a saved point */
   etaNotify: boolean;
   /* ---------- end workflow ---------- */
+  /* ---------- history 0.6 ---------- */
+  /** history-mode playback (independent of the live loop's `anim`): frame step in minutes (0 = every
+   * volume/frame), max frames, speed; before/after = minutes around an alert or storm to replay */
+  hist: { step: number; maxFrames: number; fps: number; dwellMs: number; before: number; after: number };
+  /** history ranges opened recently (Historical Storms → Recent) */
+  histRecent: { label: string; kind: "range" | "warning" | "tropical"; start: number; end: number; site?: string; bbox?: [number, number, number, number]; at: number; ref?: string }[];
+  /* ---------- end history 0.6 ---------- */
 }
 
 const DEFAULTS: Settings = {
@@ -207,7 +218,8 @@ const DEFAULTS: Settings = {
   notify: { mode: "points", warningsOnly: true, desktop: true },
   points: [],
   view: { center: [-97.3, 35.3], zoom: 6.4 },
-  panels: { stats: { open: true, x: -1, y: 70 } },
+  panels: { stats: { open: true, x: -1, y: 70 }, appstats: { open: false, x: -1, y: 300 } /* shake/stats/server 0.6 */ },
+  shake: { favs: [] } /* shake/stats/server 0.6 */,
   /* 3D volume view */
   view3d: { on: false, src: "radar", thr: {}, density: 1, exag: 4, res: "lo", floor: false, smooth: true, shade: true },
   /* legend, panes, keys */
@@ -220,6 +232,8 @@ const DEFAULTS: Settings = {
   srv: { on: false, mode: "auto", dir: 60, speed: 15 },
   etaNotify: false,
   /* ---------- end workflow ---------- */
+  hist: { step: 0, maxFrames: 200, fps: 8, dwellMs: 1000, before: 30, after: 30 }, // history 0.6
+  histRecent: [], // history 0.6
 };
 
 const KEY = "tbw.settings.v1";

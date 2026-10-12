@@ -13,7 +13,6 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct VolEntry {
@@ -117,6 +116,18 @@ impl<V: Clone> SizedLru<V> {
     fn get(&mut self, k: &str) -> Option<V> {
         self.map.get(k).map(|(v, _)| v.clone())
     }
+    fn clear(&mut self) {
+        self.map.clear();
+        self.bytes = 0;
+    }
+    fn trim(&mut self) {
+        while self.bytes > self.cap {
+            match self.map.pop_lru() {
+                Some((_, (_, s))) => self.bytes -= s,
+                None => break,
+            }
+        }
+    }
     fn put(&mut self, k: String, v: V, size: usize) {
         if let Some((_, s)) = self.map.put(k, (v, size)) {
             self.bytes -= s;
@@ -149,14 +160,14 @@ pub struct RadarService {
     pub cache_dir: PathBuf,
     pub upload_dir: PathBuf,
     pub local_dir: Option<PathBuf>,
-    pub disk_cap: u64,
+    pub disk_cap: std::sync::atomic::AtomicU64,
     volumes: Mutex<SizedLru<Arc<Volume>>>,
     encoded: Mutex<SizedLru<Bytes>>,
     /// 3D volumes (header + voxels), byte-capped
     vol3d: Mutex<SizedLru<Bytes>>,
     /// rotation GeoJSON per volume key
     rotation: Mutex<lru::LruCache<String, Bytes>>,
-    decode_sem: Arc<Semaphore>,
+    decode: crate::caches::Limiter,
     pub health: Arc<Health>,
     pub l3_catalog: Vec<serde_json::Value>,
     /// European ODIM_H5 single-site volumes
@@ -224,15 +235,84 @@ impl RadarService {
             cache_dir,
             upload_dir,
             local_dir,
-            disk_cap,
-            volumes: Mutex::new(SizedLru::new(memory_mb * 1024 * 1024 * 3 / 4)),
-            encoded: Mutex::new(SizedLru::new(memory_mb * 1024 * 1024 / 4)),
-            vol3d: Mutex::new(SizedLru::new((memory_mb * 1024 * 1024 / 8).clamp(16 << 20, 64 << 20))),
+            disk_cap: std::sync::atomic::AtomicU64::new(disk_cap),
+            volumes: Mutex::new(SizedLru::new(0)),
+            encoded: Mutex::new(SizedLru::new(0)),
+            vol3d: Mutex::new(SizedLru::new(0)),
             rotation: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(48).unwrap())),
-            decode_sem: Arc::new(Semaphore::new(threads.max(1))),
+            decode: crate::caches::Limiter::new(threads),
             health,
             l3_catalog,
         }
+        .with_budget(memory_mb)
+    }
+
+    fn with_budget(self, memory_mb: usize) -> Self {
+        self.set_budget(memory_mb);
+        self
+    }
+
+    /// Byte caps of the radar memory caches from the radar share of the budget (MB):
+    /// 3D volumes take 1/8 (16-512 MB), then decoded volumes 70% and encoded sweeps 30%.
+    pub fn set_budget(&self, memory_mb: usize) {
+        let total = memory_mb.max(64) * 1024 * 1024;
+        let v3 = (total / 8).clamp(16 << 20, 512 << 20);
+        let rest = total.saturating_sub(v3);
+        {
+            let mut g = self.volumes.lock();
+            g.cap = rest * 7 / 10;
+            g.trim();
+        }
+        for (m, cap) in [(&self.encoded, rest * 3 / 10), (&self.vol3d, v3)] {
+            let mut g = m.lock();
+            g.cap = cap;
+            g.trim();
+        }
+        let n = (memory_mb / 32).clamp(48, 1024);
+        self.rotation.lock().resize(std::num::NonZeroUsize::new(n).unwrap());
+    }
+
+    /// Concurrent decodes (CPU share); applies as running work finishes.
+    pub fn set_threads(&self, n: usize) {
+        self.decode.resize(n);
+    }
+
+    pub fn cache_stats(&self) -> Vec<crate::caches::CacheInfo> {
+        use crate::caches::CacheInfo;
+        let (vb, vn, vc) = {
+            let g = self.volumes.lock();
+            (g.bytes, g.map.len(), g.cap)
+        };
+        let (eb, en, ec) = {
+            let g = self.encoded.lock();
+            (g.bytes, g.map.len(), g.cap)
+        };
+        let (tb, tn, tc) = {
+            let g = self.vol3d.lock();
+            (g.bytes, g.map.len(), g.cap)
+        };
+        let (rb, rn) = {
+            let g = self.rotation.lock();
+            (g.iter().map(|(_, b)| b.len()).sum::<usize>(), g.len())
+        };
+        vec![
+            CacheInfo::mem("radar-volumes", "Radar volumes (decoded)", vb, vn, vc),
+            CacheInfo::mem("radar-sweeps", "Radar sweeps (encoded)", eb, en, ec),
+            CacheInfo::mem("radar-3d", "Radar 3D volumes / cross-sections", tb, tn, tc),
+            CacheInfo::mem("radar-rotation", "Rotation detections", rb, rn, 0),
+        ]
+    }
+
+    /// Clear one memory cache by id (true if the id is a radar cache).
+    pub fn clear_cache(&self, id: &str) -> bool {
+        match id {
+            "radar-volumes" => self.volumes.lock().clear(),
+            "radar-sweeps" => self.encoded.lock().clear(),
+            "radar-3d" => self.vol3d.lock().clear(),
+            "radar-rotation" => self.rotation.lock().clear(),
+            _ => return false,
+        }
+        true
     }
 
     // ---------- listing ----------
@@ -396,7 +476,7 @@ impl RadarService {
         }
         if let Some((src, site, files)) = odim {
             let raws = self.odim.fetch(src, &files).await?;
-            let _permit = self.decode_sem.clone().acquire_owned().await?;
+            let _permit = self.decode.sem.clone().acquire_owned().await?;
             if let Some(v) = self.volumes.lock().get(id) {
                 return Ok(v);
             }
@@ -408,7 +488,7 @@ impl RadarService {
             return Ok(vol);
         }
         let raw = self.raw(key).await?;
-        let _permit = self.decode_sem.clone().acquire_owned().await?;
+        let _permit = self.decode.sem.clone().acquire_owned().await?;
         if let Some(v) = self.volumes.lock().get(key) {
             return Ok(v);
         }
@@ -466,7 +546,7 @@ impl RadarService {
             return Ok(b);
         }
         let v = self.volume_id(key, &id, odim).await?;
-        let _permit = self.decode_sem.clone().acquire_owned().await?;
+        let _permit = self.decode.sem.clone().acquire_owned().await?;
         if let Some(b) = self.vol3d.lock().get(&ck) {
             return Ok(b);
         }
@@ -482,7 +562,7 @@ impl RadarService {
             return Ok(b.clone());
         }
         let v = self.volume_id(key, &id, odim).await?;
-        let _permit = self.decode_sem.clone().acquire_owned().await?;
+        let _permit = self.decode.sem.clone().acquire_owned().await?;
         let k = key.to_string();
         let b = Bytes::from(tokio::task::spawn_blocking(move || serde_json::to_vec(&super::rotation::geojson(&v, &k))).await??);
         self.rotation.lock().put(id, b.clone());
@@ -492,7 +572,7 @@ impl RadarService {
     /// Vertical cross-section of one moment (see `volume3d::xsection` for the format).
     pub async fn xsection(&self, key: &str, moment: &str, x: super::volume3d::XSec) -> Result<Bytes> {
         let v = self.volume(key).await?;
-        let _permit = self.decode_sem.clone().acquire_owned().await?;
+        let _permit = self.decode.sem.clone().acquire_owned().await?;
         let moment = moment.to_string();
         Ok(Bytes::from(tokio::task::spawn_blocking(move || super::volume3d::xsection(&v, &moment, &x)).await??))
     }
@@ -635,7 +715,7 @@ impl RadarService {
         tokio::spawn(async move {
             loop {
                 let dir = me.cache_dir.clone();
-                let cap = me.disk_cap;
+                let cap = me.disk_cap.load(Ordering::Relaxed);
                 let _ = tokio::task::spawn_blocking(move || evict(&dir, cap)).await;
                 tokio::time::sleep(std::time::Duration::from_secs(300)).await;
             }

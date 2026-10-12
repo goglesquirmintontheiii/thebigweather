@@ -17,10 +17,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Hosts the image proxy will fetch from (https only).
-pub const ALLOWED_HOSTS: &[&str] = &["www.jma.go.jp", "geo.weather.gc.ca", "maps.dwd.de", "smn.conagua.gob.mx", "cdn.panahon.gov.ph", "panahon.gov.ph"];
+pub const ALLOWED_HOSTS: &[&str] = &["www.jma.go.jp", "geo.weather.gc.ca", "dd.weather.gc.ca", "dd.meteo.gc.ca", "maps.dwd.de", "smn.conagua.gob.mx", "cdn.panahon.gov.ph", "panahon.gov.ph"];
 
 const LIST_TTL: Duration = Duration::from_secs(180);
-const IMG_CACHE_BYTES: usize = 48 * 1024 * 1024;
 const IMG_MAX_BYTES: usize = 12 * 1024 * 1024;
 const HISTORY_MS: i64 = 3 * 3_600_000;
 
@@ -40,7 +39,87 @@ const SOURCES: &[(&str, &str)] = &[
     ("dwd", "Germany DWD radar"),
     ("pagasa", "Philippines PAGASA radar"),
     ("smn", "Mexico SMN radars"),
+    ("eccc", "Canada single-site radars (ECCC)"),
 ];
+
+const DATAMART: &str = "https://dd.weather.gc.ca/today/radar";
+/// Canadian S-band radars: (id, name, province, lat, lon).
+pub const ECCC_SITES: &[(&str, &str, &str, f64, f64)] = &[
+    ("CASAG", "Aldergrove", "BC", 49.01662, -122.48698),
+    ("CASBE", "Bethune", "SK", 50.57118, -105.18290),
+    ("CASBV", "Blainville", "QC", 45.70634, -73.85852),
+    ("CASBI", "Britt", "ON", 45.79317, -80.53385),
+    ("CASCV", "Carvel", "AB", 53.56056, -114.14495),
+    ("CASCM", "Chipman", "NB", 46.22232, -65.69924),
+    ("CASCL", "Cold Lake", "AB", 54.3785, -110.061378),
+    ("CASDR", "Dryden", "ON", 49.85823, -92.79698),
+    ("CASET", "Exeter", "ON", 43.37243, -81.38070),
+    ("CASFM", "Fort McMurray", "AB", 56.375642, -111.215177),
+    ("CASFW", "Foxwarren", "MB", 50.54887, -101.08570),
+    ("CASFT", "Franktown", "ON", 45.04101, -76.11617),
+    ("CASGO", "Gore", "NS", 45.09850, -63.70433),
+    ("CASHP", "Halfmoon Peak", "BC", 49.527017, -123.853583),
+    ("CASHR", "Holyrood", "NL", 47.32644, -53.12658),
+    ("CASKR", "King City", "ON", 43.96393, -79.57388),
+    ("CASLA", "Landrienne", "QC", 48.55136, -77.80809),
+    ("CASMM", "Marble Mountain", "NL", 48.93028, -57.83417),
+    ("CASMB", "Marion Bridge", "NS", 45.94972, -60.20521),
+    ("CASMA", "Mont Apica", "QC", 47.977908, -71.430833),
+    ("CASMR", "Montreal River", "ON", 47.24773, -84.59652),
+    ("CASSS", "Silver Star", "BC", 50.36950, -119.06436),
+    ("CASPG", "Prince George", "BC", 53.61308, -122.95441),
+    ("CASRA", "Radisson", "SK", 52.52048, -107.44269),
+    ("CASSF", "Sainte-Françoise", "QC", 46.449556, -71.913831),
+    ("CASSU", "Schuler", "AB", 50.31250, -110.19556),
+    ("CASRF", "Smooth Rock Falls", "ON", 49.28146, -81.79406),
+    ("CASSR", "Spirit River", "AB", 55.69494, -119.23043),
+    ("CASSM", "Strathmore", "AB", 51.20613, -113.39937),
+    ("CASSN", "Superior West", "ON", 48.595876, -89.100129),
+    ("CASVD", "Val d'Irène", "QC", 48.48028, -67.60111),
+    ("CASWL", "Woodlands", "MB", 50.15389, -97.77833),
+    ("CASTS", "Egbert (test)", "ON", 44.2305662, -79.7803300),
+];
+/// Range drawn around each Canadian radar (km)
+const ECCC_RANGE_KM: f64 = 240.0;
+
+/// [w, s, e, n] box of `km` around a point.
+pub fn site_bounds(lat: f64, lon: f64, km: f64) -> [f64; 4] {
+    let dlat = km / 111.2;
+    let dlon = km / (111.32 * lat.to_radians().cos().max(0.05));
+    [lon - dlon, lat - dlat, lon + dlon, lat + dlat]
+}
+
+/// GeoMet GetMap for one frame cropped to `b` (EPSG:4326; WMS 1.3.0 axis order lat,lon).
+fn wms_getmap_4326(base: &str, layer: &str, b: [f64; 4], t: i64) -> String {
+    format!(
+        "{base}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS={layer}&STYLES=&CRS=EPSG:4326&BBOX={:.4},{:.4},{:.4},{:.4}&WIDTH=640&HEIGHT=640&FORMAT=image/png&TRANSPARENT=TRUE&TIME={}",
+        b[1], b[0], b[3], b[2], iso(t)
+    )
+}
+
+/// Per-site GIF frames in a Datamart directory listing (DPQPE or CAPPI):
+/// (time ms, file name, "rain" | "snow"), ascending; contingency composites are skipped.
+pub fn datamart_frames(html: &str, site: &str) -> Vec<(i64, String, &'static str)> {
+    let mut out = vec![];
+    for part in html.split("href=\"").skip(1) {
+        let Some(name) = part.split('"').next() else { continue };
+        let name = name.rsplit('/').next().unwrap_or(name);
+        if !name.ends_with(".gif") || !name.contains(site) || name.contains("Contingency") || name.contains("A11Y") || !name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        let precip = if lower.contains("snow") { "snow" } else if lower.contains("rain") { "rain" } else { continue };
+        // 20201106T1050Z_MSC_Radar-DPQPE_CASBE_Rain.gif | 202010061050_CASFT_CAPPI_1.5_RAIN.gif
+        let stamp = name.split('_').next().unwrap_or("");
+        let t = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%MZ").or_else(|_| chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%d%H%M"));
+        if let Ok(t) = t {
+            out.push((t.and_utc().timestamp_millis(), name.to_string(), precip));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    out.dedup_by(|a, b| a.1 == b.1);
+    out
+}
 
 pub struct IntlRadar {
     http: reqwest::Client,
@@ -48,6 +127,7 @@ pub struct IntlRadar {
     lists: Mutex<HashMap<String, (Instant, Value)>>,
     inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     imgs: Mutex<(lru::LruCache<String, (Instant, Bytes, String)>, usize)>,
+    img_cap: std::sync::atomic::AtomicUsize,
 }
 
 /// Percent-encode a whole URL for use as a query value.
@@ -166,7 +246,38 @@ impl IntlRadar {
             lists: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashMap::new()),
             imgs: Mutex::new((lru::LruCache::unbounded(), 0)),
+            img_cap: std::sync::atomic::AtomicUsize::new(48 << 20),
         })
+    }
+
+    /// Image cache cap from the "other" memory share (MB): 40%, 48 MB-1 GB.
+    pub fn set_budget(&self, other_mb: usize) {
+        let cap = (other_mb * 1024 * 1024 * 4 / 10).clamp(48 << 20, 1 << 30);
+        self.img_cap.store(cap, std::sync::atomic::Ordering::Relaxed);
+        self.trim_imgs();
+    }
+
+    fn trim_imgs(&self) {
+        let cap = self.img_cap.load(std::sync::atomic::Ordering::Relaxed);
+        let mut c = self.imgs.lock();
+        while c.1 > cap {
+            match c.0.pop_lru() {
+                Some((_, (_, old, _))) => c.1 -= old.len(),
+                None => break,
+            }
+        }
+    }
+
+    pub fn cache_stats(&self) -> crate::caches::CacheInfo {
+        let c = self.imgs.lock();
+        crate::caches::CacheInfo::mem("intl-images", "International radar images", c.1, c.0.len(), self.img_cap.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn clear_cache(&self) {
+        let mut c = self.imgs.lock();
+        c.0.clear();
+        c.1 = 0;
+        self.lists.lock().clear();
     }
 
     async fn get(&self, url: &str, timeout: u64) -> Result<reqwest::Response> {
@@ -186,7 +297,7 @@ impl IntlRadar {
     pub async fn list(self: &Arc<Self>, id: Option<&str>) -> Result<Value> {
         let ids: Vec<&str> = match id {
             Some(i) => {
-                if !SOURCES.iter().any(|s| s.0 == i) {
+                if !SOURCES.iter().any(|s| s.0 == i) && eccc_site(i).is_none() {
                     bail!("unknown source {i} (not found)");
                 }
                 vec![i]
@@ -226,7 +337,7 @@ impl IntlRadar {
                 return Ok(v.clone());
             }
         }
-        let name = SOURCES.iter().find(|s| s.0 == id).map(|s| s.1).unwrap_or(id);
+        let name = SOURCES.iter().find(|s| s.0 == id).map(|s| s.1).unwrap_or(if eccc_site(id).is_some() { "Canada single-site radars (ECCC)" } else { id });
         let res = match id {
             "jma" => self.jma().await,
             "geomet_rain" => self.geomet("geomet_rain", "RADAR_1KM_RRAI", "Canada radar · rain (MSC GeoMet)").await,
@@ -234,13 +345,15 @@ impl IntlRadar {
             "dwd" => self.dwd().await,
             "pagasa" => self.pagasa().await,
             "smn" => self.smn().await,
+            "eccc" => self.eccc(None).await,
+            _ if eccc_site(id).is_some() => self.eccc(eccc_site(id)).await,
             _ => Err(anyhow!("unknown source")),
         };
-        let hid = format!("intl-{id}");
+        let hid = if eccc_site(id).is_some() { "intl-eccc".to_string() } else { format!("intl-{id}") };
         match &res {
             Ok(v) => {
                 let n = v.as_array().map(|a| a.len()).unwrap_or(1);
-                self.health.ok(&hid, name, if id == "smn" { format!("{n} radars") } else { String::new() });
+                self.health.ok(&hid, name, if id == "smn" || id == "eccc" { format!("{n} radars") } else { String::new() });
                 self.lists.lock().insert(id.to_string(), (Instant::now(), v.clone()));
             }
             Err(e) => {
@@ -417,6 +530,68 @@ impl IntlRadar {
         Ok(Value::Array(out))
     }
 
+    // ---------- Canada: per-radar views (ECCC) ----------
+
+    /// One image source per Canadian radar: the MSC GeoMet 1 km radar mosaic (rain and snow
+    /// rate) cropped to the radar's 240 km range, georeferenced in EPSG:4326. ECCC publishes no
+    /// open single-site volumes; with `site` the source also lists that radar's own pre-rendered
+    /// Datamart GIFs (DPQPE, falling back to CAPPI), which carry a basemap and legend.
+    async fn eccc(&self, site: Option<&'static (&'static str, &'static str, &'static str, f64, f64)>) -> Result<Value> {
+        let mut times = HashMap::new();
+        for layer in ["RADAR_1KM_RRAI", "RADAR_1KM_RSNO"] {
+            let caps = self.text(&format!("{GEOMET}?service=WMS&version=1.3.0&request=GetCapabilities&layer={layer}")).await?;
+            let mut t = wms_times(&caps, layer);
+            if let Some(&last) = t.last() {
+                t.retain(|x| *x >= last - HISTORY_MS);
+            }
+            times.insert(layer, t);
+        }
+        if times.values().all(|t| t.is_empty()) {
+            bail!("no time dimension for the GeoMet radar layers");
+        }
+        let one = |s: &(&str, &str, &str, f64, f64)| {
+            let (id, name, prov, lat, lon) = *s;
+            let b = site_bounds(lat, lon, ECCC_RANGE_KM);
+            let fr = |layer: &str| times[layer].iter().map(|&t| json!({"t": t, "url": proxied(&wms_getmap_4326(GEOMET, layer, b, t))})).collect::<Vec<_>>();
+            json!({
+                "id": format!("eccc_{}", id.to_ascii_lowercase()), "name": format!("Canada radar {name} {prov} ({id})"),
+                "region": "Canada", "country": "CA", "group": "All Canada radars", "kind": "image", "crs": "EPSG:4326",
+                "site": {"id": id, "name": name, "province": prov, "lat": lat, "lon": lon, "range_km": ECCC_RANGE_KM},
+                "product": "precipitation rate (rain)", "units": "mm/h",
+                "attribution": "Environment and Climate Change Canada (MSC GeoMet)", "license_note": "Open Government Licence – Canada; attribution required",
+                "minzoom": 4, "maxzoom": 11, "bounds": b, "step_min": 6,
+                "frames": fr("RADAR_1KM_RRAI"),
+                "frames_snow": fr("RADAR_1KM_RSNO"),
+            })
+        };
+        let Some(s) = site else {
+            return Ok(Value::Array(ECCC_SITES.iter().map(one).collect()));
+        };
+        let mut v = one(s);
+        // the radar's own images from the Datamart (best effort)
+        let mut pics = vec![];
+        let mut last_err = None;
+        for prod in ["DPQPE", "CAPPI"] {
+            let dir = format!("{DATAMART}/{prod}/GIF/{}/", s.0);
+            match self.text(&dir).await {
+                Ok(html) => {
+                    let f = datamart_frames(&html, s.0);
+                    let k = f.len().saturating_sub(60);
+                    pics = f[k..].iter().map(|(t, n, p)| json!({"t": t, "precip": p, "url": proxied(&format!("{dir}{n}"))})).collect();
+                    if !pics.is_empty() {
+                        v["datamart"] = json!({"product": prod, "georeferenced": false, "note": "ECCC pre-rendered image (basemap + legend)", "frames": pics});
+                        break;
+                    }
+                }
+                Err(e) => last_err = Some(format!("{e:#}")),
+            }
+        }
+        if pics.is_empty() {
+            v["datamart"] = json!({"frames": [], "error": last_err.unwrap_or_else(|| "no images listed".into())});
+        }
+        Ok(v)
+    }
+
     // ---------- image proxy ----------
 
     /// Fetch an allowlisted image (cached briefly). Returns (bytes, content type).
@@ -447,19 +622,22 @@ impl IntlRadar {
         let ct = sniff(&b).map(String::from).or_else(|| ct.starts_with("image/").then(|| ct.split(';').next().unwrap_or("").trim().to_string()));
         // WMS servers answer errors with XML and status 200
         let ct = ct.ok_or_else(|| anyhow!("upstream returned no image (not found)"))?;
-        let mut c = self.imgs.lock();
-        if let Some((_, (_, old, _))) = c.0.push(url.to_string(), (Instant::now(), b.clone(), ct.clone())) {
-            c.1 -= old.len();
-        }
-        c.1 += b.len();
-        while c.1 > IMG_CACHE_BYTES {
-            match c.0.pop_lru() {
-                Some((_, (_, old, _))) => c.1 -= old.len(),
-                None => break,
+        {
+            let mut c = self.imgs.lock();
+            if let Some((_, (_, old, _))) = c.0.push(url.to_string(), (Instant::now(), b.clone(), ct.clone())) {
+                c.1 -= old.len();
             }
+            c.1 += b.len();
         }
+        self.trim_imgs();
         Ok((b, ct))
     }
+}
+
+/// `eccc_<site>` → the Canadian radar entry.
+fn eccc_site(id: &str) -> Option<&'static (&'static str, &'static str, &'static str, f64, f64)> {
+    let s = id.strip_prefix("eccc_")?;
+    ECCC_SITES.iter().find(|x| x.0.eq_ignore_ascii_case(s))
 }
 
 fn sniff(b: &[u8]) -> Option<&'static str> {
@@ -575,5 +753,24 @@ mod tests {
         assert_eq!(smn_bounds(&db, "MZT"), Some([-108.0, 21.0, -104.0, 25.0]));
         assert_eq!(smn_bounds(&db, "XXX"), None);
         assert_eq!(sniff(b"\x89PNG...."), Some("image/png"));
+    }
+
+    #[test]
+    fn eccc_sites_and_datamart() {
+        assert_eq!(eccc_site("eccc_caskr").map(|s| s.1), Some("King City"));
+        assert!(eccc_site("eccc_kbuf").is_none() && eccc_site("smn_cun").is_none());
+        let b = site_bounds(45.0, -75.0, 240.0);
+        assert!((b[3] - b[1] - 4.317).abs() < 0.01 && (b[2] - b[0] - 6.105).abs() < 0.02, "{b:?}");
+        let u = wms_getmap_4326(GEOMET, "RADAR_1KM_RRAI", b, 1_791_700_000_000);
+        assert!(u.contains("CRS=EPSG:4326&BBOX=42.8417,-78.0490,47.1583,-71.9510&"), "{u}");
+        assert!(allowed("https://dd.weather.gc.ca/today/radar/DPQPE/GIF/CASBV/x.gif"));
+        let html = r#"<a href="20261011T1500Z_MSC_Radar-DPQPE_CASBV_Rain.gif">x</a> <a href="20261011T1454Z_MSC_Radar-DPQPE_CASBV_Snow.gif">x</a>
+<a href="20261011T1500Z_MSC_Radar-DPQPE_CASBV_Rain-Contingency.gif">x</a> <a href="20261011T1500Z_MSC_Radar-DPQPE_CASBV_Rain_A11Y.gif">x</a>
+<a href="202610111448_CASBV_CAPPI_1.5_RAIN.gif">x</a> <a href="../">up</a>"#;
+        let f = datamart_frames(html, "CASBV");
+        assert_eq!(f.len(), 3, "{f:?}");
+        assert_eq!(f[0].1, "202610111448_CASBV_CAPPI_1.5_RAIN.gif");
+        assert_eq!(f[1].2, "snow");
+        assert_eq!(f[2].0, DateTime::parse_from_rfc3339("2026-10-11T15:00:00Z").unwrap().timestamp_millis());
     }
 }

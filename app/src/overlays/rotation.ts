@@ -10,7 +10,7 @@ import { setData, ovlStatus } from "./manager";
 import { currentFrame, playing, sites, selectSite } from "../radar/controller";
 import { mapRef } from "../map/mapview";
 import { addAnim, wakeTicker, pulse } from "./ticker";
-import { mesoRank, hasTvs, threat, cellFlags, stormClick } from "./stormcells";
+import { mesoRank, hasTvs, threat, cellFlags, stormClick, mergeCells } from "./stormcells";
 import type { Style, Popup } from "./defs";
 
 const EMPTY = { type: "FeatureCollection", features: [] };
@@ -196,7 +196,8 @@ export async function runScan(mode: ScanMode) {
     const fc = await api.get("/api/ovl/stormattr");
     if (scanMode.value !== mode) return;
     const all: ScanHit[] = [];
-    for (const f of fc.features ?? []) {
+    // 0.6: merge multi-radar detections of one storm first (overlays/stormcells.ts mergeCells)
+    for (const f of mergeCells(fc.features ?? []) as any[]) {
       const p = f.properties ?? {};
       const c = f.geometry?.coordinates;
       if (!c || !scanMatch(mode, p)) continue;

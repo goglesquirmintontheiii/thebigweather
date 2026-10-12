@@ -79,7 +79,41 @@ function LinkControls() {
   );
 }
 
-/** Product dropdown for the main map (top-left), replacing the header's product buttons. */
+/** Publish the header's bottom edge as --hdr-b so the pane dropdowns and the scan bar sit just
+ * below it (the header wraps on narrow windows), and slide the header right when the side panel
+ * would cover its left end (narrow windows with a panel open). */
+function useHeaderVar() {
+  const panel = openPanel.value;
+  useEffect(() => {
+    const el = document.querySelector<HTMLElement>(".topbar");
+    if (!el) return;
+    let busy = false;
+    const upd = () => {
+      if (busy) return;
+      busy = true;
+      const sp = document.querySelector(".side-panel");
+      const pr = sp ? sp.getBoundingClientRect().right + 10 : 0;
+      el.style.left = "";
+      el.style.maxWidth = "";
+      const w = el.offsetWidth;
+      const cx = window.innerWidth / 2;
+      if (pr && cx - w / 2 < pr) {
+        el.style.maxWidth = `${Math.max(320, window.innerWidth - pr - 12)}px`;
+        el.style.left = `${pr + el.offsetWidth / 2}px`;
+      }
+      document.documentElement.style.setProperty("--hdr-b", `${Math.round(el.getBoundingClientRect().bottom + 6)}px`);
+      requestAnimationFrame(() => (busy = false));
+    };
+    upd();
+    const t = setTimeout(upd, 250); // after the panel's open animation
+    const ro = new ResizeObserver(upd);
+    ro.observe(el);
+    window.addEventListener("resize", upd);
+    return () => (clearTimeout(t), ro.disconnect(), window.removeEventListener("resize", upd));
+  }, [panel]);
+}
+
+/** Product dropdown for the main map (top-centre of its pane, just below the header). */
 export function MainPaneHead() {
   const s = settings.value;
   const w = s.weather;
@@ -144,6 +178,7 @@ function PaneBox({ idx }: { idx: number }) {
 export function PaneGrid({ mapEl }: { mapEl: any }) {
   const layout = settings.value.panes.layout;
   const n = PANE_COUNT[layout] ?? 0;
+  useHeaderVar();
   useEffect(() => {
     // make sure every pane has a config
     if (settings.value.panes.list.length < n) update((s) => {
@@ -153,7 +188,7 @@ export function PaneGrid({ mapEl }: { mapEl: any }) {
     return () => clearTimeout(t);
   }, [layout]);
   return (
-    <div class={`panes layout-${layout}`}>
+    <div class={`panes layout-${layout} ${openPanel.value ? "panel-open" : ""}`}>
       <div class="pane main">
         <div ref={mapEl} class="map" />
         <MainPaneHead />

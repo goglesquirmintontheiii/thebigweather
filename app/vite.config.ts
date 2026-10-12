@@ -10,4 +10,6 @@ export default defineConfig({
     sourcemap: false,
   },
   server: { port: 5173 },
+  // radio 0.6: the Whisper worker lazy-imports transformers.js, which needs ES-module workers
+  worker: { format: "es" },
 });

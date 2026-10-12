@@ -1,9 +1,9 @@
 // Drawing tools bar (above the bottom toolbar while drawing mode is on).
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { drawTool, drawStyle, undo, redo, clearAll, canUndo, canRedo, COLORS, textInput, addText, finishPoly, setKeep, type DrawKind } from "../map/draw";
+import { drawTool, drawStyle, undo, redo, clearAll, canUndo, canRedo, COLORS, textInput, addText, finishPoly, setKeep, newDrawing, currentCount, drawings, type DrawKind } from "../map/draw";
 import { settings, tool } from "../store";
-import { Pencil, Minus, MoveUpRight, Square, Circle, Pentagon, Type, Eraser, Hand, Undo2, Redo2, Trash2, X, PaintBucket } from "lucide-preact";
+import { Pencil, Minus, MoveUpRight, Square, Circle, Pentagon, Type, Eraser, Hand, Undo2, Redo2, Trash2, X, PaintBucket, FilePlus2 } from "lucide-preact";
 
 const TOOLS: [DrawKind, any, string][] = [
   ["free", Pencil, "Freehand"],
@@ -47,7 +47,14 @@ export function DrawBar() {
       <button class="tb sm" title="Redo (Ctrl+Y)" disabled={!canRedo.value} onClick={redo}>
         <Redo2 size={16} />
       </button>
-      <button class="tb sm" title="Clear all" onClick={clearAll}>
+      <span class="tl-sep" />
+      <button class="draw-new" title="Start a new, separate drawing (its own × to delete it; undo works within it)" disabled={currentCount() === 0} onClick={newDrawing}>
+        <FilePlus2 size={15} /> New drawing
+      </button>
+      <span class="draw-count muted" title="Shapes in the current drawing">
+        {(void drawings.value, currentCount())} shape{currentCount() === 1 ? "" : "s"}
+      </span>
+      <button class="tb sm" title="Clear all drawings" onClick={clearAll}>
         <Trash2 size={16} />
       </button>
       <label class="draw-keep" title="Keep drawings on the map after closing drawing mode">

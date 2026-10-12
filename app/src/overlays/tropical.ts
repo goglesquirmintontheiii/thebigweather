@@ -62,13 +62,13 @@ export function nhcNowLayers(s: string, st: Style): LayerSpecification[] {
       filter: ["==", ["get", "_kind"], "now"],
       layout: {
         "icon-image": ["get", "_img"],
-        "icon-size": ["interpolate", ["linear"], ["zoom"], 2, 0.75 * (st.size / 2), 6, 1.05 * (st.size / 2)],
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 2, 0.68 * (st.size / 2), 6, 0.95 * (st.size / 2)],
         "icon-allow-overlap": true,
         "icon-ignore-placement": true,
         "text-field": st.labels !== false ? ["get", "stormname"] : "",
         "text-font": bold,
         "text-size": 12,
-        "text-offset": [0, 1.75],
+        "text-offset": [0, 1.9],
         "text-anchor": "top",
         "text-optional": true,
       },
@@ -77,23 +77,42 @@ export function nhcNowLayers(s: string, st: Style): LayerSpecification[] {
   ];
 }
 
-/** spin the current-position symbols: counter-clockwise north of the equator, clockwise south */
-const cv = document.createElement("canvas");
+/** spin the current-position symbols: counter-clockwise north of the equator, clockwise south.
+ * The two bands repeat every half turn, so FRAMES rotations over 180° are pre-rendered once per
+ * symbol and the ticker only swaps images (no canvas work per tick). */
+const FRAMES = 24;
 const R = 2;
+const PERIOD = 2400; // ms per full turn
+const frameCache = new Map<string, Uint8Array[]>();
+const lastFrame = new Map<string, number>();
+function framesFor(name: string): Uint8Array[] {
+  let f = frameCache.get(name);
+  if (f) return f;
+  const [, , cat, h] = name.split("-");
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = TC_NOW_SIZE * R;
+  const c = cv.getContext("2d", { willReadFrequently: true })!;
+  f = [];
+  for (let i = 0; i < FRAMES; i++) {
+    const ang = (i / FRAMES) * Math.PI;
+    c.setTransform(R, 0, 0, R, 0, 0);
+    c.clearRect(0, 0, TC_NOW_SIZE, TC_NOW_SIZE);
+    drawTcNow(c, TC_NOW_SIZE, cat, h === "s", h === "s" ? ang : -ang);
+    f.push(new Uint8Array(c.getImageData(0, 0, cv.width, cv.height).data.buffer));
+  }
+  frameCache.set(name, f);
+  return f;
+}
 addAnim({
   active: () => on("nhc") && inUse.size > 0,
   frame: (m, t) => {
-    const ang = ((t / 1000) * Math.PI * 2) / 2.4; // one turn every 2.4 s
-    cv.width = cv.height = TC_NOW_SIZE * R;
-    const c = cv.getContext("2d", { willReadFrequently: true })!;
+    const i = Math.floor(((t % (PERIOD / 2)) / (PERIOD / 2)) * FRAMES) % FRAMES;
     for (const name of inUse) {
       if (!m.hasImage(name)) continue;
-      const [, , cat, h] = name.split("-");
-      c.setTransform(R, 0, 0, R, 0, 0);
-      c.clearRect(0, 0, TC_NOW_SIZE, TC_NOW_SIZE);
-      drawTcNow(c, TC_NOW_SIZE, cat, h === "s", h === "s" ? ang : -ang);
-      const img = c.getImageData(0, 0, cv.width, cv.height);
-      m.updateImage(name, { width: cv.width, height: cv.height, data: new Uint8Array(img.data.buffer) });
+      if (lastFrame.get(name) === i) continue;
+      lastFrame.set(name, i);
+      const w = TC_NOW_SIZE * R;
+      m.updateImage(name, { width: w, height: w, data: framesFor(name)[i] });
     }
   },
 });

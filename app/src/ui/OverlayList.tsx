@@ -6,7 +6,9 @@ import { settings, update, type OvlSettings } from "../store";
 import { OVERLAYS, optsFor, overlayDef, type OverlayDef } from "../overlays/defs";
 import { ovlStatus, ovlMeta, refreshOverlay } from "../overlays/manager";
 import { fileOverlays, fileImports, importFile, removeFile } from "../overlays/files";
-import { Settings2, ChevronRight, Upload, Trash2, Loader, AlertTriangle, X, RefreshCw, Keyboard } from "lucide-preact";
+import { Settings2, ChevronRight, Upload, Trash2, Loader, AlertTriangle, X, RefreshCw, Keyboard, Star } from "lucide-preact";
+import { alerts } from "../alerts";
+import { alertVisible } from "../alertstyle";
 import { KbdBadge, KeyCapture } from "./Shortcuts";
 
 /** layer whose shortcut is being captured (right-click a row, or the keyboard button in its settings) */
@@ -41,7 +43,12 @@ function Status({ id }: { id: string }) {
   return st.count !== undefined ? <span class="ovl-count muted">{st.count.toLocaleString()}</span> : null;
 }
 
-type StyleDef = Partial<{ color: string; opacity: number; size: number; labels: boolean }>;
+type StyleDef = Partial<{
+  color: string;
+  opacity: number;
+  size: number;
+  labels: boolean;
+}>;
 
 export function StyleControls({ id, def, generic = true, refresh }: { id: string; def: StyleDef; generic?: boolean; refresh?: number }) {
   const o = settings.value.ovl[id] ?? {};
@@ -124,10 +131,26 @@ function CameraSources() {
           <div key={g} class="cam-group">
             <div class="cam-ghead">
               <b>{g}</b>
-              <button class="btn xs ghost" onClick={() => setOff(list.map((s) => s.id), true)}>
+              <button
+                class="btn xs ghost"
+                onClick={() =>
+                  setOff(
+                    list.map((s) => s.id),
+                    true,
+                  )
+                }
+              >
                 All on
               </button>
-              <button class="btn xs ghost" onClick={() => setOff(list.map((s) => s.id), false)}>
+              <button
+                class="btn xs ghost"
+                onClick={() =>
+                  setOff(
+                    list.map((s) => s.id),
+                    false,
+                  )
+                }
+              >
                 All off
               </button>
             </div>
@@ -146,8 +169,8 @@ function CameraSources() {
       })}
       {db?.db && (
         <p class="muted small">
-          Database: {db.db.stats.records.toLocaleString()} records → {db.db.stats.kept.toLocaleString()} usable ({db.db.stats.inactive.toLocaleString()} inactive, {(db.db.stats.marked_duplicate + db.db.stats.duplicate_in_file).toLocaleString()} duplicates). {db.db.overlap_dropped.toLocaleString()} more were
-          left out because a live source already shows them.
+          Database: {db.db.stats.records.toLocaleString()} records → {db.db.stats.kept.toLocaleString()} usable ({db.db.stats.inactive.toLocaleString()} inactive, {(db.db.stats.marked_duplicate + db.db.stats.duplicate_in_file).toLocaleString()}{" "}
+          duplicates). {db.db.overlap_dropped.toLocaleString()} more were left out because a live source already shows them.
         </p>
       )}
       {!db?.db && db?.msg && <p class="muted small">{db.msg}</p>}
@@ -237,14 +260,27 @@ function OverlayConfig({ d }: { d: OverlayDef }) {
       <section>
         {d.note && <p class="muted small">{d.note}</p>}
         {st?.error && <p class="err-text small">{st.error}</p>}
-        {st?.count !== undefined && !st.error && <p class="muted small">{st.count.toLocaleString()} shown{st.note ? ` · ${st.note}` : ""}</p>}
+        {st?.count !== undefined && !st.error && (
+          <p class="muted small">
+            {st.count.toLocaleString()} shown{st.note ? ` · ${st.note}` : ""}
+          </p>
+        )}
       </section>
     </>
   );
 }
 
-const BASE_NAMES: Record<string, string> = { alerts: "Weather alerts", counties: "County lines", states: "State lines", rings: "Range rings" };
-const BASE_STYLE: Record<string, StyleDef> = { counties: { color: "#8a96a6", opacity: 0.55, size: 1 }, states: { color: "#c9d1d9", opacity: 1, size: 1 }, rings: { color: "#9fb3c8", opacity: 0.55 } };
+const BASE_NAMES: Record<string, string> = {
+  alerts: "Weather alerts",
+  counties: "County lines",
+  states: "State lines",
+  rings: "Range rings",
+};
+const BASE_STYLE: Record<string, StyleDef> = {
+  counties: { color: "#8a96a6", opacity: 0.55, size: 1 },
+  states: { color: "#c9d1d9", opacity: 1, size: 1 },
+  rings: { color: "#9fb3c8", opacity: 0.55 },
+};
 
 /** Centered settings window for one layer (RadarOmega style). */
 export function ConfigModal() {
@@ -264,7 +300,10 @@ export function ConfigModal() {
   if (id.startsWith("base:")) {
     const k = id.slice(5) as keyof typeof settings.value.overlays;
     title = BASE_NAMES[k] ?? k;
-    onToggle = { on: !!settings.value.overlays[k], set: (v) => update((x) => (x.overlays[k] = v)) };
+    onToggle = {
+      on: !!settings.value.overlays[k],
+      set: (v) => update((x) => (x.overlays[k] = v)),
+    };
     body =
       k === "alerts" ? (
         <AlertConfig />
@@ -277,7 +316,10 @@ export function ConfigModal() {
   } else if (id.startsWith("file:")) {
     const f = fileOverlays.value.find((x) => `file:${x.id}` === id);
     title = f?.name ?? "File";
-    onToggle = { on: !!settings.value.ovl[id]?.on, set: (v) => setOvl(id, (x) => (x.on = v)) };
+    onToggle = {
+      on: !!settings.value.ovl[id]?.on,
+      set: (v) => setOvl(id, (x) => (x.on = v)),
+    };
     body = (
       <>
         <section>
@@ -286,7 +328,8 @@ export function ConfigModal() {
         </section>
         <section>
           <p class="muted small">
-            {f?.count.toLocaleString()} features{f?.size ? ` · ${(f.size / 1048576).toFixed(1)} MB` : ""}. Colors set inside a KML file are kept.
+            {f?.count.toLocaleString()} features
+            {f?.size ? ` · ${(f.size / 1048576).toFixed(1)} MB` : ""}. Colors set inside a KML file are kept.
           </p>
           <button class="btn sm ghost" onClick={() => (removeFile(id.slice(5)), close())}>
             <Trash2 size={13} /> Remove file
@@ -298,7 +341,10 @@ export function ConfigModal() {
     const d = overlayDef(id);
     if (!d) return null;
     title = d.name;
-    onToggle = { on: !!settings.value.ovl[id]?.on, set: (v) => setOvl(id, (x) => (x.on = v)) };
+    onToggle = {
+      on: !!settings.value.ovl[id]?.on,
+      set: (v) => setOvl(id, (x) => (x.on = v)),
+    };
     body = <OverlayConfig d={d} />;
     if (d.feed !== "client") reload = () => refreshOverlay(id);
   }
@@ -333,83 +379,347 @@ export function ConfigModal() {
   );
 }
 
-function Row({ d }: { d: OverlayDef }) {
-  const on = !!settings.value.ovl[d.id]?.on;
+// ---------- 0.6: layers menu (Active · Favourites · ordered collapsible groups · search) ----------
+
+type BaseKey = "alerts" | "sites" | "points" | "counties" | "states" | "rings";
+const BASE_ROWS: {
+  k: BaseKey;
+  name: string;
+  desc: string;
+  group: string;
+  gear?: boolean;
+}[] = [
+  {
+    k: "alerts",
+    name: "Weather alerts",
+    desc: "NWS warnings, watches and advisories",
+    group: "Alerts & warnings",
+    gear: true,
+  },
+  {
+    k: "sites",
+    name: "Radar sites",
+    desc: "NEXRAD / TDWR site markers",
+    group: "Reference",
+  },
+  { k: "points", name: "My points", desc: "Saved places", group: "Reference" },
+  {
+    k: "counties",
+    name: "County lines",
+    desc: "US county boundaries",
+    group: "Reference",
+    gear: true,
+  },
+  {
+    k: "states",
+    name: "State lines",
+    desc: "State and country boundaries",
+    group: "Reference",
+    gear: true,
+  },
+  {
+    k: "rings",
+    name: "Range rings",
+    desc: "Distance rings around the radar",
+    group: "Reference",
+    gear: true,
+  },
+];
+
+/** Menu group for each overlay (falls back to the overlay's own group). */
+const MENU_GROUP: Record<string, string> = {
+  watchbox: "Alerts & warnings",
+  mcd: "Alerts & warnings",
+  spc: "Severe",
+  stormattr: "Severe",
+  rotation: "Severe",
+  rotscan: "Severe",
+  lsr: "Severe",
+  glm: "Severe",
+  nhc: "Tropical",
+  gtwo: "Tropical",
+  atcf: "Tropical",
+  recon: "Tropical",
+  vdm: "Tropical",
+  ero: "Precipitation & winter",
+  wssi: "Precipitation & winter",
+  nohrsc: "Precipitation & winter",
+  riverflood: "Precipitation & winter",
+  gauges: "Precipitation & winter",
+  cpc: "Outlooks",
+  cpchaz: "Outlooks",
+  metar: "Observations",
+  fronts: "Observations",
+  sigmet: "Aviation",
+  gairmet: "Aviation",
+  pirep: "Aviation",
+  airports: "Aviation",
+  flights: "Aviation",
+  ships: "Marine",
+  buoys: "Marine",
+  tides: "Marine",
+  quakes: "Hazards",
+  shake: "Hazards",
+  volcanoes: "Hazards",
+  fires: "Hazards",
+  hmsfire: "Hazards",
+  spcfire: "Hazards",
+  airquality: "Environment & health",
+  heatrisk: "Environment & health",
+  smoke: "Environment & health",
+  drought: "Environment & health",
+  svi: "Environment & health",
+  traffic: "Traffic & roads",
+  trafficinc: "Traffic & roads",
+  cameras: "Cameras",
+  mycams: "Cameras",
+  iss: "Space",
+  aurora: "Space",
+  spotters: "Chasers & reports",
+  mping: "Chasers & reports",
+  wfo: "Reference",
+  waffle: "Fun",
+};
+const ALIAS: Record<string, string> = {
+  Surface: "Observations",
+  Environment: "Environment & health",
+  Traffic: "Traffic & roads",
+};
+const GROUP_ORDER = [
+  "Alerts & warnings",
+  "Severe",
+  "Tropical",
+  "Precipitation & winter",
+  "Outlooks",
+  "Observations",
+  "Aviation",
+  "Marine",
+  "Hazards",
+  "Environment & health",
+  "Traffic & roads",
+  "Cameras",
+  "Space",
+  "Chasers & reports",
+  "Reference",
+  "My files",
+  "Fun",
+];
+
+const menuGroup = (d: OverlayDef) => MENU_GROUP[d.id] ?? ALIAS[d.group] ?? d.group;
+
+interface Item {
+  key: string;
+  name: string;
+  desc: string;
+  group: string;
+  on: boolean;
+  set: (v: boolean) => void;
+  gear?: string;
+  status?: any;
+}
+
+function items(): Item[] {
+  const s = settings.value;
+  const out: Item[] = BASE_ROWS.map((b) => ({
+    key: `base:${b.k}`,
+    name: b.name,
+    desc: b.desc,
+    group: b.group,
+    on: !!s.overlays[b.k],
+    set: (v: boolean) => update((x) => (x.overlays[b.k] = v)),
+    gear: b.gear ? `base:${b.k}` : undefined,
+    status: b.k === "alerts" && s.overlays.alerts ? <span class="ovl-count muted">{[...alerts.value.values()].filter((a) => alertVisible(a.properties.event)).length}</span> : null,
+  }));
+  for (const d of OVERLAYS) {
+    if (d.hidden) continue;
+    out.push({
+      key: d.id,
+      name: d.name,
+      desc: d.note ?? "",
+      group: menuGroup(d),
+      on: !!s.ovl[d.id]?.on,
+      set: (v) => setOvl(d.id, (x) => (x.on = v)),
+      gear: d.id,
+      status: <Status id={d.id} />,
+    });
+  }
+  for (const f of fileOverlays.value) out.push(fileItem(f));
+  return out;
+}
+
+function fileItem(f: { id: string; name: string; count: number }): Item {
+  const key = `file:${f.id}`;
+  return {
+    key,
+    name: f.name,
+    desc: "Imported file",
+    group: "My files",
+    on: !!settings.value.ovl[key]?.on,
+    set: (v) => setOvl(key, (x) => (x.on = v)),
+    gear: key,
+    status: <span class="ovl-count muted">{f.count.toLocaleString()}</span>,
+  };
+}
+
+function ItemRow({ it, sub }: { it: Item; sub?: boolean }) {
+  const fav = !!settings.value.ovl[it.key]?.fav;
   return (
-    <div class="ovl-row" onContextMenu={(e) => (e.preventDefault(), (captureFor.value = d.id))} title="Right-click to set a keyboard shortcut">
+    <div class={`ovl-row ${it.on ? "is-on" : ""}`} onContextMenu={(e) => (e.preventDefault(), (captureFor.value = it.key))}>
       <div class="ovl-line">
-        <label class="ovl-toggle">
-          <input type="checkbox" checked={on} onChange={(e) => setOvl(d.id, (x) => (x.on = (e.target as HTMLInputElement).checked))} />
-          <span>{d.name}</span>
-        </label>
-        <KbdBadge id={d.id} />
-        <Status id={d.id} />
-        <button class={`icon-btn gear ${configModal.value === d.id ? "on" : ""}`} title="Settings" onClick={() => (configModal.value = d.id)}>
-          <Settings2 size={13} />
+        <button class={`ovl-star ${fav ? "on" : ""}`} title={fav ? "Remove from favourites" : "Add to favourites"} onClick={() => setOvl(it.key, (x) => (x.fav = fav ? undefined : true))}>
+          <Star size={12} />
         </button>
+        <label class="ovl-toggle" title={`${it.name} · ${it.group}${it.desc ? `\n${it.desc}` : ""}\nRight-click to set a keyboard shortcut`}>
+          <input type="checkbox" checked={it.on} onChange={(e) => it.set((e.target as HTMLInputElement).checked)} />
+          <span>{it.name}</span>
+          {sub && <small class="ovl-sub muted">{it.group}</small>}
+        </label>
+        <KbdBadge id={it.key} />
+        {it.status}
+        {it.gear && (
+          <button class={`icon-btn gear ${configModal.value === it.gear ? "on" : ""}`} title="Settings" onClick={() => (configModal.value = it.gear!)}>
+            <Settings2 size={13} />
+          </button>
+        )}
       </div>
-      {captureFor.value === d.id && !configModal.value && <KeyCapture id={d.id} onClose={() => (captureFor.value = null)} />}
+      {captureFor.value === it.key && !configModal.value && <KeyCapture id={it.key} onClose={() => (captureFor.value = null)} />}
     </div>
   );
 }
 
-function FileRow({ id, name, count }: { id: string; name: string; count: number }) {
-  const key = `file:${id}`;
-  const on = !!settings.value.ovl[key]?.on;
-  return (
-    <div class="ovl-row" onContextMenu={(e) => (e.preventDefault(), (captureFor.value = key))}>
-      <div class="ovl-line">
-        <label class="ovl-toggle">
-          <input type="checkbox" checked={on} onChange={(e) => setOvl(key, (x) => (x.on = (e.target as HTMLInputElement).checked))} />
-          <span title={name}>{name}</span>
-        </label>
-        <KbdBadge id={key} />
-        <span class="ovl-count muted">{count.toLocaleString()}</span>
-        <button class="icon-btn gear" title="Settings" onClick={() => (configModal.value = key)}>
-          <Settings2 size={13} />
-        </button>
-      </div>
-      {captureFor.value === key && !configModal.value && <KeyCapture id={key} onClose={() => (captureFor.value = null)} />}
-    </div>
-  );
+const OPEN_KEY = "tbw.layerGroupsOpen";
+function loadOpen(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem(OPEN_KEY) ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
 }
 
 export function OverlayGroups({ filter = "" }: { filter?: string }) {
-  const groups = [...new Set(OVERLAYS.filter((o) => !o.hidden).map((o) => o.group))];
-  const [shut, setShut] = useState<Record<string, boolean>>({});
+  const [open, setOpen] = useState<Record<string, boolean>>(loadOpen);
+  const toggle = (g: string, def: boolean) =>
+    setOpen((o) => {
+      const n = { ...o, [g]: !(o[g] ?? def) };
+      try {
+        localStorage.setItem(OPEN_KEY, JSON.stringify(n));
+      } catch {
+        /* private mode */
+      }
+      return n;
+    });
   const q = filter.trim().toLowerCase();
-  const match = (o: OverlayDef) => !o.hidden && (!q || o.name.toLowerCase().includes(q) || o.group.toLowerCase().includes(q));
-  const count = (g: string) => OVERLAYS.filter((o) => o.group === g && settings.value.ovl[o.id]?.on).length;
+  const all = items();
+  const words = q.split(/\s+/).filter(Boolean);
+  const match = (it: Item) => words.every((w) => `${it.name} ${it.desc} ${it.group}`.toLowerCase().includes(w));
+  const groups = [...new Set([...GROUP_ORDER, ...all.map((i) => i.group)])];
+  // unknown groups go before Reference
+  groups.sort((a, b) => {
+    const ia = GROUP_ORDER.indexOf(a),
+      ib = GROUP_ORDER.indexOf(b);
+    return (ia < 0 ? GROUP_ORDER.indexOf("Reference") - 0.5 : ia) - (ib < 0 ? GROUP_ORDER.indexOf("Reference") - 0.5 : ib);
+  });
+
+  if (q) {
+    const hits = all.filter(match);
+    return (
+      <section class="ovl-group">
+        <div class="ovl-ghead static">
+          <span>
+            {hits.length} match{hits.length === 1 ? "" : "es"}
+          </span>
+        </div>
+        {hits.map((it) => (
+          <ItemRow key={it.key} it={it} sub />
+        ))}
+        {!hits.length && <div class="muted small">No layer matches “{filter}”.</div>}
+      </section>
+    );
+  }
+
+  const active = all.filter((i) => i.on);
+  const favs = all.filter((i) => settings.value.ovl[i.key]?.fav);
+  const allOff = () =>
+    update((s) => {
+      for (const k of Object.keys(s.ovl)) if (s.ovl[k]?.on) s.ovl[k] = { ...s.ovl[k], on: false };
+    });
+  const head = (g: string, isOpen: boolean, n: number, on: number, extra?: any) => (
+    <div class="ovl-ghead2">
+      <button class="ovl-gtoggle" onClick={() => toggle(g, false)} aria-expanded={isOpen}>
+        <ChevronRight size={13} class={isOpen ? "rot" : ""} />
+        <span>{g}</span>
+        <span class="ovl-gcount">{n}</span>
+        {on > 0 && (
+          <span class="ovl-badge" title={`${on} on`}>
+            {on} on
+          </span>
+        )}
+      </button>
+      {extra}
+    </div>
+  );
   return (
     <>
-      {groups
-        .filter((g) => OVERLAYS.some((o) => o.group === g && match(o)))
-        .map((g) => (
-          <section key={g} class="ovl-group">
-            <button class="ovl-ghead" onClick={() => setShut({ ...shut, [g]: !shut[g] })}>
-              <ChevronRight size={13} class={shut[g] && !q ? "" : "rot"} />
-              <span>{g}</span>
-              {count(g) > 0 && <span class="ovl-badge">{count(g)}</span>}
+      <section class="ovl-group pinned">
+        <div class="ovl-ghead2">
+          <button class="ovl-gtoggle" onClick={() => toggle("Active", true)}>
+            <ChevronRight size={13} class={(open.Active ?? true) ? "rot" : ""} />
+            <span>Active</span>
+            <span class="ovl-badge">{active.length}</span>
+          </button>
+          {active.some((i) => !i.key.startsWith("base:")) && (
+            <button class="btn xs ghost" title="Turn off every overlay and file layer (map lines and alerts stay)" onClick={allOff}>
+              All off
             </button>
-            {(!shut[g] || q) &&
-              OVERLAYS.filter((o) => o.group === g && match(o)).map((d) => (
-                <Row key={d.id} d={d} />
-              ))}
+          )}
+        </div>
+        {(open.Active ?? true) && (active.length ? active.map((it) => <ItemRow key={it.key} it={it} />) : <div class="muted small ovl-empty">Nothing on.</div>)}
+      </section>
+      <section class="ovl-group pinned">
+        <div class="ovl-ghead2">
+          <button class="ovl-gtoggle" onClick={() => toggle("Favourites", true)}>
+            <ChevronRight size={13} class={(open.Favourites ?? true) ? "rot" : ""} />
+            <Star size={12} class="fav-ico" />
+            <span>Favourites</span>
+            <span class="ovl-gcount">{favs.length}</span>
+          </button>
+        </div>
+        {(open.Favourites ?? true) && (favs.length ? favs.map((it) => <ItemRow key={it.key} it={it} />) : <div class="muted small ovl-empty">Star a layer to keep it here.</div>)}
+      </section>
+      {groups.map((g) => {
+        if (g === "My files") return <MyFiles key={g} collapsible open={open[g] ?? false} onToggle={() => toggle(g, false)} />;
+        const list = all.filter((i) => i.group === g);
+        if (!list.length) return null;
+        const isOpen = open[g] ?? false;
+        return (
+          <section key={g} class="ovl-group">
+            {head(g, isOpen, list.length, list.filter((i) => i.on).length)}
+            {isOpen && list.map((it) => <ItemRow key={it.key} it={it} />)}
           </section>
-        ))}
-      <MyFiles />
+        );
+      })}
     </>
   );
 }
 
 /** Imported map files (GeoJSON, KML, KMZ, GPX). */
-export function MyFiles() {
+export function MyFiles({ collapsible, open = true, onToggle }: { collapsible?: boolean; open?: boolean; onToggle?: () => void } = {}) {
   const fileRef = useRef<HTMLInputElement>(null);
   const importing = Object.entries(fileImports.value);
+  const nOn = fileOverlays.value.filter((f) => settings.value.ovl[`file:${f.id}`]?.on).length;
   return (
-      <section class="ovl-group">
-      <div class="ovl-ghead static">
-        <span>My files</span>
+    <section class="ovl-group">
+      <div class={collapsible ? "ovl-ghead2" : "ovl-ghead static"}>
+        {collapsible ? (
+          <button class="ovl-gtoggle" onClick={onToggle}>
+            <ChevronRight size={13} class={open ? "rot" : ""} />
+            <span>My files</span>
+            <span class="ovl-gcount">{fileOverlays.value.length}</span>
+            {nOn > 0 && <span class="ovl-badge">{nOn} on</span>}
+          </button>
+        ) : (
+          <span>My files</span>
+        )}
         <button class="btn sm" onClick={() => fileRef.current?.click()} title="GeoJSON, KML, KMZ or GPX (or drop on the map)">
           <Upload size={13} /> Import
         </button>
@@ -426,15 +736,14 @@ export function MyFiles() {
           }}
         />
       </div>
-      {importing.map(([n, note]) => (
-        <div key={n} class="ovl-row importing">
-          <Loader size={12} class="spin muted" /> <span>{n}</span> <small class="muted">{note}</small>
-        </div>
-      ))}
-      {fileOverlays.value.length === 0 && !importing.length && <div class="muted small">No files yet. GeoJSON, KML, KMZ or GPX.</div>}
-      {fileOverlays.value.map((f) => (
-        <FileRow key={f.id} {...f} />
-      ))}
+      {open &&
+        importing.map(([n, note]) => (
+          <div key={n} class="ovl-row importing">
+            <Loader size={12} class="spin muted" /> <span>{n}</span> <small class="muted">{note}</small>
+          </div>
+        ))}
+      {open && fileOverlays.value.length === 0 && !importing.length && <div class="muted small">No files yet. GeoJSON, KML, KMZ or GPX.</div>}
+      {open && fileOverlays.value.map((f) => <ItemRow key={f.id} it={fileItem(f)} />)}
     </section>
   );
 }

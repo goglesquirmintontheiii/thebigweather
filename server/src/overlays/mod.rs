@@ -309,7 +309,7 @@ impl Overlays {
             "watchbox" => noaa::iem_geojson(self, "https://mesonet.agron.iastate.edu/api/1/spc_watch_outline.geojson").await,
             "lsr" => noaa::lsr(self, p("hours")).await,
             "wfo" => noaa::wfo(self).await,
-            "metar" => obs::metars(self),
+            "metar" => obs::metars(self, p("time")).await,
             "taf" => aviation::taf(self, p("ids")).await,
             "pirep" => aviation::pireps(self).await,
             "sigmet" => aviation::sigmets(self).await,

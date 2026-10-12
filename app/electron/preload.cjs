@@ -19,5 +19,6 @@ contextBridge.exposeInMainWorld("tbw", {
   saveFile: (name, buf) => ipcRenderer.invoke("save-file", name, buf),
   captureBuf: (rect) => ipcRenderer.invoke("capture-buf", rect),
   setZoom: (f) => webFrame.setZoomFactor(f),
+  clientStats: () => ipcRenderer.invoke("client-stats"), // shake/stats/server 0.6
   isElectron: true,
 });

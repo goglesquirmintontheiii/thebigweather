@@ -3,6 +3,9 @@
 import { signal, effect } from "@preact/signals";
 import { settings, toast } from "./store";
 import Hls from "hls.js";
+import { AudioTap } from "./audio/tap";
+import { SameMonitor } from "./same/monitor";
+import { TranscriptCtl } from "./transcribe/client";
 
 export interface Stream {
   id: string;
@@ -137,8 +140,17 @@ export class LivePlayer {
   private bytesIn = 0;
   private t0 = 0;
 
+  /** WebAudio tap for the SAME decoder / transcription (created on first use; can't be undone). */
+  tap: AudioTap | null = null;
+  private tapP: Promise<AudioTap | null> | null = null;
+  readonly same: SameMonitor;
+  readonly tx: TranscriptCtl;
+
   constructor(public stream: Stream) {
     this.url = stream.url;
+    const label = () => this.stream.call ?? this.stream.name;
+    this.same = new SameMonitor(label, () => this.ensureTap());
+    this.tx = new TranscriptCtl(label, () => this.ensureTap());
     this.audio.preload = "auto";
     this.audio.volume = settings.value.radio.volume;
     this.audio.onplaying = () => this.set({ status: "playing" });
@@ -380,11 +392,35 @@ export class LivePlayer {
     if (s.end) this.seek(s.end - 1);
   }
   setVolume(v: number) {
-    this.audio.volume = v;
+    if (this.tap) this.tap.setVolume(v);
+    else this.audio.volume = v;
+  }
+  setMuted(m: boolean) {
+    if (this.tap) this.tap.setMuted(m);
+    else this.audio.muted = m;
+  }
+
+  ensureTap(): Promise<AudioTap | null> {
+    this.tapP ??= AudioTap.create(this.audio).then(
+      (t) => {
+        if (this.stopped) {
+          t.close();
+          return null;
+        }
+        this.tap = t;
+        return t;
+      },
+      (e) => {
+        console.warn("audio tap", e);
+        this.tapP = null;
+        return null;
+      },
+    );
+    return this.tapP;
   }
 
   get canRecord() {
-    return this.snap.value.mode !== "plain" || !!(this.audio as any).captureStream;
+    return this.snap.value.mode !== "plain" || !!this.tap || !!(this.audio as any).captureStream;
   }
 
   recStart() {
@@ -397,7 +433,7 @@ export class LivePlayer {
     }
     // HLS / plain: record what plays through the element
     try {
-      const ms: MediaStream = (this.audio as any).captureStream();
+      const ms: MediaStream = this.tap ? this.tap.stream() : (this.audio as any).captureStream();
       const type = ["audio/webm;codecs=opus", "audio/webm"].find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
       this.mr = new MediaRecorder(ms, type ? { mimeType: type } : undefined);
       this.mrChunks = [];
@@ -448,6 +484,9 @@ export class LivePlayer {
   destroy() {
     if (this.snap.value.rec) this.recStop();
     this.stopped = true;
+    this.same.stop();
+    this.tx.disable();
+    this.tap?.close();
     clearInterval(this.timer);
     this.ac?.abort();
     this.hls?.destroy();
@@ -471,6 +510,8 @@ export interface PlayerWin {
   y: number;
 }
 export const players = signal<PlayerWin[]>([]);
+// debugging / automated UI checks
+(window as any).__tbwRadio = { players };
 
 export function openPlayer(s: Stream) {
   const have = players.value.find((w) => w.id === s.url);

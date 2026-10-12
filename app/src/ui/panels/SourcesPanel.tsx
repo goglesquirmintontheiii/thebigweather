@@ -5,6 +5,7 @@ import { signal } from "@preact/signals";
 import { api } from "../../api";
 import { connection } from "../../store";
 import { fmtAge } from "../../util";
+import { sameHost } from "../../clientstats"; // shake/stats/server 0.6
 
 export const sources = signal<any[]>([]);
 
@@ -24,6 +25,10 @@ export function SourcesPanel() {
   return (
     <div class="stack">
       <Toggle label="Server stats panel (CPU, RAM, disk, network)" on={settings.value.panels.stats.open} set={(v) => update((x) => (x.panels.stats = { ...x.panels.stats, open: v }))} />
+      {/* shake/stats/server 0.6 */}
+      <Toggle label="App stats panel (this computer: app CPU, RAM, GPU, heap, FPS)" on={!!settings.value.panels.appstats?.open} set={(v) => update((x) => (x.panels.appstats = { ...(x.panels.appstats ?? { x: -1, y: 300 }), open: v }))} />
+      {sameHost.value && (settings.value.panels.stats.open || settings.value.panels.appstats?.open) && <div class="muted small">The server runs on this computer, so both show in one panel.</div>}
+      {/* end shake/stats/server 0.6 */}
       <div class="source-row">
         <span class={`sdot ${conn === "online" ? "ok" : conn === "connecting" ? "idle" : "error"}`} />
         <span class="sname">Server connection</span>

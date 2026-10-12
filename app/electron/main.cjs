@@ -231,6 +231,65 @@ ipcMain.handle("capture-buf", async (_e, rect) => {
   return img.toPNG();
 });
 // ---------- end workflow ----------
+// ---------- shake/stats/server 0.6: client (app computer) stats ----------
+const tbwOs = require("os");
+let tbwLastCpu = null;
+function tbwSysCpu() {
+  let idle = 0, total = 0;
+  const cs = tbwOs.cpus();
+  for (const c of cs) {
+    for (const k in c.times) total += c.times[k];
+    idle += c.times.idle;
+  }
+  const prev = tbwLastCpu;
+  tbwLastCpu = { idle, total };
+  if (!prev || total <= prev.total) return null;
+  return Math.max(0, Math.min(100, (1 - (idle - prev.idle) / (total - prev.total)) * 100));
+}
+function tbwMemAvail() {
+  // os.freemem() on Linux excludes reclaimable cache; MemAvailable is what tools show as free
+  if (process.platform === "linux") {
+    try {
+      const m = /MemAvailable:\s+(\d+) kB/.exec(fs.readFileSync("/proc/meminfo", "utf8"));
+      if (m) return +m[1] * 1024;
+    } catch {}
+  }
+  return tbwOs.freemem();
+}
+ipcMain.handle("client-stats", () => {
+  const cpus = tbwOs.cpus();
+  const procs = {};
+  let cpu = 0, mem = 0;
+  for (const m of app.getAppMetrics()) {
+    const t = m.type === "Browser" ? "main" : m.type === "Tab" ? "renderer" : m.type === "GPU" ? "gpu" : "other";
+    const p = (procs[t] = procs[t] || { cpu: 0, mem: 0, n: 0 });
+    const c = m.cpu ? m.cpu.percentCPUUsage : 0;
+    const b = m.memory ? m.memory.workingSetSize * 1024 : 0;
+    p.cpu += c;
+    p.mem += b;
+    p.n++;
+    cpu += c;
+    mem += b;
+  }
+  const addrs = [];
+  for (const list of Object.values(tbwOs.networkInterfaces())) for (const a of list || []) addrs.push(a.address);
+  return {
+    sys_cpu: tbwSysCpu(),
+    cores: cpus.length,
+    cpu_name: cpus[0] ? cpus[0].model : "",
+    mem_total: tbwOs.totalmem(),
+    mem_available: tbwMemAvail(),
+    load: tbwOs.loadavg(),
+    // percentCPUUsage is per core: normalise to the whole machine like the system figure
+    app_cpu: cpu / Math.max(1, cpus.length),
+    app_mem: mem,
+    procs,
+    uptime: process.uptime(),
+    hostname: tbwOs.hostname(),
+    addrs,
+  };
+});
+// ---------- end shake/stats/server 0.6 ----------
 ipcMain.handle("app-info", () => ({ version: app.getVersion(), platform: process.platform, displays: screen.getAllDisplays().length }));
 
 app.on("second-instance", () => {

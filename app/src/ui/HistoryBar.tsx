@@ -1,11 +1,15 @@
 // Historical mode picker (start/end date-time, quick presets) and the timeline's history badge.
 
 import { useState } from "preact/hooks";
-import { CalendarClock, X, Play, Radio } from "lucide-preact";
-import { settings } from "../store";
+import { CalendarClock, X, Play, Radio, History } from "lucide-preact";
+import { settings, update } from "../store";
 import { histRange, histPicker, enterHistory, exitHistory, hiddenLive, replayState, HIST_MAX_MS } from "../history";
 import { gridDef } from "../weather";
-import { spanLabel } from "./Timeline";
+import { spanLabel, fpsLabel } from "./Timeline";
+import { FPS_STEPS, frameCount } from "../anim";
+import { histStormsOpen, BeforeAfter } from "./HistStorms";
+import { ovlStatus } from "../overlays/manager";
+import { addRecent } from "../histsearch";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -62,12 +66,17 @@ export function HistoryPicker() {
   const r = settings.value.radar;
   const hidden = hiddenLive.value;
   const round = (t: number) => Math.floor(t / 300_000) * 300_000;
+  const metarOn = !!settings.value.ovl.metar?.on;
+  const metarErr = ovlStatus.value.metar?.error;
   return (
     <div class="hist-pop glass" onKeyDown={(ev) => ev.key === "Escape" && (histPicker.value = false)}>
       <div class="hist-head">
         <CalendarClock size={15} />
-        <b>Historical mode</b>
+        <b>History</b>
         <span class="muted small">{utc ? "UTC" : "local time"}</span>
+        <button class="btn sm ghost hist-storms-link" onClick={() => ((histStormsOpen.value = true), (histPicker.value = false))} title="Search past warnings and tropical storms">
+          <History size={13} /> Historical Storms
+        </button>
         <button class="icon-btn" onClick={() => (histPicker.value = false)} title="Close">
           <X size={14} />
         </button>
@@ -109,11 +118,13 @@ export function HistoryPicker() {
           )}
         </div>
       </div>
+      <HistPlayback />
       <div class="hist-notes muted small">
         {err ? <span class="hist-err">{err}</span> : <span>{spanLabel(Math.round(span))} · warnings, reports, watches and MDs replay with the loop</span>}
         {w.kind === "radar" && r.source === "L3" && <span>Level III has no archive: Level II is used.</span>}
         {forecast && <span>Forecast layers keep their own runs.</span>}
         {hidden.length > 0 && <span>Live-only, hidden: {hidden.join(", ")}</span>}
+        {metarOn && <span class={metarErr && h ? "hist-err" : ""}>{metarErr && h ? "METAR archive unavailable" : "METARs replay hourly from the archive."}</span>}
       </div>
       <div class="hist-foot">
         {h && (
@@ -121,9 +132,61 @@ export function HistoryPicker() {
             <Radio size={13} /> Back to live
           </button>
         )}
-        <button class="btn sm" disabled={!!err} onClick={() => enterHistory(a, b)}>
+        <button class="btn sm" disabled={!!err} onClick={() => (enterHistory(a, b), addRecent({ label: "Custom range", kind: "range", start: a, end: Math.min(b, Date.now()), site: settings.value.weather.kind === "radar" ? settings.value.radar.site : undefined }))}>
           <Play size={13} /> Load
         </button>
+      </div>
+    </div>
+  );
+}
+
+const STEPS: [number, string][] = [
+  [0, "Every volume"],
+  [5, "5 min"],
+  [10, "10 min"],
+  [15, "15 min"],
+  [30, "30 min"],
+  [60, "1 h"],
+];
+
+/** History playback: independent of the live loop settings (Timeline → Loop). */
+function HistPlayback() {
+  const hs = settings.value.hist;
+  const fi = Math.max(0, FPS_STEPS.findIndex((f) => f >= hs.fps));
+  const set = (fn: (x: typeof hs) => void) => update((s) => fn(s.hist));
+  return (
+    <div class="hist-play">
+      <div class="hist-sub">
+        Playback <span class="muted small">history only · the live loop keeps its own settings</span>
+      </div>
+      <div class="hist-row">
+        <span>Frame step</span>
+        <div class="chips">
+          {STEPS.map(([m, l]) => (
+            <button key={m} class={`chip ${hs.step === m ? "on" : ""}`} onClick={() => set((x) => (x.step = m))} title={m ? `One frame every ${l} (nearest volume)` : "Every radar volume / every frame the layer has"}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div class="hist-row">
+        <span>Max frames</span>
+        <input type="range" min={10} max={400} step={10} value={hs.maxFrames} onInput={(e) => set((x) => (x.maxFrames = +(e.target as HTMLInputElement).value))} />
+        <span class="val">{hs.maxFrames}</span>
+      </div>
+      <div class="hist-row">
+        <span>Speed</span>
+        <input type="range" min={0} max={FPS_STEPS.length - 1} value={fi} onInput={(e) => set((x) => (x.fps = FPS_STEPS[+(e.target as HTMLInputElement).value]))} />
+        <span class="val">{fpsLabel(hs.fps)}</span>
+      </div>
+      <div class="hist-row">
+        <span>Pause on last</span>
+        <input type="range" min={0} max={5000} step={250} value={hs.dwellMs} onInput={(e) => set((x) => (x.dwellMs = +(e.target as HTMLInputElement).value))} />
+        <span class="val">{(hs.dwellMs / 1000).toFixed(hs.dwellMs % 1000 ? 2 : 0)} s</span>
+      </div>
+      <div class="hist-row">
+        <span>Alert / storm</span>
+        <BeforeAfter />
       </div>
     </div>
   );
@@ -145,6 +208,7 @@ export function HistoryBadge() {
     <button class={`tl-btn hist-badge ${histPicker.value ? "on" : ""}`} onClick={() => (histPicker.value = !histPicker.value)} title={`${tip}\nClick to change`}>
       <b>HISTORY</b>
       <span>{rangeLabel(h.start, h.end)}</span>
+      <span class="muted">· {frameCount.value} fr · {fpsLabel(settings.value.hist.fps)}</span>
       {rs.loading && <i class="hist-dot" />}
     </button>
   );

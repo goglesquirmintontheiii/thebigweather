@@ -74,8 +74,8 @@ export const DERIVED = new Set(["CREF", "ET", "VIL"]);
 export const sites = signal<Site[]>([]);
 export const l3Products = signal<L3Product[]>([]);
 export const frames = signal<Frame[]>([]);
-import { frameIndex, playing, frameCount, setFrameReady, framesToRequest, trimToSpan, historyEnd, histRange, setHistory, HIST_CAP } from "../anim";
-import { matchVolumes, nearestWithin, thinEven, utcDays, type TimedVol } from "../timematch";
+import { frameIndex, playing, frameCount, setFrameReady, framesToRequest, trimToSpan, historyEnd, histRange, setHistory, histThin, liveLoop, HIST_DEFAULT_MS } from "../anim"; // history 0.6: histThin, liveLoop
+import { matchVolumes, nearestWithin, utcDays, type TimedVol } from "../timematch";
 export { frameIndex, playing };
 export const loading = signal(false);
 export const radarError = signal<string | null>(null);
@@ -322,7 +322,7 @@ export async function reload(opts: { keepIndex?: boolean } = {}) {
         return;
       }
       const h = histRange.value;
-      list = thinEven(await listL2Range(r.site, h.start, h.end), HIST_CAP);
+      list = histThin(await listL2Range(r.site, h.start, h.end)); // history 0.6: history frame step / max frames
     } else if (r.source === "L2") {
       const n = framesToRequest(r.frames, 4, 200);
       const res = await api.get(`/api/radar/${r.site}/latest?n=${n}`);
@@ -346,7 +346,7 @@ export async function reload(opts: { keepIndex?: boolean } = {}) {
         list.push({ key: liveKey, time: m.time, live: true });
       }
       list.sort((a, b) => a.time - b.time);
-      list = settings.value.anim.mode === "time" ? trimToSpan(list) : list.slice(-r.frames);
+      list = liveLoop(list, r.frames); // history 0.6: live loop settings only (+ saver cap)
     } else {
       const n = framesToRequest(r.frames, 4, 200);
       const res = await api.get(`/api/l3/${r.site}/${r.product}/list?n=${n}`);
@@ -566,7 +566,8 @@ effect(() => {
   const r = settings.value.radar;
   const a = settings.value.anim;
   const h = histRange.value;
-  const sig = `${r.site}|${r.source}|${r.product}|${r.tiltAngle}|${r.frames}|${r.live}|${pinned.value?.map((p) => p.key).join(",") ?? ""}|${settings.value.weather.kind === "radar"}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}`;
+  const hs = settings.value.hist; // history 0.6: live loop settings only matter when live, history's own when not
+  const sig = `${r.site}|${r.source}|${r.product}|${r.tiltAngle}|${h ? "" : r.frames}|${r.live}|${pinned.value?.map((p) => p.key).join(",") ?? ""}|${settings.value.weather.kind === "radar"}|${h ? `${h.start}-${h.end}|${hs.step}|${hs.maxFrames}` : `${a.mode}|${a.minutes}|${settings.value.saver}`}`;
   void api.base;
   if (sig === lastSig) return;
   const siteChanged = lastSig.split("|")[0] !== r.site;
@@ -646,7 +647,7 @@ export async function listL2Range(site: string, start: number, end: number): Pro
 /** Show history: volumes from a UTC day ending at `endMs` (enters history mode). */
 export async function loadHistory(date: string, endMs?: number) {
   const end = endMs ?? Date.parse(`${date}T23:59:59Z`);
-  setHistory(end - settings.value.anim.minutes * 60_000, Math.min(end, Date.now()));
+  setHistory(end - HIST_DEFAULT_MS, Math.min(end, Date.now())); // history 0.6: not the live loop span
 }
 
 export function backToLatest() {

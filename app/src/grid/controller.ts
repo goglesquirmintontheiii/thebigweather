@@ -277,7 +277,8 @@ effect(() => {
   const a = settings.value.anim;
   const h = histRange.value;
   void api.base;
-  const sig = w.kind === "grid" ? `${w.id}|${w.run ?? ""}|${w.storm ?? ""}|${n}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}|${settings.value.saver}` : ""; // saver caps frames
+  const hs = settings.value.hist; // history 0.6: loop settings when live, history's frame step / max when not
+  const sig = w.kind === "grid" ? `${w.id}|${w.run ?? ""}|${w.storm ?? ""}|${h ? `${h.start}-${h.end}|${hs.step}|${hs.maxFrames}` : `${n}|${a.mode}|${a.minutes}|${settings.value.saver}`}` : ""; // saver caps frames
   if (sig === lastSig) return;
   const layerChanged = lastSig.split("|")[0] !== sig.split("|")[0];
   lastSig = sig;

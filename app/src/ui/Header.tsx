@@ -6,6 +6,7 @@ import { activeLabel, gridDef } from "../weather";
 import { fmtTime, fmtAge } from "../util";
 import { Zap, History, Loader, X } from "lucide-preact";
 import { LayerPicker } from "./LayerPicker";
+import { Btn3D } from "./View3D"; // 3D button (only for layers with 3D data)
 
 // the radar product is picked from the dropdown on the map (ui/Panes.tsx MainPaneHead)
 
@@ -70,6 +71,7 @@ function GridHeader() {
           )}
         </div>
       )}
+      <Btn3D />
       <TimeBlock t={t} forecast={isForecast.value ? f?.label ?? "Fcst" : undefined} />
       {activeError.value && <div class="hdr-err">{activeError.value}</div>}
     </div>
@@ -105,6 +107,7 @@ function RadarHeader() {
           {sweep.vcp ? <span class="hdr-vcp">VCP {sweep.vcp}</span> : null}
         </div>
       )}
+      <Btn3D />
       <TimeBlock t={t} />
       {pinned.value && (
         <button class="chip hist" onClick={backToLatest} title="Back to latest">

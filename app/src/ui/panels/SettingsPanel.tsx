@@ -5,6 +5,7 @@ import { Toggle } from "./RadarPanel";
 import { Trash2, Check, Plus, Server } from "lucide-preact";
 import { playAlertSound } from "../../sound";
 import { ACCENTS } from "../../theme"; // workflow
+import { ServerSettingsSection } from "../ServerSettings"; // shake/stats/server 0.6
 
 const KEY_LABELS: Record<string, string> = {
   google_maps: "Google Map Tiles",
@@ -57,7 +58,7 @@ export function ServerEditor({ onDone }: { onDone?: () => void }) {
   );
 }
 
-function KeysEditor() {
+export function KeysEditor() {
   const [keys, setKeys] = useState<Record<string, string> | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -139,6 +140,7 @@ export function SettingsPanel() {
           </div>
         )}
       </section>
+      <ServerSettingsSection /> {/* shake/stats/server 0.6 */}
       <AppearanceSection />
       <section>
         <label class="lbl">Data use</label>
@@ -221,7 +223,7 @@ export function SettingsPanel() {
       <section>
         <label class="lbl">About</label>
         <div class="muted small">
-          TheBigWeather 0.1.0 · Phase 1. Map data © OpenStreetMap contributors, CARTO, Esri, OpenFreeMap. Radar data: NOAA NEXRAD/TDWR via AWS Open Data. Alerts: NWS.
+          TheBigWeather. Map data © OpenStreetMap contributors, CARTO, Esri, OpenFreeMap. Radar data: NOAA NEXRAD/TDWR via AWS Open Data. Alerts: NWS.
         </div>
       </section>
     </div>

@@ -2,7 +2,10 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+mod admin;
 mod alerts;
+mod caches;
+mod logbuf;
 mod overlays;
 mod grid;
 mod api;
@@ -68,30 +71,53 @@ enum Cmd {
     Camdb,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into()))
-        .with_target(false)
-        .init();
+fn main() -> anyhow::Result<()> {
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into()))
+            .with(tracing_subscriber::fmt::layer().with_target(false))
+            .with(logbuf::RingLayer)
+            .init();
+    }
     let cli = Cli::parse();
-    let mut cfg = config::Config::load(&cli.config)?;
+    // the CPU share is needed before the async runtime exists
+    let pre = config::Config::load(&cli.config)?;
+    let prof = config::detect_profile(&pre);
+    let mut rt = tokio::runtime::Builder::new_multi_thread();
+    rt.enable_all().worker_threads(prof.cpu_threads.max(1));
+    if prof.cpu_percent < 100 {
+        // blocking pool also serves file I/O, so leave it some slack over the decode limit
+        rt.max_blocking_threads((prof.cpu_threads * 2).max(4));
+    }
+    let res = rt.build()?.block_on(run(cli, pre));
+    match res {
+        Ok(true) => admin::reexec(),
+        Ok(false) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Runs the server; Ok(true) means "restart requested".
+async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
+    let mut cfg = cfg;
     match cli.cmd.as_ref().unwrap_or(&Cmd::Run) {
         Cmd::Token => {
             println!("{}", cfg.server.token);
-            return Ok(());
+            return Ok(false);
         }
         Cmd::NewToken => {
             cfg.server.token = config::new_token();
             cfg.save(&cli.config)?;
             println!("{}", cfg.server.token);
-            return Ok(());
+            return Ok(false);
         }
         Cmd::Profile => {
             println!("{}", serde_json::to_string_pretty(&config::detect_profile(&cfg))?);
-            return Ok(());
+            return Ok(false);
         }
-        Cmd::Inspect { files } => return inspect(files),
+        Cmd::Inspect { files } => return inspect(files).map(|_| false),
         Cmd::Run | Cmd::Camdb => {}
     }
 
@@ -105,16 +131,23 @@ async fn main() -> anyhow::Result<()> {
             Some(db) => println!("{}", serde_json::to_string_pretty(&db.stats)?),
             None => println!("No camera file found in {}", data.join("uploads").display()),
         }
-        return Ok(());
+        return Ok(false);
     }
     let data_dir = abs(&cfg.server.data_dir);
-    cfg.server.web_dir = abs(&cfg.server.web_dir);
     std::fs::create_dir_all(&data_dir)?;
+    config::set_paths(config::Paths {
+        config: std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone()),
+        data: std::fs::canonicalize(&data_dir).unwrap_or_else(|_| data_dir.clone()),
+        cache: data_dir.join("cache"),
+        web: abs(&cfg.server.web_dir),
+    });
+    admin::set_args(std::env::args_os().collect());
 
     let profile = config::detect_profile(&cfg);
     tracing::info!(
-        "profile: {} ({} cores, {} GB RAM) -> {} decode threads, {} MB cache",
-        profile.name, profile.cores, profile.ram_gb, profile.threads, profile.memory_mb
+        "profile: {} ({} cores, {} GB RAM, cpu {}% = {} threads) -> {} decode threads, {} MB cache (grid {} / radar {} / other {})",
+        profile.name, profile.cores, profile.ram_gb, profile.cpu_percent, profile.cpu_threads, profile.threads, profile.memory_mb,
+        profile.budget.grid_mb, profile.budget.radar_mb, profile.budget.other_mb
     );
     rayon::ThreadPoolBuilder::new().num_threads(profile.threads).build_global().ok();
 
@@ -129,15 +162,11 @@ async fn main() -> anyhow::Result<()> {
     let health = Arc::new(health::Health::new(hub.clone()));
 
     // disk cache cap
-    let disk_cap = if cfg.profile.disk_cache_mb > 0 {
-        cfg.profile.disk_cache_mb * 1024 * 1024
-    } else {
-        let free = free_space(&data_dir);
-        (free / 5).clamp(1 << 30, 50 << 30)
-    };
+    let disk_cap = disk_cap_bytes(cfg.profile.disk_cache_mb, &data_dir);
     tracing::info!("raw cache cap: {} GB", disk_cap / (1 << 30));
 
-    let grids = grid::service::GridService::new(http.clone(), health.clone(), &data_dir, profile.memory_mb * 55 / 100, profile.threads, profile.name == "full");
+    let grids = grid::service::GridService::new(http.clone(), health.clone(), &data_dir, profile.budget.grid_mb, profile.threads, profile.name == "full");
+    grids.metar_archive.configure(&cfg.grid, profile.budget.other_mb);
     *grids.local_dir.write() = cli.grid_dir.clone();
     if let Some(f) = &cli.metar_fixture {
         grids.load_metar_fixture(&std::fs::read(f)?)?;
@@ -149,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
         http.clone(),
         &cfg.radar,
         &data_dir,
-        profile.memory_mb * 45 / 100,
+        profile.budget.radar_mb,
         profile.threads,
         disk_cap,
         health.clone(),
@@ -200,6 +229,7 @@ async fn main() -> anyhow::Result<()> {
     stats::spawn(hub.clone(), data_dir.clone(), profile.stats_interval_ms, stats_latest.clone());
 
     let bind = cfg.server.bind.clone();
+    let other_mb = profile.budget.other_mb;
     let profile_full = profile.name == "full";
     let state = Arc::new(api::AppState {
         cfg: parking_lot::RwLock::new(cfg.clone()),
@@ -214,7 +244,11 @@ async fn main() -> anyhow::Result<()> {
         stats: stats_latest,
         started: std::time::Instant::now(),
         grids: grids.clone(),
-        intl: intlradar::IntlRadar::new(http.clone(), health.clone()),
+        intl: {
+            let i = intlradar::IntlRadar::new(http.clone(), health.clone());
+            i.set_budget(other_mb);
+            i
+        },
         rec: recorder::Recorder::new(&data_dir, profile_full),
         overlays: {
             let o = overlays::Overlays::new(http.clone(), health.clone(), &data_dir, grids, profile_full);
@@ -250,22 +284,42 @@ async fn main() -> anyhow::Result<()> {
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("listening on http://{bind}");
-    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-        .with_graceful_shutdown(shutdown())
-        .await?;
-    Ok(())
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    let server = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(async move {
+        shutdown().await;
+        let _ = stop_tx.send(true);
+    });
+    // open WebSockets would hold a graceful shutdown forever: give connections a few seconds
+    tokio::select! {
+        r = server => r?,
+        _ = async {
+            let _ = stop_rx.wait_for(|v| *v).await;
+            tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        } => {}
+    }
+    Ok(admin::restart_requested())
 }
 
 async fn shutdown() {
     let ctrl_c = tokio::signal::ctrl_c();
+    let restart = admin::restart_signal();
     #[cfg(unix)]
     {
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal");
-        tokio::select! { _ = ctrl_c => {}, _ = term.recv() => {} }
+        tokio::select! { _ = ctrl_c => {}, _ = term.recv() => {}, _ = restart => {} }
     }
     #[cfg(not(unix))]
-    ctrl_c.await.ok();
-    tracing::info!("shutting down");
+    tokio::select! { _ = ctrl_c => {}, _ = restart => {} }
+    tracing::info!("shutting down{}", if admin::restart_requested() { " for restart" } else { "" });
+}
+
+/// Raw download cache cap: configured MB, or 20% of free disk (1-50 GB).
+pub fn disk_cap_bytes(mb: u64, data_dir: &std::path::Path) -> u64 {
+    if mb > 0 {
+        mb * 1024 * 1024
+    } else {
+        (free_space(data_dir) / 5).clamp(1 << 30, 50 << 30)
+    }
 }
 
 fn free_space(p: &std::path::Path) -> u64 {

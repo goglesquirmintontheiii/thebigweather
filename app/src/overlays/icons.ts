@@ -448,57 +448,93 @@ export const TC_CATS: [string, string][] = [
   ["c4", "#ff8f20"],
   ["c5", "#ff6060"],
 ];
-export const TC_NOW_SIZE = 46;
+export const TC_NOW_SIZE = 60;
 
-/** Current-position cyclone symbol: an eye with two curved arms, filled for hurricanes, open
- * for storms/depressions; `ang` in radians (the animation turns it), mirrored in the south. */
+/** symbol radius by intensity (fraction of the canvas half-width) */
+const TC_SCALE: Record<string, number> = { td: 0.76, ts: 0.82, c1: 0.85, c2: 0.89, c3: 0.93, c4: 0.97, c5: 1 };
+
+/** Current-position cyclone symbol: two tapered spiral bands around a ringed eye, category
+ * colour with a dark outline and soft glow, "TD"/"TS"/1–5 upright in the centre; larger for
+ * stronger storms. `ang` (radians) turns only the bands; mirrored in the south. */
 export function drawTcNow(c: CanvasRenderingContext2D, s: number, cat: string, south: boolean, ang: number) {
   const color = TC_CATS.find((x) => x[0] === cat)?.[1] ?? "#ffffff";
-  const filled = cat.startsWith("c");
+  const hurricane = cat.startsWith("c");
+  const k = TC_SCALE[cat] ?? 0.8;
+  const R = (s / 2 - 5) * k; // outer reach of the bands (room left for the glow)
+  const eye = R * (hurricane ? 0.37 : 0.45);
   c.save();
   c.translate(s / 2, s / 2);
+  c.save();
   c.rotate(ang);
   if (south) c.scale(-1, 1);
-  const r = s * 0.15;
-  const arm = (k: number) => {
-    // arms trail clockwise outward (N hemisphere), so the turning symbol spins counter-clockwise
-    c.beginPath();
-    for (let i = 0; i <= 16; i++) {
-      const t = i / 16;
-      const rho = r + t * (s * 0.44 - r);
-      const a = -Math.PI / 2 + k * Math.PI + t * Math.PI * 0.62;
-      if (i === 0) c.moveTo(Math.cos(a) * rho, Math.sin(a) * rho);
-      else c.lineTo(Math.cos(a) * rho, Math.sin(a) * rho);
+  // one band: a log-ish spiral from the eye wall outwards, ~0.8 turn-halves long, wide at the
+  // base and tapering to a point; built as a closed outline so it can be filled and stroked
+  const band = (k0: number) => {
+    const N = 28;
+    const L: [number, number][] = [];
+    const Rr: [number, number][] = [];
+    const sweep = Math.PI * 0.8;
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const rho = eye * 0.92 + (R - eye * 0.92) * Math.pow(t, 0.85);
+      const a = -Math.PI / 2 + k0 * Math.PI + t * sweep;
+      const w = R * (hurricane ? 0.34 : 0.27) * Math.pow(1 - t, 1.25) + 0.25; // half-width, tapering to the tip
+      // normal ~ radial direction for a slowly opening spiral
+      const nx = Math.cos(a), ny = Math.sin(a);
+      L.push([nx * (rho - w), ny * (rho - w)]);
+      Rr.push([nx * (rho + w * 0.55), ny * (rho + w * 0.55)]);
     }
-    c.stroke();
-  };
-  c.lineCap = "round";
-  for (const [w, col] of [[filled ? 7 : 6, "rgba(0,0,0,.85)"], [filled ? 4 : 3, color]] as [number, string][]) {
-    c.lineWidth = w;
-    c.strokeStyle = col;
-    arm(0);
-    arm(1);
-  }
-  c.beginPath();
-  c.arc(0, 0, r, 0, Math.PI * 2);
-  if (filled) {
-    c.fillStyle = color;
-    c.fill();
-    c.lineWidth = 1.6;
-    c.strokeStyle = "rgba(0,0,0,.85)";
-    c.stroke();
     c.beginPath();
-    c.arc(0, 0, r * 0.35, 0, Math.PI * 2);
-    c.fillStyle = "rgba(0,0,0,.7)";
-    c.fill();
-  } else {
-    c.lineWidth = 5;
-    c.strokeStyle = "rgba(0,0,0,.85)";
+    c.moveTo(L[0][0], L[0][1]);
+    for (let i = 1; i < L.length; i++) c.lineTo(L[i][0], L[i][1]);
+    for (let i = Rr.length - 1; i >= 0; i--) c.lineTo(Rr[i][0], Rr[i][1]);
+    c.closePath();
+  };
+  c.lineJoin = "round";
+  // glow + dark casing
+  c.shadowColor = hurricane ? color : "rgba(0,0,0,.6)";
+  c.shadowBlur = hurricane ? 7 : 4;
+  c.fillStyle = "rgba(8,12,18,.9)";
+  c.strokeStyle = "rgba(8,12,18,.9)";
+  c.lineWidth = 3;
+  for (const k0 of [0, 1]) {
+    band(k0);
     c.stroke();
-    c.lineWidth = 2.6;
+    c.fill();
+  }
+  c.shadowBlur = 0;
+  c.shadowColor = "transparent";
+  // the bands: colour with a lighter leading edge
+  const g = c.createRadialGradient(0, 0, eye * 0.6, 0, 0, R);
+  g.addColorStop(0, color);
+  g.addColorStop(1, hurricane ? color : `${color}cc`);
+  c.fillStyle = g;
+  for (const k0 of [0, 1]) {
+    band(k0);
+    c.fill();
+  }
+  c.restore();
+  // eye (upright): filled for hurricanes, dark with a coloured ring for storms/depressions
+  c.beginPath();
+  c.arc(0, 0, eye, 0, Math.PI * 2);
+  c.fillStyle = hurricane ? color : "rgba(12,18,26,.92)";
+  c.fill();
+  c.lineWidth = 2.2;
+  c.strokeStyle = "rgba(8,12,18,.95)";
+  c.stroke();
+  if (!hurricane) {
+    c.beginPath();
+    c.arc(0, 0, eye - 1.6, 0, Math.PI * 2);
+    c.lineWidth = 1.6;
     c.strokeStyle = color;
     c.stroke();
   }
+  const label = hurricane ? cat.slice(1) : cat.toUpperCase();
+  c.font = `800 ${Math.round(eye * (hurricane ? 1.25 : 0.92))}px "Inter", "Noto Sans", system-ui, sans-serif`;
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  c.fillStyle = hurricane ? "#0b0f14" : color;
+  c.fillText(label, 0, eye * 0.06);
   c.restore();
 }
 
@@ -574,8 +610,25 @@ function registerIcons05(map: MLMap) {
 }
 /* ---------- end layers 0.5 ---------- */
 
+/** AQI marker: EPA category colour disc with a dark ring (the value is drawn as text on top). */
+const AQI_COLORS = ["#9ca3af", "#00e400", "#ffff00", "#ff7e00", "#ff0000", "#8f3f97", "#7e0023"];
+function aqiDot(fill: string): Draw {
+  return (c, s) => {
+    c.beginPath();
+    c.arc(s / 2, s / 2, s / 2 - 1.6, 0, Math.PI * 2);
+    c.fillStyle = fill;
+    c.globalAlpha = 0.92;
+    c.fill();
+    c.globalAlpha = 1;
+    c.lineWidth = 1.6;
+    c.strokeStyle = "rgba(0,0,0,.75)";
+    c.stroke();
+  };
+}
+
 export function registerIcons(map: MLMap) {
   registerIcons05(map);
+  AQI_COLORS.forEach((col, i) => make(map, `aqi-${i}`, 26, aqiDot(col)));
   make(map, "cam-img", 22, camera);
   make(map, "cam-hls", 22, video);
   make(map, "cam-yt", 22, youtube);

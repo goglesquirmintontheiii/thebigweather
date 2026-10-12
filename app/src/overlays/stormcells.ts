@@ -37,10 +37,55 @@ export const stormCells = signal<{ t: number; cells: { lon: number; lat: number;
 
 const MINUTES = [15, 30, 45, 60];
 
+/** cells closer than this are one storm seen by several radars (when they move alike) */
+const MERGE_M = 7000;
+
+function sameMotion(a: any, b: any): boolean {
+  if (a.dir_to == null || b.dir_to == null || !(a.sknt > 0) || !(b.sknt > 0)) return true; // can't tell: trust the distance
+  const d = Math.abs(((a.dir_to - b.dir_to + 540) % 360) - 180);
+  return d <= 50 && Math.abs(a.sknt - b.sknt) <= 18;
+}
+
+const maxOf = (a: any, b: any) => (a == null ? b : b == null ? a : Math.max(a, b));
+
+/** One feature per storm: detections within ~7 km with similar motion are merged, keeping the
+ * position/motion/id from the nearest radar (or a clearly newer scan) and the worst of the
+ * attributes (TVS, meso rank, hail, VIL, dBZ, tops). `_radars` lists every radar that saw it. */
+export function mergeCells<T extends { geometry?: any; properties?: any }>(feats: T[]): T[] {
+  const pts = feats.filter((f) => f.geometry?.type === "Point" && f.geometry.coordinates);
+  const rng = (f: T) => f.properties?.range_km ?? f.properties?.range ?? 999;
+  pts.sort((a, b) => rng(a) - rng(b) || (b.properties?.t ?? 0) - (a.properties?.t ?? 0));
+  const kept: T[] = [];
+  for (const f of pts) {
+    const p = f.properties ?? {};
+    const [lon, lat] = f.geometry.coordinates;
+    const k = kept.find((q) => {
+      const [x, y] = q.geometry.coordinates;
+      return Math.hypot((x - lon) * 111_195 * Math.cos((lat * Math.PI) / 180), (y - lat) * 111_195) < MERGE_M && sameMotion(q.properties, p);
+    });
+    if (!k) {
+      kept.push({ ...f, properties: { ...p, _radars: [p.nexrad].filter(Boolean) } });
+      continue;
+    }
+    const q = k.properties;
+    if ((p.t ?? 0) - (q.t ?? 0) > 10 * 60_000) {
+      // a much newer scan wins the position and motion
+      (k as any).geometry = f.geometry;
+      for (const key of ["nexrad", "storm_id", "t", "azimuth", "range", "range_km", "drct", "dir_to", "sknt"]) q[key] = p[key];
+    }
+    if (p.nexrad && !q._radars.includes(p.nexrad)) q._radars.push(p.nexrad);
+    if (hasTvs(p) && !hasTvs(q)) q.tvs = p.tvs;
+    if (mesoRank(p) > mesoRank(q)) q.meso = p.meso;
+    for (const key of ["posh", "poh", "max_size", "vil", "max_dbz", "top"]) q[key] = maxOf(q[key], p[key]);
+    if (p.max_dbz != null && p.max_dbz === q.max_dbz && p.max_dbz_height != null) q.max_dbz_height = p.max_dbz_height;
+  }
+  return kept;
+}
+
 /** Adds motion arrows (+15 min), dashed forecast track to +60 min and ETA ticks for every
  * moving cell. Derived features carry `_k`; cells are left as they come. */
 export function stormPrepare(fc: any) {
-  const feats = fc?.features ?? [];
+  const feats = mergeCells(fc?.features ?? []);
   const extra: any[] = [];
   const cells: { lon: number; lat: number; p: any }[] = [];
   for (const f of feats) {
@@ -61,7 +106,7 @@ export function stormPrepare(fc: any) {
   cells.sort((a, b) => b.p._threat - a.p._threat);
   notifyEtas(cells);
   stormCells.value = { t: Date.now(), cells };
-  return { ...fc, features: [...extra, ...feats], _count: feats.length };
+  return { ...fc, features: [...extra, ...feats], _count: feats.length, _raw: fc?.features?.length ?? 0 };
 }
 
 const isCell: ExpressionSpecification = ["!", ["has", "_k"]];
@@ -102,6 +147,17 @@ export function stormLayers(s: string, st: Style, o: Record<string, string>): La
   ];
 }
 
+/** radars that detected the (merged) cell; MapLibre hands arrays back as JSON strings */
+function radarsOf(p: any): string[] {
+  const r = p?._radars;
+  if (Array.isArray(r)) return r;
+  try {
+    return typeof r === "string" ? JSON.parse(r) : [];
+  } catch {
+    return [];
+  }
+}
+
 export function cellFlags(p: any): string {
   const m = mesoRank(p);
   return [hasTvs(p) && "TVS", m >= 5 ? `Meso ${m}` : m > 0 ? `Shear ${m}` : "", hasHail(p) && `Hail ${p.max_size ?? "?"} in`].filter(Boolean).join(" · ");
@@ -112,7 +168,7 @@ export function stormClick(p: any): Popup | undefined {
   const v = (x: any, u = "") => (x == null || x === "" ? "—" : `${x}${u}`);
   const tvs = hasTvs(p);
   return {
-    title: `Cell ${p.storm_id} · K${p.nexrad}`,
+    title: `Cell ${p.storm_id} · K${p.nexrad}${radarsOf(p).length > 1 ? ` (+${radarsOf(p).length - 1})` : ""}`,
     sub: cellFlags(p) || "No rotation or hail flags",
     color: tvs ? "#ef4444" : mesoRank(p) >= 5 ? "#facc15" : hasHail(p) ? "#22c55e" : "#94a3b8",
     rows: [
@@ -124,6 +180,7 @@ export function stormClick(p: any): Popup | undefined {
       ["Moving", p.dir_to != null && p.sknt ? `${compass(p.dir_to)} ${fmtKt(p.sknt)}` : "Stationary"],
       ["Meso / TVS", `${p.meso ?? "NONE"} / ${p.tvs ?? "NONE"}`],
       ["Scan", p.t ? hhmm(p.t) : "—"],
+      ...(radarsOf(p).length > 1 ? [["Seen by", radarsOf(p).map((r) => `K${r}`).join(", ")] as [string, string]] : []),
       ...(p._eta ? [["Reaches", String(p._eta)] as [string, string]] : []),
     ],
   };

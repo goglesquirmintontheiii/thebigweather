@@ -16,7 +16,6 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FrameInfo {
@@ -50,6 +49,14 @@ impl SizedLru {
     fn get(&mut self, k: &str) -> Option<Arc<Grid>> {
         self.map.get(k).map(|(g, _)| g.clone())
     }
+    fn trim(&mut self) {
+        while self.bytes > self.cap {
+            match self.map.pop_lru() {
+                Some((_, (_, s))) => self.bytes -= s,
+                None => break,
+            }
+        }
+    }
     fn put(&mut self, k: String, g: Arc<Grid>) {
         let n = g.bytes();
         if let Some((_, s)) = self.map.put(k, (g, n)) {
@@ -76,7 +83,9 @@ pub struct GridService {
     ndfd: tokio::sync::Mutex<HashMap<String, (Instant, i64, Bytes, Vec<MessageInfo>)>>,
     metar: RwLock<VecDeque<(i64, Arc<Vec<Obs>>)>>,
     metar_keep: usize,
-    sem: Arc<Semaphore>,
+    /// archived METARs (history mode)
+    pub metar_archive: metar::MetarArchive,
+    sem: crate::caches::Limiter,
     inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     max_dim_mrms: usize,
     max_dim_goes: usize,
@@ -84,7 +93,7 @@ pub struct GridService {
     /// MRMS 3D cubes (header + voxels), byte-capped
     cubes: Mutex<(lru::LruCache<String, Bytes>, usize, usize)>,
     /// /api/grid/wind responses (short-lived, byte-capped): key → (made, body)
-    winds: Mutex<(lru::LruCache<String, (Instant, Bytes)>, usize)>,
+    winds: Mutex<(lru::LruCache<String, (Instant, Bytes)>, usize, usize)>,
     /// optional folder of local files used as frames (offline use / case studies):
     /// files are named "<layer id with / as _>__<original name>"
     pub local_dir: RwLock<Option<PathBuf>>,
@@ -152,27 +161,123 @@ impl GridService {
     pub fn new(http: reqwest::Client, health: Arc<Health>, data_dir: &std::path::Path, memory_mb: usize, threads: usize, full: bool) -> Arc<Self> {
         let cache_dir = data_dir.join("cache/raw");
         std::fs::create_dir_all(&cache_dir).ok();
+        let reqwest_clone = http.clone();
         Arc::new(Self {
             http,
             health,
             layers: sources::all_layers(),
             cache_dir,
-            // 70% decoded grids, 30% RGB composites
-            grids: Mutex::new(SizedLru { map: lru::LruCache::unbounded(), bytes: 0, cap: memory_mb * 1024 * 1024 * 7 / 10 }),
+            grids: Mutex::new(SizedLru { map: lru::LruCache::unbounded(), bytes: 0, cap: 0 }),
             listings: Mutex::new(HashMap::new()),
             texts: Mutex::new(HashMap::new()),
             ndfd: tokio::sync::Mutex::new(HashMap::new()),
             metar: RwLock::new(VecDeque::new()),
             metar_keep: if full { 18 } else { 6 },
-            sem: Arc::new(Semaphore::new(threads.max(1))),
+            metar_archive: metar::MetarArchive::new(reqwest_clone, data_dir),
+            sem: crate::caches::Limiter::new(threads),
             inflight: Mutex::new(HashMap::new()),
             max_dim_mrms: if full { 7000 } else { 3500 },
             max_dim_goes: if full { 5424 } else { 2712 },
-            rgbs: Mutex::new((lru::LruCache::unbounded(), 0, memory_mb * 1024 * 1024 * 3 / 10)),
-            cubes: Mutex::new((lru::LruCache::unbounded(), 0, (memory_mb * 1024 * 1024 / 8).clamp(16 << 20, 64 << 20))),
-            winds: Mutex::new((lru::LruCache::unbounded(), 0)),
+            rgbs: Mutex::new((lru::LruCache::unbounded(), 0, 0)),
+            cubes: Mutex::new((lru::LruCache::unbounded(), 0, 0)),
+            winds: Mutex::new((lru::LruCache::unbounded(), 0, 0)),
             local_dir: RwLock::new(None),
         })
+        .with_budget(memory_mb)
+    }
+
+    fn with_budget(self: Arc<Self>, memory_mb: usize) -> Arc<Self> {
+        self.set_budget(memory_mb);
+        self
+    }
+
+    /// Byte caps from the grid share of the memory budget (MB): MRMS cubes 1/8 (16-512 MB),
+    /// wind fields 1/32 (16-256 MB), the rest 70% decoded grids / 30% RGB composites.
+    pub fn set_budget(&self, memory_mb: usize) {
+        let total = memory_mb.max(64) * 1024 * 1024;
+        let cube = (total / 8).clamp(16 << 20, 512 << 20);
+        let wind = (total / 32).clamp(16 << 20, 256 << 20);
+        let rest = total.saturating_sub(cube + wind);
+        {
+            let mut g = self.grids.lock();
+            g.cap = rest * 7 / 10;
+            g.trim();
+        }
+        fn trim<V>(c: &mut (lru::LruCache<String, V>, usize, usize), cap: usize, size: impl Fn(&V) -> usize) {
+            c.2 = cap;
+            while c.1 > c.2 && c.0.len() > 1 {
+                match c.0.pop_lru() {
+                    Some((_, v)) => c.1 -= size(&v),
+                    None => break,
+                }
+            }
+        }
+        trim(&mut self.rgbs.lock(), rest * 3 / 10, |v| v.1);
+        trim(&mut self.cubes.lock(), cube, |v| v.len());
+        trim(&mut self.winds.lock(), wind, |v| v.1.len());
+    }
+
+    /// Concurrent decodes (CPU share); applies as running work finishes.
+    pub fn set_threads(&self, n: usize) {
+        self.sem.resize(n);
+    }
+
+    pub fn cache_stats(&self) -> Vec<crate::caches::CacheInfo> {
+        use crate::caches::CacheInfo;
+        let mut v = vec![];
+        {
+            let g = self.grids.lock();
+            v.push(CacheInfo::mem("grid-decoded", "Gridded data (decoded)", g.bytes, g.map.len(), g.cap));
+        }
+        {
+            let g = self.rgbs.lock();
+            v.push(CacheInfo::mem("grid-rgb", "Satellite RGB composites", g.1, g.0.len(), g.2));
+        }
+        {
+            let g = self.cubes.lock();
+            v.push(CacheInfo::mem("grid-cubes", "MRMS 3D cubes", g.1, g.0.len(), g.2));
+        }
+        {
+            let g = self.winds.lock();
+            v.push(CacheInfo::mem("grid-wind", "Wind particle fields", g.1, g.0.len(), g.2));
+        }
+        {
+            let q = self.metar.read();
+            let b = q.iter().map(|(_, o)| o.iter().map(|o| 96 + o.raw.len() + o.id.len()).sum::<usize>()).sum();
+            v.push(CacheInfo::mem("metar-live", "METAR snapshots (live)", b, q.len(), 0));
+        }
+        let (b, n, cap) = self.metar_archive.mem_stats();
+        v.push(CacheInfo::mem("metar-archive", &format!("METAR archive hours (max {cap})"), b, n, 0));
+        v
+    }
+
+    /// Clear one memory cache by id (true if the id is a grid cache).
+    pub fn clear_cache(&self, id: &str) -> bool {
+        match id {
+            "grid-decoded" => {
+                let mut g = self.grids.lock();
+                g.map.clear();
+                g.bytes = 0;
+            }
+            "grid-rgb" => {
+                let mut g = self.rgbs.lock();
+                g.0.clear();
+                g.1 = 0;
+            }
+            "grid-cubes" => {
+                let mut g = self.cubes.lock();
+                g.0.clear();
+                g.1 = 0;
+            }
+            "grid-wind" => {
+                let mut g = self.winds.lock();
+                g.0.clear();
+                g.1 = 0;
+            }
+            "metar-archive" => self.metar_archive.clear_mem(),
+            _ => return false,
+        }
+        true
     }
 
     pub fn layer(&self, id: &str) -> Result<&LayerDef> {
@@ -275,7 +380,10 @@ impl GridService {
             "mrms" => self.mrms_frames(&l, n, end).await,
             "model" => self.model_frames(&l, run, storm).await,
             "ndfd" => self.ndfd_frames(&l).await,
-            "metar" => Ok(self.metar_frames(&l, n)),
+            "metar" => match end {
+                Some(e) => self.metar_archive_frames(&l, n, e.timestamp_millis()).await,
+                None => Ok(self.metar_frames(&l, n)),
+            },
             "goes" => self.goes_frames(&l, n, end).await,
             "future" => self.future_frames(&l).await,
             "opera" => self.opera_frames(&l, n, end).await,
@@ -686,6 +794,38 @@ impl GridService {
         FramesResp { frames, ..Default::default() }
     }
 
+    /// History: hourly METAR analyses ending at `end` from the IEM archive (≤ 48 frames).
+    /// The newest snapshot is fetched now so an unreachable archive is reported up front.
+    async fn metar_archive_frames(&self, l: &LayerDef, n: usize, end: i64) -> Result<FramesResp> {
+        let newest = end / 3_600_000 * 3_600_000;
+        self.metar_archive.snapshot(newest).await?;
+        let n = n.clamp(1, 48) as i64;
+        let frames = (0..n)
+            .rev()
+            .map(|k| {
+                let t = newest - k * 3_600_000;
+                FrameInfo { key: format!("metar|{}|{t}|a", l.id), time: t, label: String::new() }
+            })
+            .collect();
+        Ok(FramesResp { frames, ..Default::default() })
+    }
+
+    /// Observations valid at `t`: a live snapshot when one is close enough, else the archive.
+    /// Returns (snapshot time, archived?, observations).
+    pub async fn metars_at(&self, t: i64) -> Result<(i64, bool, Arc<Vec<Obs>>)> {
+        {
+            let q = self.metar.read();
+            if let Some((st, o)) = q.iter().rev().find(|(st, _)| *st <= t + 60_000 && t - *st < 15 * 60_000) {
+                return Ok((*st, false, o.clone()));
+            }
+            if let Some((st, o)) = q.back().filter(|(st, _)| t >= *st) {
+                return Ok((*st, false, o.clone()));
+            }
+        }
+        let (st, o) = self.metar_archive.snapshot(t).await?;
+        Ok((st, true, o))
+    }
+
     async fn goes_frames(&self, l: &LayerDef, n: usize, end: Option<chrono::DateTime<Utc>>) -> Result<FramesResp> {
         let mut p = l.product.split('|');
         let sat: u32 = p.next().unwrap_or("19").parse()?;
@@ -748,7 +888,7 @@ impl GridService {
     }
 
     async fn blocking<T: Send + 'static>(&self, f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
-        let _p = self.sem.clone().acquire_owned().await?;
+        let _p = self.sem.sem.clone().acquire_owned().await?;
         tokio::task::spawn_blocking(f).await?
     }
 
@@ -820,6 +960,13 @@ impl GridService {
                 let idx: usize = parts[3].parse()?;
                 let opts = DecodeOpts { nodata: l.nodata.clone(), min_valid: None, transform: l.transform, max_dim: 0 };
                 self.blocking(move || decode::decode(&b, idx, &opts)).await
+            }
+            Some("metar") if parts.len() == 4 && parts[3] == "a" => {
+                let l = self.layer(parts[1])?.clone();
+                let t: i64 = parts[2].parse()?;
+                let (_, obs) = self.metar_archive.snapshot(t).await?;
+                let field = l.product.clone();
+                self.blocking(move || Ok(metar::analyze(&obs, &field, t))).await
             }
             Some("metar") if parts.len() == 3 => {
                 let l = self.layer(parts[1])?.clone();
@@ -1086,7 +1233,7 @@ impl GridService {
             c.1 -= old.len();
         }
         c.1 += b.len();
-        while c.1 > 16 << 20 && c.0.len() > 1 {
+        while c.1 > c.2 && c.0.len() > 1 {
             match c.0.pop_lru() {
                 Some((_, (_, old))) => c.1 -= old.len(),
                 None => break,

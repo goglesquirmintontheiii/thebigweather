@@ -1023,6 +1023,7 @@ export const OVERLAYS: OverlayDef[] = [
     id: "shake",
     name: "Raspberry Shake seismographs",
     group: "Hazards",
+    hidden: true, // shake/stats/server 0.6: toggled from the Seismographs window
     refresh: 3600,
     style: { color: "#a78bfa", opacity: 1, size: 1, labels: false },
     source: { cluster: true, clusterRadius: 34, clusterMaxZoom: 6 },

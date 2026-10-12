@@ -1,4 +1,4 @@
-// "Rotation scan" bar under the header: scan every US radar for tornadic rotation or supercells.
+// "Rotation scan" bar under the header and the main product dropdown: scan every US radar for tornadic rotation or supercells.
 
 import { useEffect, useState } from "preact/hooks";
 import { settings } from "../store";
@@ -6,21 +6,6 @@ import { mapRef } from "../map/mapview";
 import { scanMode, scanHits, scanState, runScan, clearScan, goToHit, type ScanMode } from "../overlays/rotation";
 import { distance, fmtDist } from "../util";
 import { Tornado, CloudLightning, ChevronDown, X, Loader, AlertTriangle } from "lucide-preact";
-
-/** follow the header's height (it wraps on narrow windows) */
-function useHeaderBottom() {
-  const [y, setY] = useState(62);
-  useEffect(() => {
-    const el = document.querySelector(".topbar");
-    if (!el) return;
-    const upd = () => setY(Math.round(el.getBoundingClientRect().bottom + 6));
-    upd();
-    const ro = new ResizeObserver(upd);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return y;
-}
 
 /** re-render when the map stops moving (distances are from the map center) */
 function useMapCenter() {
@@ -37,7 +22,6 @@ function useMapCenter() {
 
 export function ScanBar() {
   const show = !!settings.value.ovl.rotscan?.on;
-  const top = useHeaderBottom();
   const [open, setOpen] = useState(false);
   const c = useMapCenter();
   if (!show) return null;
@@ -51,7 +35,7 @@ export function ScanBar() {
   );
   const age = st.t ? Math.round((Date.now() - st.t) / 60000) : null;
   return (
-    <div class="scanbar" style={{ top: `${top}px` }}>
+    <div class="scanbar">
       <div class="scan-row glass">
         {btn("tor", "Tornadic rotation", Tornado)}
         {btn("sc", "Supercells", CloudLightning)}

@@ -18,6 +18,12 @@ import { SourcesPanel } from "./panels/SourcesPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { Bookmark } from "lucide-preact"; // workflow
 import { WorkspacePanel } from "./panels/WorkspacePanel"; // workflow
+import { History } from "lucide-preact"; // history 0.6
+import { histStormsOpen } from "../histsearch"; // history 0.6
+/* shake/stats/server 0.6 */
+import { AudioWaveform } from "lucide-preact";
+import { shakeOpen } from "../shake";
+/* end shake/stats/server 0.6 */
 
 const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "radar", icon: Radar, label: "Radar" },
@@ -31,6 +37,7 @@ const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
 const MORE: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "forecast", icon: CloudSun, label: "Forecast" },
   { id: "radio", icon: Radio, label: "Weather radio" },
+  { id: "seismo" as any, icon: AudioWaveform, label: "Seismographs" }, // shake/stats/server 0.6
   { id: "search", icon: Search, label: "Search" },
   { id: "record", icon: CircleDot, label: "Recordings" },
   { id: "files", icon: FolderOpen, label: "Files & backup" },
@@ -51,12 +58,16 @@ export function Rail() {
       ))}
       <div class="rail-sep" />
       {MORE.map(({ id, icon: Icon, label }) => (
-        <button key={id} class={`rail-btn ${openPanel.value === id || (id === "forecast" && forecastOpen.value) || (id === "radio" && radioOpen.value) ? "on" : ""}`} title={label} onClick={() => (id === "forecast" ? (forecastOpen.value = !forecastOpen.value) : id === "radio" ? (radioOpen.value = !radioOpen.value) : (openPanel.value = openPanel.value === id ? null : id))}>
+        <button key={id} class={`rail-btn ${openPanel.value === id || (id === "forecast" && forecastOpen.value) || (id === "radio" && radioOpen.value) || ((id as string) === "seismo" && shakeOpen.value) ? "on" : ""}`} title={label} onClick={() => (id === "forecast" ? (forecastOpen.value = !forecastOpen.value) : id === "radio" ? (radioOpen.value = !radioOpen.value) : (id as string) === "seismo" ? (shakeOpen.value = !shakeOpen.value) /* shake/stats/server 0.6 */ : (openPanel.value = openPanel.value === id ? null : id))}>
           <Icon size={20} />
           {id === "radio" && (nowPlaying.value || players.value.length > 0) && <span class="dot online" />}
           {id === "record" && recs.value.some((r) => r.status === "recording") && <span class="dot rec" />}
         </button>
       ))}
+      {/* history 0.6: Historical Storms window */}
+      <button class={`rail-btn ${histStormsOpen.value ? "on" : ""}`} title="Historical Storms" onClick={() => (histStormsOpen.value = !histStormsOpen.value)}>
+        <History size={20} />
+      </button>
       <div class="rail-fill" />
       <button class={`rail-btn ${openPanel.value === "settings" ? "on" : ""}`} title="Settings" onClick={() => (openPanel.value = openPanel.value === "settings" ? null : "settings")}>
         <Settings size={20} />

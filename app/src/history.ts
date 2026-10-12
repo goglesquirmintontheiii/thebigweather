@@ -41,11 +41,13 @@ export function exitHistory() {
 
 /** Overlays replayed from a history feed: `span` = active t0 ≤ T < t1, `report` = t ≤ T,
  * `valid` = fetched for the frame time. Keyed by overlay id or feed name. */
-export const HIST_FEEDS: Record<string, { feed: string; kind: "span" | "report" | "valid" }> = {
+export const HIST_FEEDS: Record<string, { feed: string; kind: "span" | "report" | "valid"; param?: "valid" | "time"; roundMs?: number; errNote?: string }> = {
   lsr: { feed: "lsrhist", kind: "report" },
   watchbox: { feed: "watchhist", kind: "span" },
   mcd: { feed: "mcdhist", kind: "span" },
   stormattr: { feed: "stormattr", kind: "valid" },
+  // history 0.6: archived METARs nearest the frame time (hourly, cached per hour)
+  metar: { feed: "metar", kind: "valid", param: "time", roundMs: 3600_000, errNote: "METAR archive unavailable" },
 };
 /** Reference layers that don't change with time (kept in history mode). */
 const STATIC = new Set(["wfo", "airports", "nwr", "search"]);
@@ -72,10 +74,10 @@ const iso = (t: number) => new Date(t).toISOString().slice(0, 19) + "Z";
 const feedCache = new Map<string, Promise<any>>();
 
 /** A history feed for the current window (cached). `valid` feeds take the frame time instead. */
-export function histFeed(feed: string, at?: number): Promise<any> {
+export function histFeed(feed: string, at?: number, param: "valid" | "time" = "valid"): Promise<any> {
   const h = histRange.value;
   if (!h) return Promise.resolve({ type: "FeatureCollection", features: [] });
-  const q = at != null ? `valid=${iso(at)}` : `sts=${iso(h.start)}&ets=${iso(h.end)}`;
+  const q = at != null ? (param === "time" ? `time=${at}` : `valid=${iso(at)}`) : `sts=${iso(h.start)}&ets=${iso(h.end)}`;
   const k = `${feed}?${q}`;
   let p = feedCache.get(k);
   if (!p) {
@@ -164,3 +166,20 @@ effect(() => {
       });
   }
 });
+
+// ---------- history 0.6: the whole event behind a replayed warning segment ----------
+/** Issue/expire of the event a (replayed or live) alert belongs to: all replayed segments of the
+ * same VTEC event, else the alert's own times. */
+export function alertSpan(p: any): { start: number; end: number } {
+  const t = (v: any) => (typeof v === "number" ? v : v ? Date.parse(v) : NaN);
+  let start = [p.t0, p.onset, p.effective, p.sent].map(t).find((x) => Number.isFinite(x)) ?? Date.now();
+  let end = [p.ends, p.expires, p.t1].map(t).find((x) => Number.isFinite(x)) ?? start + 3600_000;
+  const vid = p.vtec_id;
+  if (vid && sbw.peek())
+    for (const f of sbw.peek()!) {
+      if (f.properties.vtec_id !== vid) continue;
+      start = Math.min(start, f.properties.t0);
+      end = Math.max(end, f.properties.t1);
+    }
+  return { start, end: Math.max(end, start + 60_000) };
+}

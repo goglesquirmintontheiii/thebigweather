@@ -20,7 +20,7 @@ export function pinMetar(id: string) {
   if (!id) return;
   if (metarPins.value.some((p) => p.id === id)) return;
   const n = metarPins.value.length;
-  metarPins.value = [...metarPins.value, { id, x: Math.min(window.innerWidth - 320, 420 + ((n * 320) % 960)), y: 80 + ((n * 40) % 200) }];
+  metarPins.value = [...metarPins.value, { id, x: Math.max(8, Math.min(window.innerWidth - 440, 420 + ((n * 440) % 960))), y: 80 + ((n * 40) % 200) }];
   refreshMetars();
 }
 
@@ -99,7 +99,7 @@ export function MetarPanels() {
           <FloatPanel
             key={pin.id}
             cls="metar-panel"
-            w={300}
+            w={420}
             x={pin.x}
             y={pin.y}
             onClose={() => close(pin.id)}
@@ -115,7 +115,7 @@ export function MetarPanels() {
                   <RefreshCw size={13} />
                 </button>
                 {canPopout() && (
-                  <button class="icon-btn" title="Pop out to its own window" onClick={() => (popout({ kind: "metar", title: `METAR ${pin.id}`, width: 340, height: 460, data: { id: pin.id } }), close(pin.id))}>
+                  <button class="icon-btn" title="Pop out to its own window" onClick={() => (popout({ kind: "metar", title: `METAR ${pin.id}`, width: 440, height: 600, data: { id: pin.id } }), close(pin.id))}>
                     <PictureInPicture2 size={13} />
                   </button>
                 )}

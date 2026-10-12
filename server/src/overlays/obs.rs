@@ -17,9 +17,17 @@ fn f32j(v: f32, scale: f32) -> Value {
     }
 }
 
-/// Every station in the latest METAR snapshot (the same feed the surface analysis uses).
-pub fn metars(o: &Overlays) -> Result<Value> {
-    let obs = o.grids.latest_metars().ok_or_else(|| anyhow!("METARs not loaded yet"))?;
+/// Every station in the latest METAR snapshot (the same feed the surface analysis uses), or
+/// with `time` (unix ms) each station's latest report in the hour before that time
+/// (live snapshots when close enough, else the IEM archive).
+pub async fn metars(o: &Overlays, time: &str) -> Result<Value> {
+    let (snap, archived, obs) = if time.is_empty() {
+        let obs = o.grids.latest_metars().ok_or_else(|| anyhow!("METARs not loaded yet"))?;
+        (obs.iter().map(|m| m.time).max().unwrap_or(0), false, obs)
+    } else {
+        let t: i64 = time.trim().parse().map_err(|_| anyhow!("bad time (unix ms required)"))?;
+        o.grids.metars_at(t).await?
+    };
     let feats = obs
         .iter()
         .map(|m| {
@@ -34,7 +42,24 @@ pub fn metars(o: &Overlays) -> Result<Value> {
             )
         })
         .collect();
-    Ok(fc(feats))
+    let mut v = fc(feats);
+    v["time"] = json!(snap);
+    v["source"] = json!(if archived { "archive" } else { "live" });
+    Ok(v)
+}
+
+// ---------- cache stats (admin API) ----------
+
+impl Overlays {
+    /// Overlay response cache (time-limited, no byte cap).
+    pub fn cache_stats(&self) -> crate::caches::CacheInfo {
+        let c = self.cache.lock();
+        let b: usize = c.iter().map(|(k, (_, v))| k.len() + v.len()).sum();
+        crate::caches::CacheInfo::mem("overlays", "Overlay responses", b, c.len(), 0)
+    }
+    pub fn clear_cache(&self) {
+        self.cache.lock().clear();
+    }
 }
 
 // ---------- NDBC ----------

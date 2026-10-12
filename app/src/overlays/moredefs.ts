@@ -190,6 +190,38 @@ const DM_COLOR: ExpressionSpecification = ["match", ["to-number", ["get", "dm"],
 const DM_NAME = ["Abnormally dry", "Moderate drought", "Severe drought", "Extreme drought", "Exceptional drought"];
 const AQI_COLOR: ExpressionSpecification = ["match", ["to-number", ["get", "cat"], 0], 1, "#00e400", 2, "#ffff00", 3, "#ff7e00", 4, "#ff0000", 5, "#8f3f97", 6, "#7e0023", "#9ca3af"];
 const AQI_TEXT: ExpressionSpecification = ["match", ["to-number", ["get", "cat"], 0], [1, 2, 3], "#000", "#fff"];
+/** AirNow: keep the chosen kind (obs / today's forecast) and pollutant, then one feature per
+ * reporting area carrying the worst AQI and every pollutant's value in `_all`. */
+function aqiPrepare(fc: any, o: Record<string, string>) {
+  const kind = o.kind === "fcst" ? "fcst" : "obs";
+  const param = o.param && o.param !== "all" ? o.param : "";
+  const byArea = new Map<string, any[]>();
+  for (const f of fc?.features ?? []) {
+    const p = f.properties ?? {};
+    if (p.kind !== kind || p.aqi == null || !f.geometry?.coordinates) continue;
+    if (param && String(p.param ?? "").toUpperCase() !== param) continue;
+    const [x, y] = f.geometry.coordinates;
+    const k = `${p.area ?? ""}|${p.st ?? ""}|${(+x).toFixed(3)},${(+y).toFixed(3)}`;
+    byArea.set(k, [...(byArea.get(k) ?? []), f]);
+  }
+  const out: any[] = [];
+  for (const list of byArea.values()) {
+    // forecasts: the earliest day only (today)
+    const day = kind === "fcst" ? list.map((f) => String(f.properties.date ?? "")).sort()[0] : null;
+    const use = day != null ? list.filter((f) => String(f.properties.date ?? "") === day) : list;
+    const per = new Map<string, any>();
+    for (const f of use) {
+      const p = f.properties;
+      const key = String(p.param ?? "?").toUpperCase();
+      if (!per.has(key) || +p.aqi > +per.get(key).aqi) per.set(key, p);
+    }
+    const ps = [...per.values()].sort((a, b) => +b.aqi - +a.aqi);
+    const top = ps[0];
+    out.push({ type: "Feature", geometry: use[0].geometry, properties: { ...top, action_day: ps.some((p) => p.action_day), _all: JSON.stringify(ps.map((p) => ({ param: p.param, aqi: p.aqi, cat: p.cat, catname: p.catname }))) } });
+  }
+  return { ...fc, features: out, _count: out.length };
+}
+
 const SVI_THEMES: Record<string, string> = { svi: "Overall", t1: "Socioeconomic", t2: "Household & disability", t3: "Minority & language", t4: "Housing & transportation" };
 
 const environment: OverlayDef[] = [
@@ -234,20 +266,50 @@ const environment: OverlayDef[] = [
       { key: "kind", label: "Show", choices: [["obs", "Observed"], ["fcst", "Forecast"]], def: "obs" },
     ],
     style: { opacity: 1, size: 1, labels: true },
-    layers: (s, st, o) => {
-      const f: any = ["all", ["==", ["get", "kind"], o.kind === "fcst" ? "fcst" : "obs"], ["has", "aqi"], o.param && o.param !== "all" ? ["==", ["upcase", ["to-string", ["get", "param"]]], o.param] : true];
+    // one marker per reporting area: the worst AQI across pollutants (several params and obs + forecast share coordinates)
+    prepare: (fc, o) => aqiPrepare(fc, o),
+    layers: (s, st) => {
+      const sort: ExpressionSpecification = ["-", 0, ["coalesce", ["get", "aqi"], 0]]; // worst AQI is placed first
       return [
-        { id: `${s}-pt`, type: "circle", source: s, filter: f, layout: { "circle-sort-key": ["coalesce", ["get", "aqi"], 0] }, paint: { "circle-color": AQI_COLOR, "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 9 * st.size, 8, 14 * st.size], "circle-opacity": 0.9 * st.opacity, "circle-stroke-color": "rgba(0,0,0,.75)", "circle-stroke-width": 1.2 } } as LayerSpecification,
-        ...(st.labels ? [{ id: `${s}-val-text`, type: "symbol", source: s, filter: f, layout: { "text-field": ["to-string", ["round", ["get", "aqi"]]], "text-font": bold, "text-size": ["interpolate", ["linear"], ["zoom"], 3, 9.5, 8, 12.5], "text-allow-overlap": true, "symbol-sort-key": ["-", 0, ["coalesce", ["get", "aqi"], 0]] }, paint: { "text-color": AQI_TEXT } } as LayerSpecification] : []),
+        {
+          id: `${s}-pt`,
+          type: "symbol",
+          source: s,
+          filter: ["has", "aqi"],
+          layout: {
+            "icon-image": ["concat", "aqi-", ["to-string", ["to-number", ["get", "cat"], 0]]],
+            "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.8 * st.size, 8, 1.2 * st.size],
+            "icon-allow-overlap": false,
+            "icon-padding": 1,
+            "symbol-sort-key": sort,
+            ...(st.labels
+              ? { "text-field": ["to-string", ["round", ["get", "aqi"]]], "text-font": bold, "text-size": ["interpolate", ["linear"], ["zoom"], 3, 8.5, 8, 11.5], "text-allow-overlap": false, "text-optional": false }
+              : {}),
+          },
+          paint: { "icon-opacity": st.opacity, "text-color": AQI_TEXT, "text-opacity": st.opacity },
+        } as LayerSpecification,
       ];
     },
-    click: (p) => ({
-      title: `AQI ${p.aqi ?? "—"} · ${p.catname || ""}`,
-      sub: `${p.area}, ${p.st}`,
-      color: ["#9ca3af", "#00e400", "#ffff00", "#ff7e00", "#ff0000", "#8f3f97", "#7e0023"][+p.cat || 0],
-      rows: [["Pollutant", p.param ?? "—"], [p.kind === "fcst" ? "Forecast for" : "Observed", p.kind === "fcst" ? p.date : `${p.time || ""} ${p.date ?? ""}`], ...(p.action_day ? [["Action day", "Yes"] as [string, string]] : [])],
-      link: ["AirNow", "https://www.airnow.gov/"],
-    }),
+    click: (p) => {
+      let all: { param: string; aqi: number; cat: number; catname?: string }[] = [];
+      try {
+        all = typeof p._all === "string" ? JSON.parse(p._all) : p._all ?? [];
+      } catch {
+        /* single */
+      }
+      return {
+        title: `AQI ${p.aqi ?? "—"} · ${p.catname || ""}`,
+        sub: `${p.area}, ${p.st}`,
+        color: ["#9ca3af", "#00e400", "#ffff00", "#ff7e00", "#ff0000", "#8f3f97", "#7e0023"][+p.cat || 0],
+        rows: [
+          ["Dominant", p.param ?? "—"],
+          ...all.map((a) => [a.param, `${a.aqi}${a.catname ? ` · ${a.catname}` : ""}`] as [string, string]),
+          [p.kind === "fcst" ? "Forecast for" : "Observed", p.kind === "fcst" ? p.date : `${p.time || ""} ${p.date ?? ""}`],
+          ...(p.action_day ? [["Action day", "Yes"] as [string, string]] : []),
+        ],
+        link: ["AirNow", "https://www.airnow.gov/"],
+      };
+    },
     note: "AirNow reporting areas: latest hourly AQI or today's forecast (US EPA colors).",
   },
   {

@@ -43,6 +43,8 @@ Usage: ./start.sh [options]
   --port N             Server port (default 8787).
   --install-service    Install systemd services so the server starts on boot, then exit.
   --uninstall-service  Remove the systemd services.
+  --memory-mb N        In-memory cache budget in MB (0 = auto: 40% of RAM, at least 4 GB).
+  --cpu-percent N      Share of CPU cores the server may use, 1-100 (default 100).
   --rebuild            Rebuild the server from source even if a binary exists.
   --new-token          Generate a new app access token.
   --token              Print the app access token.
@@ -50,17 +52,20 @@ Usage: ./start.sh [options]
   --replay DIR         Replay a folder of Level II chunk files as a live radar (testing).
   -h, --help           This help.
 
-First run creates server/data/config.toml. Edit it any time and restart.
+First run creates server/data/config.toml (commented). Edit it any time and restart, or use
+Settings -> Server settings in the app on this computer (most changes apply without a restart).
 EOF
 }
 
-DOMAIN=""; EMAIL=""; LAN=0; INSTALL=0; UNINSTALL=0; REBUILD=0; NEWTOKEN=0; SHOWTOKEN=0; SHOWPROFILE=0; REPLAY=""
+MEMORY_MB=""; CPU_PERCENT=""; DOMAIN=""; EMAIL=""; LAN=0; INSTALL=0; UNINSTALL=0; REBUILD=0; NEWTOKEN=0; SHOWTOKEN=0; SHOWPROFILE=0; REPLAY=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --domain) DOMAIN="${2:-}"; shift 2 ;;
     --email) EMAIL="${2:-}"; shift 2 ;;
     --lan) LAN=1; shift ;;
     --port) PORT="${2:-8787}"; shift 2 ;;
+    --memory-mb) MEMORY_MB="${2:-}"; shift 2 ;;
+    --cpu-percent) CPU_PERCENT="${2:-}"; shift 2 ;;
     --install-service) INSTALL=1; shift ;;
     --uninstall-service) UNINSTALL=1; shift ;;
     --rebuild) REBUILD=1; shift ;;
@@ -234,6 +239,15 @@ set_cfg() { # set_cfg key value  (string values; keys are unique in the file)
     sed -i "s|^$k = .*|$k = \"$v\"|" "$CONFIG"
   fi
 }
+set_num() { # set_num key value  (numbers; adds the key under [profile] when missing)
+  local k="$1" v="$2"
+  [[ "$v" =~ ^[0-9]+$ ]] || die "--${k//_/-} needs a number"
+  if grep -qE "^$k = " "$CONFIG"; then
+    sed -i "s|^$k = .*|$k = $v|" "$CONFIG"
+  else
+    sed -i "s|^\[profile\]$|[profile]\n$k = $v|" "$CONFIG"
+  fi
+}
 get_cfg() { grep -E "^$1 = " "$CONFIG" 2>/dev/null | head -1 | sed -E 's/^[^=]+= *"?([^"]*)"?.*/\1/'; }
 
 FIRST_RUN=0
@@ -271,7 +285,9 @@ else
   set_cfg bind "0.0.0.0:$PORT"
   ok "LAN mode: http://<this-machine>:$PORT"
 fi
-"$BIN" -c "$CONFIG" profile | sed -n 's/^  "\(name\|cores\|ram_gb\|threads\|memory_mb\)": \(.*\),\?$/    profile \1: \2/p' | tr -d ',"' | tr -d '"'
+[[ -n "$MEMORY_MB" ]] && set_num memory_mb "$MEMORY_MB" && ok "memory budget: ${MEMORY_MB} MB"
+[[ -n "$CPU_PERCENT" ]] && set_num cpu_percent "$CPU_PERCENT" && ok "CPU share: ${CPU_PERCENT}%"
+"$BIN" -c "$CONFIG" profile | sed -n 's/^  "\(name\|cores\|ram_gb\|threads\|cpu_percent\|memory_mb\)": \(.*\),\?$/    profile \1: \2/p' | tr -d ',"' | tr -d '"'
 
 # ---------- 4. HTTPS (Caddy) ----------
 if [[ -n "$DOMAIN" ]]; then

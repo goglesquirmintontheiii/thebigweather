@@ -7,6 +7,7 @@ import { TopBar } from "./Header";
 import { Toolbar } from "./Toolbar";
 import { Timeline } from "./Timeline";
 import { HistoryBar } from "./HistoryBar"; // history
+import { HistStorms } from "./HistStorms"; // history 0.6
 import { Legend } from "./Legend";
 import { StatusBar, Crosshair, FpsMeter, CursorValue } from "./Readouts";
 import { StatsPanel } from "./StatsPanel";
@@ -30,7 +31,8 @@ import { ShortcutsDialog } from "./Shortcuts"; // legend, panes, keys
 import { ForecastCenter } from "./ForecastCenter";
 import { RadioCenter } from "./RadioCenter";
 import { RadioPlayers } from "./RadioPlayer";
-import { ShakeCenter } from "./ShakeCenter";
+import { ShakeMenu } from "./ShakeMenu"; // shake/stats/server 0.6
+import { ServerSettings } from "./ServerSettings"; // shake/stats/server 0.6
 import "../shake";
 // layers 0.5: more overlays, rotation scan bar, storm table
 import "../overlays/moredefs";
@@ -100,7 +102,9 @@ export function App() {
       <ForecastCenter />
       <SoundingCenter /> {/* intl & forecast tools */}
       <RadioCenter />
-      <ShakeCenter />
+      <HistStorms /> {/* history 0.6 */}
+      <ShakeMenu /> {/* shake/stats/server 0.6 */}
+      <ServerSettings /> {/* shake/stats/server 0.6 */}
       <RadioPlayers />
       {openPanel.value !== "radio" && <NowPlaying compact />}
       <AddCameraDialog />

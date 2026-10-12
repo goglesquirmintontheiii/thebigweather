@@ -24,7 +24,12 @@ pub struct Stats {
     pub disk_fs: String,
     pub net_rx_total: u64,
     pub net_tx_total: u64,
+    /// server process CPU, % of one core (can exceed 100)
     pub proc_cpu: f32,
+    /// server process CPU as % of the whole machine (0-100), comparable with `cpu`
+    pub proc_cpu_pct: f32,
+    /// server process threads
+    pub proc_threads: usize,
     pub mem_total: u64,
     pub mem_used: u64,
     pub disk_total: u64,
@@ -79,13 +84,16 @@ pub fn spawn(hub: Hub, data_dir: PathBuf, interval_ms: u64, latest: Arc<parking_
             let disk_fs = best.map(|(d, _)| d.file_system().to_string_lossy().to_string()).unwrap_or_default();
             let mut rss = 0;
             let mut pcpu = 0.0;
+            let mut nthreads = 0;
             if let Some(p) = pid {
                 sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[p]), true);
                 if let Some(pr) = sys.process(p) {
                     rss = pr.memory();
                     pcpu = pr.cpu_usage();
+                    nthreads = pr.tasks().map(|t| t.len()).unwrap_or(0);
                 }
             }
+            let ncpu = sys.cpus().len().max(1);
             let la = System::load_average();
             let s = Stats {
                 cpu: sys.global_cpu_usage(),
@@ -104,6 +112,8 @@ pub fn spawn(hub: Hub, data_dir: PathBuf, interval_ms: u64, latest: Arc<parking_
                 net_rx_total: rxt,
                 net_tx_total: txt,
                 proc_cpu: pcpu,
+                proc_cpu_pct: (pcpu / ncpu as f32).min(100.0),
+                proc_threads: nthreads,
                 mem_total: sys.total_memory(),
                 mem_used: sys.used_memory(),
                 disk_total,
