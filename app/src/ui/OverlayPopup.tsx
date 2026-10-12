@@ -10,6 +10,8 @@ import { mapRef } from "../map/mapview";
 import { X, ExternalLink, Video, Trash2, Radio } from "lucide-preact";
 import { playStream } from "../radio";
 import { camDialog } from "./Overlays";
+import { Pin } from "lucide-preact"; // workflow
+import { pinMetar } from "./MetarPanels"; // workflow
 
 const fmt = (ms: number) => new Date(ms).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: settings.value.utc ? "UTC" : undefined });
 
@@ -35,7 +37,7 @@ export function skyLayers(raw: string): { cover: string; oktas: number; ft: numb
   return out;
 }
 
-function SkyGraph({ raw }: { raw: string }) {
+export function SkyGraph({ raw }: { raw: string }) {
   const layers = skyLayers(raw);
   const clear = /\b(CLR|SKC|NCD|NSC|CAVOK)\b/.test(raw ?? "");
   const W = 150;
@@ -80,7 +82,7 @@ function SkyGraph({ raw }: { raw: string }) {
   );
 }
 
-function WindCompass({ wd, ws, wg }: { wd?: number | null; ws?: number | null; wg?: number | null }) {
+export function WindCompass({ wd, ws, wg }: { wd?: number | null; ws?: number | null; wg?: number | null }) {
   const S = 120;
   const c = S / 2;
   const r = 44;
@@ -239,6 +241,16 @@ export function OverlayPopup() {
       {p.kind === "tide" && <Tides id={props.id} />}
       {p.text && <pre class="pop-raw">{p.text}</pre>}
       <div class="pop-actions">
+        {/* workflow: pin METAR / flag 360° */ p.kind === "metar" && props.raw && (
+          <button class="btn sm" onClick={() => (pinMetar(props.id), (popup.value = null))}>
+            <Pin size={13} /> Pin
+          </button>
+        )}
+        {p.kind === "camera" && props.mine && (
+          <button class={`btn sm ghost ${settings.value.myCams.find((c) => c.id === props.mine)?.pano ? "on" : ""}`} title="Mark as a 360° / panoramic camera" onClick={() => update((st) => (st.myCams = st.myCams.map((c) => (c.id === props.mine ? { ...c, pano: !c.pano } : c))))}>
+            360°
+          </button>
+        )}
         {p.kind === "camera" && (
           <button class="btn sm" onClick={() => (openCamera(props), (popup.value = null))}>
             <Video size={13} /> {props.t === "page" ? "Open" : "View"}

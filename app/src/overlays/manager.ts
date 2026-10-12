@@ -8,6 +8,7 @@ import { OVERLAYS, overlayDef, styleFor, optsFor, type OverlayDef, type Popup } 
 import { openCamera } from "../ui/CameraPanels";
 import { registerIcons } from "./icons";
 import { fileOverlays, fileLayers, fileClick, ensureFileData, fileSourceOpts } from "./files";
+import { refreshMul, pollPaused } from "../saver"; // workflow
 import { histRange, histTime, histAllowed, histFeedFor, histFeed } from "../history"; // history replay
 
 export const ovlStatus = signal<Record<string, { loading?: boolean; error?: string; count?: number; note?: string }>>({});
@@ -182,8 +183,8 @@ function schedule(id: string) {
   clearInterval(timers.get(id));
   const def = overlayDef(id);
   if (!def || !def.refresh || def.feed === "client" || histRange.value) return;
-  const secs = Math.max(5, settings.value.ovl[id]?.refresh ?? def.refresh);
-  timers.set(id, window.setInterval(() => fetchOverlay(id), secs * 1000));
+  const secs = Math.max(5, settings.value.ovl[id]?.refresh ?? def.refresh) * refreshMul(); // workflow: bandwidth saver
+  timers.set(id, window.setInterval(() => !pollPaused() && fetchOverlay(id), secs * 1000));
 }
 
 /** All overlay ids the map should show right now (catalog + imported files). */
@@ -209,7 +210,7 @@ function sync() {
   for (const id of want) {
     const sig = signature(id);
     const prev = shown.get(id);
-    const rk = `${settings.value.ovl[id]?.refresh ?? ""}`;
+    const rk = `${settings.value.ovl[id]?.refresh ?? ""}|${refreshMul()}`; // workflow: saver
     if (refreshKey.get(id) !== rk) {
       refreshKey.set(id, rk);
       if (timers.has(id)) {

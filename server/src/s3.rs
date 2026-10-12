@@ -112,6 +112,38 @@ pub async fn list_at(
     Ok(out)
 }
 
+/// List every key under `prefix` that sorts after `start_after` at any S3-compatible endpoint
+/// (`base` = bucket URL), following continuation tokens up to `max_pages` pages of 1000.
+pub async fn list_after(http: &reqwest::Client, base: &str, prefix: &str, start_after: Option<&str>, max_pages: usize) -> Result<Vec<Object>> {
+    let mut out = vec![];
+    let mut token: Option<String> = None;
+    for _ in 0..max_pages.max(1) {
+        let mut url = format!("{}/?list-type=2&prefix={}", base.trim_end_matches('/'), enc(prefix));
+        match (&token, start_after) {
+            (Some(t), _) => url.push_str(&format!("&continuation-token={}", enc(t).replace('/', "%2F"))),
+            (None, Some(s)) => url.push_str(&format!("&start-after={}", enc(s))),
+            _ => {}
+        }
+        let resp = http.get(&url).send().await?;
+        if !resp.status().is_success() {
+            bail!("S3 list {base}: HTTP {}", resp.status());
+        }
+        let xml = resp.text().await?;
+        for c in tag_values(&xml, "Contents") {
+            let key = tag_values(c, "Key").first().map(|s| unescape(s)).unwrap_or_default();
+            let size = tag_values(c, "Size").first().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let modified = tag_values(c, "LastModified").first().map(|s| s.to_string()).unwrap_or_default();
+            out.push(Object { key, size, modified });
+        }
+        let truncated = tag_values(&xml, "IsTruncated").first().map(|s| *s == "true").unwrap_or(false);
+        token = tag_values(&xml, "NextContinuationToken").first().map(|s| unescape(s));
+        if !truncated || token.is_none() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 pub async fn get(http: &reqwest::Client, bucket: &str, key: &str) -> Result<Bytes> {
     let resp = http.get(object_url(bucket, key)).send().await?;
     if !resp.status().is_success() {

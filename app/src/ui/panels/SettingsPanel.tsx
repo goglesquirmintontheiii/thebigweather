@@ -4,6 +4,7 @@ import { api, lastHello } from "../../api";
 import { Toggle } from "./RadarPanel";
 import { Trash2, Check, Plus, Server } from "lucide-preact";
 import { playAlertSound } from "../../sound";
+import { ACCENTS } from "../../theme"; // workflow
 
 const KEY_LABELS: Record<string, string> = {
   google_maps: "Google Map Tiles",
@@ -138,6 +139,13 @@ export function SettingsPanel() {
           </div>
         )}
       </section>
+      <AppearanceSection />
+      <section>
+        <label class="lbl">Data use</label>
+        <Toggle label="Bandwidth saver" on={!!s.saver} set={(v) => update((x) => (x.saver = v))} />
+        <div class="muted small">Max 12 frames, overlays refresh 3× slower, no RapidSweep, low-res 3D, no polling while the window is hidden.</div>
+        <Toggle label="Notify when a storm cell will reach my points" on={!!s.etaNotify} set={(v) => (update((x) => (x.etaNotify = v)), v && typeof Notification !== "undefined" && Notification.permission === "default" && Notification.requestPermission())} />
+      </section>
       <section>
         <label class="lbl">Units & time</label>
         <div class="row">
@@ -219,3 +227,39 @@ export function SettingsPanel() {
     </div>
   );
 }
+
+/* ---------- workflow: appearance ---------- */
+function AppearanceSection() {
+  const t = settings.value.theme;
+  const set = (p: Partial<typeof t>) => update((x) => (x.theme = { ...x.theme, ...p }));
+  const zoomable = !!(window as any).tbw?.setZoom;
+  return (
+    <section>
+      <label class="lbl">Appearance</label>
+      <div class="row accent-row">
+        <span>Accent</span>
+        <div class="swatches">
+          {ACCENTS.map((c) => (
+            <button key={c} class={`sw ${t.accent.toLowerCase() === c ? "on" : ""}`} style={{ background: c }} title={c} onClick={() => set({ accent: c })} />
+          ))}
+          <input type="color" value={t.accent} title="Custom colour" onInput={(e) => set({ accent: (e.target as HTMLInputElement).value })} />
+        </div>
+      </div>
+      <div class="row">
+        <span>UI scale</span>
+        <input type="range" min={90} max={125} step={5} disabled={!zoomable} value={Math.round(t.scale * 100)} onChange={(e) => set({ scale: +(e.target as HTMLInputElement).value / 100 })} />
+        <span class="val">{Math.round(t.scale * 100)}%</span>
+      </div>
+      {!zoomable && <div class="muted small">In a browser, use the browser's zoom (Ctrl +/−).</div>}
+      <div class="row">
+        <span>Panel opacity</span>
+        <input type="range" min={50} max={100} step={5} value={Math.round(t.panelOpacity * 100)} onInput={(e) => set({ panelOpacity: +(e.target as HTMLInputElement).value / 100 })} />
+        <span class="val">{Math.round(t.panelOpacity * 100)}%</span>
+      </div>
+      <button class="btn sm ghost" onClick={() => set({ accent: "#3fb7ff", scale: 1, panelOpacity: 0.9 })}>
+        Reset
+      </button>
+    </section>
+  );
+}
+/* ---------- end workflow ---------- */

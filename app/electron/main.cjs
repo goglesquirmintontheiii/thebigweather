@@ -216,6 +216,21 @@ function setupDisplayMedia() {
   });
 }
 
+// ---------- workflow: save files (loop export, workspaces, GPX) to Downloads/TheBigWeather; window frame grabs ----------
+ipcMain.handle("save-file", (_e, name, buf) => {
+  const dir = path.join(app.getPath("downloads"), "TheBigWeather");
+  fs.mkdirSync(dir, { recursive: true });
+  const safe = String(name || "file").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 120);
+  const file = path.join(dir, safe);
+  fs.writeFileSync(file, Buffer.from(buf));
+  return file;
+});
+ipcMain.handle("capture-buf", async (_e, rect) => {
+  if (!win) return null;
+  const img = await win.webContents.capturePage(rect || undefined);
+  return img.toPNG();
+});
+// ---------- end workflow ----------
 ipcMain.handle("app-info", () => ({ version: app.getVersion(), platform: process.platform, displays: screen.getAllDisplays().length }));
 
 app.on("second-instance", () => {

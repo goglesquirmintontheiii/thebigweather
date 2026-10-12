@@ -77,6 +77,11 @@ fn header(
 
 /// Encode one moment of a Level II sweep.
 pub fn encode_l2(vol: &Volume, sweep: &Sweep, m: Moment) -> Option<Encoded> {
+    encode_l2_named(vol, sweep, m, m.code())
+}
+
+/// [`encode_l2`] with an explicit product name in the header (derived products).
+pub fn encode_l2_named(vol: &Volume, sweep: &Sweep, m: Moment, name: &str) -> Option<Encoded> {
     let mut rads: Vec<_> = sweep
         .radials
         .iter()
@@ -117,7 +122,7 @@ pub fn encode_l2(vol: &Volume, sweep: &Sweep, m: Moment) -> Option<Encoded> {
         vol.lon,
         vol.height_m,
         nyq,
-        m.code(),
+        name,
         vol.vcp,
         lut_len,
     );

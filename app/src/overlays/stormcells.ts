@@ -47,6 +47,7 @@ export function stormPrepare(fc: any) {
     const c = f.geometry?.coordinates;
     if (!c) continue;
     p._threat = Math.round(threat(p));
+    p._eta = etaText(cellEtas(c[1], c[0], p)); // ETAs to saved points
     cells.push({ lon: c[0], lat: c[1], p });
     if (p.dir_to == null || !(p.sknt > 0)) continue;
     const pos = MINUTES.map((m) => destination(c[1], c[0], p.dir_to, p.sknt * 1852 * (m / 60)));
@@ -57,6 +58,7 @@ export function stormPrepare(fc: any) {
     pos.forEach((q, i) => extra.push({ type: "Feature", geometry: { type: "Point", coordinates: q }, properties: { ...base, _k: "tick", m: MINUTES[i], eta: p.t ? hhmm(p.t + MINUTES[i] * 60000) : `+${MINUTES[i]}` } }));
   }
   cells.sort((a, b) => b.p._threat - a.p._threat);
+  notifyEtas(cells);
   stormCells.value = { t: Date.now(), cells };
   return { ...fc, features: [...extra, ...feats], _count: feats.length };
 }
@@ -121,6 +123,59 @@ export function stormClick(p: any): Popup | undefined {
       ["Moving", p.dir_to != null && p.sknt ? `${compass(p.dir_to)} ${fmtKt(p.sknt)}` : "Stationary"],
       ["Meso / TVS", `${p.meso ?? "NONE"} / ${p.tvs ?? "NONE"}`],
       ["Scan", p.t ? hhmm(p.t) : "—"],
+      ...(p._eta ? [["Reaches", String(p._eta)] as [string, string]] : []),
     ],
   };
+}
+
+// ---------- ETAs to saved points ----------
+
+/** a cell's track passes within this distance of a point */
+export const ETA_RADIUS_M = 5000;
+const ETA_MINUTES = 60;
+
+/** Saved points the cell's projected path (dir_to / sknt, 60 min) passes within ~5 km of. */
+export function cellEtas(lat: number, lon: number, p: any): { id: string; name: string; min: number; miss: number }[] {
+  if (p?.dir_to == null || !(p.sknt > 0)) return [];
+  const mpm = (p.sknt * 1852) / 60; // metres per minute
+  const L = mpm * ETA_MINUTES;
+  const a = (p.dir_to * Math.PI) / 180;
+  const ux = Math.sin(a), uy = Math.cos(a);
+  const k = Math.cos((lat * Math.PI) / 180) * 111_195;
+  const out: { id: string; name: string; min: number; miss: number }[] = [];
+  for (const pt of settings.value.points) {
+    const dx = (pt.lon - lon) * k, dy = (pt.lat - lat) * 111_195;
+    const along = dx * ux + dy * uy;
+    const cross = Math.abs(dx * uy - dy * ux);
+    const near = Math.hypot(dx, dy) < ETA_RADIUS_M;
+    if (!near && (along < 0 || along > L + ETA_RADIUS_M || cross > ETA_RADIUS_M)) continue;
+    out.push({ id: pt.id, name: pt.name, min: near ? 0 : Math.max(0, Math.round(along / mpm)), miss: Math.round(near ? Math.hypot(dx, dy) : cross) });
+  }
+  return out.sort((x, y) => x.min - y.min);
+}
+
+export function etaText(list: { name: string; min: number }[]): string {
+  return list.map((e) => `${e.name} ${e.min === 0 ? "now" : `${e.min} min`}`).join(" · ");
+}
+
+const notified = new Map<string, number>();
+function notifyEtas(cells: { lon: number; lat: number; p: any }[]) {
+  if (!settings.value.etaNotify) return;
+  const now = Date.now();
+  for (const [k, t] of notified) if (now - t > 3 * 3600_000) notified.delete(k);
+  for (const c of cells) {
+    for (const e of cellEtas(c.lat, c.lon, c.p)) {
+      const key = `${c.p.nexrad}-${c.p.storm_id}-${e.id}`;
+      if (notified.has(key)) continue;
+      notified.set(key, now);
+      const flags = cellFlags(c.p);
+      const msg = `Cell ${c.p.storm_id}${flags ? ` (${flags})` : ""} reaches ${e.name} ${e.min === 0 ? "now" : `in ~${e.min} min`}`;
+      try {
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification("Storm approaching", { body: msg, silent: false });
+      } catch {
+        /* ignore */
+      }
+      import("../store").then((m) => m.toast(msg, "alert", 9000));
+    }
+  }
 }

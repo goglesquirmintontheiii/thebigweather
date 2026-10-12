@@ -58,6 +58,8 @@ export interface MyCam {
   url: string;
   /** link this stream to a ship (name or MMSI) instead of a map position */
   ship?: string;
+  /** 360°/panoramic camera (workflow: map badge) */
+  pano?: boolean;
 }
 
 export interface AlertTypeCfg {
@@ -96,7 +98,9 @@ export interface PaneCfg {
 export type WeatherSel =
   | { kind: "radar" }
   | { kind: "grid"; id: string; run?: string; storm?: string }
-  | { kind: "gibs"; id: string };
+  | { kind: "gibs"; id: string }
+  /** intl & forecast tools: international raster radar (see intl/radar.ts) */
+  | { kind: "intl"; id: string };
 export type RadarSource = "L2" | "L3";
 
 export interface Settings {
@@ -158,6 +162,16 @@ export interface Settings {
   /* legend, panes, keys: value filter per legend key (gate.ts) and layer shortcuts (keybinds.ts) */
   gates: Record<string, { lo?: number; hi?: number; abs?: boolean; off?: boolean }>;
   keybinds: Record<string, string>;
+  /* ---------- workflow ---------- */
+  workspaces: import("./workspaces").Workspace[];
+  /** bandwidth-saver mode (saver.ts) */
+  saver: boolean;
+  theme: { accent: string; scale: number; panelOpacity: number };
+  /** storm-relative velocity: dir = where the storm moves toward (deg), speed in m/s */
+  srv: { on: boolean; mode: "manual" | "auto" | "cell"; dir: number; speed: number };
+  /** notify when a storm cell's path reaches a saved point */
+  etaNotify: boolean;
+  /* ---------- end workflow ---------- */
 }
 
 const DEFAULTS: Settings = {
@@ -199,6 +213,13 @@ const DEFAULTS: Settings = {
   /* legend, panes, keys */
   gates: {},
   keybinds: {},
+  /* ---------- workflow ---------- */
+  workspaces: [],
+  saver: false,
+  theme: { accent: "#3fb7ff", scale: 1, panelOpacity: 0.9 },
+  srv: { on: false, mode: "auto", dir: 60, speed: 15 },
+  etaNotify: false,
+  /* ---------- end workflow ---------- */
 };
 
 const KEY = "tbw.settings.v1";
@@ -273,9 +294,9 @@ export function update(fn: (s: Settings) => void) {
 export const activeServer = computed(() => settings.value.servers.find((s) => s.id === settings.value.activeServer) ?? settings.value.servers[0]);
 
 // ---------- transient UI state ----------
-export type PanelId = "layers" | "map" | "radar" | "alerts" | "points" | "sources" | "settings" | "radio" | "forecast" | "search" | "files" | "draw" | "record" | null;
+export type PanelId = "layers" | "map" | "radar" | "alerts" | "points" | "sources" | "settings" | "radio" | "forecast" | "search" | "files" | "draw" | "record" | "workspaces" /* workflow */ | null;
 export const openPanel = signal<PanelId>("radar");
-export const tool = signal<"none" | "measure" | "bearing" | "draw">("none");
+export const tool = signal<"none" | "measure" | "bearing" | "draw" | "xsect" /* workflow */>("none");
 export const crosshair = signal(false);
 export const connection = signal<"connecting" | "online" | "offline" | "unauthorized" | "none">("none");
 /** Info panel: alerts and area features (watches, storms, MDs) under a click, most urgent first. */

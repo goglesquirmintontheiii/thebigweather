@@ -1,5 +1,6 @@
 import { toasts } from "../store";
 import { contextMenu, addPointAt, hover } from "../map/mapview";
+import { openSounding } from "../sounding/state"; // intl & forecast tools
 import { displaySweep, activeTable } from "../radar/controller";
 import { sampleAt } from "../radar/sweep";
 import { fmtValue } from "../util";
@@ -92,6 +93,14 @@ export function ContextMenu() {
         }}
       >
         Add camera here
+      </button>
+      <button
+        onClick={() => {
+          openSounding(m.lat, m.lon);
+          close();
+        }}
+      >
+        Sounding here
       </button>
       <button
         onClick={() => {

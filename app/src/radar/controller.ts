@@ -7,6 +7,7 @@ import { parseSweep, type Sweep } from "./sweep";
 import { BUILTIN, COLORBLIND, defaultTableFor, parsePal, type ColorTable } from "./colormaps";
 import type { RadarLayer } from "./RadarLayer";
 import { playSweepSound } from "../sound";
+import { pollPaused } from "../saver"; // workflow
 
 export interface Site {
   id: string;
@@ -602,7 +603,7 @@ api.on("connected", async () => {
 
 // periodic refresh (archive frames + L3), live handles the fast path
 setInterval(() => {
-  if (!playing.value && api.base && !pinned.value && !histRange.value) {
+  if (!playing.value && api.base && !pinned.value && !histRange.value && !pollPaused() /* workflow: saver */) {
     reload({ keepIndex: true });
     reloadExtras();
   }

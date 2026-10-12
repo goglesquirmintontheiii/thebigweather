@@ -10,9 +10,13 @@ import { alerts } from "../alerts";
 import { pointInGeometry, compass } from "../util";
 import { iconFor } from "./panels/ForecastPanel";
 import { CenterModal } from "./CenterModal";
-import { RefreshCw, MapPin, CloudSun, Sunrise, Sunset, PanelLeft, TriangleAlert, Droplets, Wind, Gauge, Eye, Sun } from "lucide-preact";
+import { RefreshCw, MapPin, CloudSun, Sunrise, Sunset, PanelLeft, TriangleAlert, Droplets, Wind, Gauge, Eye, Sun, Activity } from "lucide-preact";
+import { Ensembles } from "./EnsemblePlume"; // intl & forecast tools
+import { openSounding } from "../sounding/state";
 
 export const forecastOpen = signal(false);
+/** Forecast / Ensembles tab (kept across reopening) */
+const fccTab = signal<"fc" | "ens">("fc");
 
 // ---------- data ----------
 
@@ -535,6 +539,8 @@ function ForecastBody() {
   const [range, setRange] = useState<48 | 168 | 336>(48);
   const [on, setOn] = useState<Set<string>>(() => new Set(["temp", "feels", "dew", "pop", "precip", "wind", "gust", "cloud", "pres"]));
   const [dsel, setDsel] = useState<string | null>(null);
+  const tab = fccTab.value; // intl & forecast tools
+  const setTab = (t: "fc" | "ens") => (fccTab.value = t);
   const where = useMemo(() => {
     const p = s.points.find((x) => x.id === sel);
     if (p) return { lat: p.lat, lon: p.lon, name: p.name };
@@ -572,6 +578,19 @@ function ForecastBody() {
       onClose={close}
       actions={
         <>
+          <div class="seg sm fcc-tabs">
+            <button class={tab === "fc" ? "on" : ""} onClick={() => setTab("fc")}>
+              Forecast
+            </button>
+            <button class={tab === "ens" ? "on" : ""} onClick={() => setTab("ens")}>
+              Ensembles
+            </button>
+          </div>
+          {where && (
+            <button class="btn sm ghost" title="Skew-T sounding for this point" onClick={() => openSounding(where.lat, where.lon)}>
+              <Activity size={13} /> Sounding
+            </button>
+          )}
           <select value={sel} onChange={(e) => update((x) => (x.forecast.point = (e.target as HTMLSelectElement).value))}>
             <option value="center">Map center</option>
             {s.points.map((p) => (
@@ -594,9 +613,10 @@ function ForecastBody() {
         </>
       }
     >
-      {err && !fc?.hours.length && <div class="err-text">{err}</div>}
-      {!fc && !err && <div class="muted">Loading forecast…</div>}
-      {fc && (
+      {tab === "ens" && where && <Ensembles lat={where.lat} lon={where.lon} />}
+      {tab === "fc" && err && !fc?.hours.length && <div class="err-text">{err}</div>}
+      {tab === "fc" && !fc && !err && <div class="muted">Loading forecast…</div>}
+      {tab === "fc" && fc && (
         <div class="fcc-grid">
           <div class="fcc-now">
             <div class="fcc-now-main">
@@ -635,7 +655,7 @@ function ForecastBody() {
           </div>
         </div>
       )}
-      {fc && hours.length > 1 && (
+      {tab === "fc" && fc && hours.length > 1 && (
         <section class="fcc-sec">
           <div class="row">
             <label class="lbl">Hourly</label>
@@ -650,7 +670,7 @@ function ForecastBody() {
           <Chart hours={hours} tz={fc.tz} on={on} setOn={setOn} />
         </section>
       )}
-      {fc && fc.days.length > 0 && (
+      {tab === "fc" && fc && fc.days.length > 0 && (
         <section class="fcc-sec">
           <label class="lbl">{fc.days.length} days</label>
           <div class="fcc-days">
@@ -697,7 +717,7 @@ function ForecastBody() {
           )}
         </section>
       )}
-      {fc && fc.hours.length > 0 && (
+      {tab === "fc" && fc && fc.hours.length > 0 && (
         <section class="fcc-sec">
           <label class="lbl">Next 48 hours</label>
           <div class="fcc-table-wrap">
@@ -755,7 +775,7 @@ function ForecastBody() {
           </div>
         </section>
       )}
-      {fc && (
+      {tab === "fc" && fc && (
         <p class="muted small">
           {fc.om ? "Hourly & daily: Open-Meteo.com (CC BY 4.0)" : `Hourly: ${fc.source}${fc.omErr ? ` (Open-Meteo unavailable: ${fc.omErr})` : ""}`}
           {fc.server?.source === "NWS" ? ` · Text forecast: NWS ${fc.server.office ?? ""}` : ""}. Speeds in {U().speed}. Times are local to the point.

@@ -11,6 +11,15 @@ import { PaneButton } from "./Panes";
 import { ScreenRecButton } from "./ScreenRecButton";
 import { CalendarClock } from "lucide-preact"; // history
 import { histRange, histPicker, exitHistory } from "../history"; // history
+// workflow
+import { useState } from "preact/hooks";
+import { Film, Bookmark, Slice, Route, Leaf } from "lucide-preact";
+import { loopDialog, loopProgress } from "../loopexport";
+import { LoopExportDialog } from "./LoopExport";
+import { SrvControl } from "./SrvControl";
+import { WorkspaceMenu } from "./panels/WorkspacePanel";
+import { startXSection, xsLine } from "./XSection";
+import { trackPanel, recording } from "../gps";
 
 let locMarker: maplibregl.Marker | null = null;
 
@@ -68,6 +77,7 @@ export async function screenshot() {
 
 export function Toolbar() {
   const t = tool.value;
+  const [wsOpen, setWsOpen] = useState(false); // workflow
   void measurePts.value;
   void bearingInfo.value;
   const btn = (on: boolean, title: string, onClick: () => void, icon: any, disabled = false) => (
@@ -84,6 +94,15 @@ export function Toolbar() {
       )}
       {t === "draw" && <DrawBar />}
       {t === "bearing" && bearingInfo.value && <div class="tool-readout glass">From {settings.value.radar.site}: {describeBearing()}</div>}
+      {/* workflow */ t === "xsect" && <div class="tool-readout glass">Cross-section: click two points · Esc to cancel</div>}
+      <SrvControl />
+      <LoopExportDialog />
+      {wsOpen && (
+        <>
+          <div class="ws-scrim" onPointerDown={() => setWsOpen(false)} />
+          <WorkspaceMenu onClose={() => setWsOpen(false)} />
+        </>
+      )}
       <div class="toolbar glass">
         {btn(playing.value, "Play / pause loop (Space)", togglePlay, playing.value ? <Pause size={19} /> : <Play size={19} />, frameCount.value < 2)}
         {/* history */ btn(!!histRange.value || histPicker.value, histRange.value ? "Historical mode on · click for live" : "Historical mode", () => (histRange.value ? exitHistory() : (histPicker.value = !histPicker.value)), <CalendarClock size={19} />)}
@@ -98,7 +117,20 @@ export function Toolbar() {
         <PaneButton />
         {btn(t === "draw", "Drawing mode (D)", () => (tool.value = t === "draw" ? "none" : "draw"), <PenTool size={19} />)}
         {/* 3D */ btn(settings.value.view3d.on, "3D radar volume (Shift+3)", toggle3D, <Box size={19} />)}
+        {/* workflow */ btn(t === "xsect" || !!xsLine.value, "Vertical cross-section (Level II)", startXSection, <Slice size={19} />)}
+        {btn(loopDialog.value || !!loopProgress.value, "Export loop (GIF / MP4)", () => (loopDialog.value = !loopDialog.value), <Film size={19} />, frameCount.value < 1 || !!loopProgress.value)}
+        {btn(trackPanel.value, recording.value ? "GPS track · recording" : "GPS track & nearby chasers", () => (trackPanel.value = !trackPanel.value), <span class="tb-ic">{<Route size={19} />}{recording.value && <i class="tb-dot rec" />}</span>)}
+        {btn(wsOpen, "Workspaces", () => setWsOpen(!wsOpen), <Bookmark size={19} />)}
+        {settings.value.saver && btn(true, "Bandwidth saver on · click to turn off", () => update((s) => (s.saver = false)), <Leaf size={19} />)}
       </div>
     </div>
   );
 }
+
+/* ---------- workflow: automation hook (screenshots / console) ---------- */
+import { pinMetar } from "./MetarPanels";
+import { stormCells, stormPrepare } from "../overlays/stormcells";
+import { recs } from "./panels/RecordPanel";
+import { openPanel } from "../store";
+import { tracks, startTrack } from "../gps";
+(window as any).__tbwWf = { loopDialog, startXSection, xsLine, pinMetar, trackPanel, recording, tracks, startTrack, stormCells, stormPrepare, recs, openPanel, update, settings };

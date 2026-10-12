@@ -4,6 +4,7 @@ import { signal, computed } from "@preact/signals";
 import { api } from "./api";
 import { settings, update, type WeatherSel } from "./store";
 import { BUILTIN } from "./radar/colormaps";
+import { intlName, intlRegion, intlSource } from "./intl/radar"; // intl & forecast tools
 
 export interface GridLayerDef {
   id: string;
@@ -11,7 +12,7 @@ export interface GridLayerDef {
   name: string;
   units: string;
   cmap: string;
-  source: "mrms" | "model" | "ndfd" | "metar" | "goes" | "future";
+  source: "mrms" | "model" | "ndfd" | "metar" | "goes" | "future" | "opera" | "cwa";
   model?: string;
   step_min: number;
 }
@@ -99,6 +100,7 @@ export const activeLabel = computed(() => {
     const g = GIBS.find((x) => x.id === w.id);
     return { title: g?.name ?? w.id, group: g?.group.replace("Satellite · ", "") ?? "Satellite" };
   }
+  if (w.kind === "intl") return { title: intlName(w.id), group: `World radar · ${intlRegion(w.id, intlSource(w.id)?.region)}` };
   const d = gridDef(w.id);
   return { title: d?.name ?? w.id, group: d?.group ?? "" };
 });
@@ -113,3 +115,6 @@ export function selectWeather(sel: WeatherSel) {
 export function gridTable(cmap: string) {
   return BUILTIN[cmap] ?? BUILTIN.REF;
 }
+
+// screenshot / console handle (intl & forecast tools)
+(window as any).__tbwWeather = { gridLayers };

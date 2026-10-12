@@ -4235,3 +4235,639 @@ input.sm {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---------- workflow ---------- */
+/* floating panels (cross-section, METAR, GPS track) */
+.fpanel {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-width: calc(100vw - 16px);
+  overflow: hidden;
+}
+.fpanel-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  user-select: none;
+}
+.fpanel-title {
+  flex: 1;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fpanel-title small {
+  font-weight: 500;
+}
+.fpanel-body {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+  max-height: calc(100vh - 120px);
+}
+.fpanel .lbl {
+  margin-top: 4px;
+}
+.cat-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+/* cross-section */
+.xs-wrap {
+  position: relative;
+}
+.xs-wrap canvas {
+  display: block;
+  cursor: crosshair;
+}
+.xs-tip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(8, 10, 14, 0.9);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.xs-msg {
+  position: absolute;
+  top: 12px;
+  right: 18px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: rgba(8, 10, 14, 0.75);
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.xs-msg.err {
+  color: var(--err);
+}
+.xs-handle {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  color: #0b0f14;
+  font: 700 11px/20px Inter, system-ui, sans-serif;
+  text-align: center;
+  border: 2px solid #0b0f14;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  cursor: grab;
+}
+/* METAR pins */
+.metar-pin .metar-viz {
+  justify-content: center;
+}
+.metar-full {
+  margin: 8px;
+  padding: 10px 12px;
+}
+.metar-full h3 {
+  margin: 0 0 6px;
+}
+/* GPS track */
+.trk-rec {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn.danger {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fecaca;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+}
+.trk-near > div,
+.trk-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 0;
+}
+.trk-near span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trk-near b {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.trk-row > span {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.trk-row b {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trk-list {
+  max-height: 200px;
+  overflow: auto;
+}
+.icon-btn.on {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+/* toolbar extras */
+.tb-ic {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.tb-dot {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid #0b0f14;
+}
+.tb-dot.rec {
+  background: #ef4444;
+  animation: tbw-pulse 1.2s ease-in-out infinite;
+}
+@keyframes tbw-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+/* SRV control */
+.srv-ctl {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+.srv-ctl .chip {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.srv-ctl input[type="number"] {
+  width: 54px;
+  padding: 3px 5px;
+}
+.srv-ctl .seg {
+  flex: none;
+}
+.srv-ctl .seg button {
+  padding: 3px 8px;
+}
+.srv-arrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.srv-arrow i {
+  font-style: normal;
+  display: inline-block;
+  color: var(--accent);
+  font-weight: 800;
+}
+/* loop export */
+.loopx-dlg,
+.loopx-prog {
+  position: absolute;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+}
+.loopx-dlg {
+  width: 300px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.loopx-dlg .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.loopx-dlg .row > span:first-child {
+  width: 40px;
+  color: var(--muted);
+}
+.loopx-dlg .row select,
+.loopx-dlg .row input[type="number"] {
+  flex: 1;
+}
+.loopx-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.loopx-head b {
+  flex: 1;
+}
+.loopx-prog {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  font-variant-numeric: tabular-nums;
+}
+.loopx-bar {
+  width: 160px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.loopx-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+.loopx-crop {
+  position: fixed;
+  border: 2px dashed var(--accent);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 3;
+  border-radius: 4px;
+}
+body.loopx-hide .loopx {
+  display: none !important;
+}
+/* workspaces */
+.ws-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ws-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 3px 4px 3px 0;
+}
+.ws-row input {
+  flex: 1;
+  margin-left: 6px;
+}
+.ws-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+.ws-main:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.ws-main small,
+.ws-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+}
+.ws-menu {
+  position: absolute;
+  bottom: 56px;
+  right: 0;
+  width: 250px;
+  padding: 6px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ws-menu-head {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 4px 8px;
+}
+.ws-item {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+.ws-item:hover {
+  background: var(--accent-soft, rgba(63, 183, 255, 0.18));
+}
+.ws-quick {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.ws-quick input {
+  flex: 1;
+}
+.toolbar-wrap {
+  position: relative;
+}
+/* appearance */
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.sw {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 0, 0, 0.4);
+}
+.sw.on {
+  box-shadow: 0 0 0 2px #fff;
+}
+.swatches input[type="color"] {
+  width: 28px;
+  height: 22px;
+  padding: 0 2px;
+}
+/* ---------- end workflow ---------- */
+
+/* ---------- intl & forecast tools ---------- */
+/* world radar picker */
+.lp-item.lp-off {
+  opacity: 0.45;
+  cursor: help;
+}
+.lp-smn {
+  grid-template-columns: repeat(4, 1fr);
+  margin: 2px 0 4px;
+}
+.lp-smn .lp-item {
+  padding: 4px 6px;
+  font-size: 11px;
+  text-align: center;
+}
+.lp-note {
+  margin-top: 8px;
+}
+.intl-legend .il-title {
+  font-weight: 700;
+  margin-right: 4px;
+}
+/* non-US radar sites */
+.site-marker.intl-site {
+  border-color: rgba(167, 139, 250, 0.7);
+  color: #e9ddff;
+  text-transform: uppercase;
+  border-radius: 2px;
+}
+.sites-dots .site-marker.intl-site:not(.selected) {
+  background: rgba(167, 139, 250, 0.9);
+  border-radius: 2px;
+  transform: rotate(45deg) scale(0.85);
+}
+.tag.intl {
+  background: rgba(167, 139, 250, 0.2);
+  color: #d8c8ff;
+}
+.site-regs {
+  display: flex;
+  gap: 5px;
+  margin: 6px 0 2px;
+  flex-wrap: wrap;
+}
+.site-regs .chip {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+/* sounding */
+.cmodal.snd {
+  width: min(1240px, 94vw);
+  height: 92vh;
+}
+.snd .cm-body {
+  overflow: auto;
+}
+.snd-chk {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.snd-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.snd-bar select {
+  max-width: 260px;
+}
+.snd-sp {
+  flex: 1;
+}
+.snd-at {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.snd-hour {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.snd-hour input {
+  width: 220px;
+}
+.snd-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 12px;
+  align-items: start;
+}
+.skewt {
+  position: relative;
+  min-width: 0;
+}
+.skewt canvas,
+.hodo canvas {
+  display: block;
+  border-radius: 8px;
+}
+.skewt-read {
+  position: absolute;
+  top: 16px;
+  left: 56px;
+  padding: 6px 9px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.skewt-read .c-t {
+  color: #fca5a5;
+}
+.skewt-read .c-td {
+  color: #6ee7b7;
+}
+.snd-side {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.hodo-key {
+  display: flex;
+  gap: 10px;
+  font-size: 10.5px;
+  margin-top: 3px;
+}
+.snd-ix table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.snd-ix th,
+.snd-ix td {
+  padding: 2px 4px;
+  text-align: right;
+}
+.snd-ix thead th {
+  color: var(--muted);
+  font-weight: 600;
+}
+.snd-ix tbody th {
+  text-align: left;
+  color: var(--muted);
+}
+.snd-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 8px;
+}
+.snd-cell {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  min-width: 0;
+}
+.snd-cell small {
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.snd-cell b {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.snd-cell.hot b {
+  color: #fca5a5;
+}
+@media (max-width: 1000px) {
+  .snd-main {
+    grid-template-columns: 1fr;
+  }
+}
+/* ensembles */
+.ens-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.ens-models {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ens-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  opacity: 0.55;
+}
+.ens-chip.on {
+  opacity: 1;
+  border-color: var(--c);
+}
+.ens-chip i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--c);
+}
+.ens-chip small {
+  color: var(--muted);
+}
+.ens-mem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.ens-plot {
+  position: relative;
+}
+.ens-plot canvas {
+  display: block;
+}
+.ens-tip {
+  position: absolute;
+  top: 8px;
+  padding: 6px 9px;
+  font-size: 11.5px;
+  pointer-events: none;
+  min-width: 170px;
+  line-height: 1.45;
+}
+.fcc-tabs {
+  margin-right: 4px;
+}
+/* ---------- end intl & forecast tools ---------- */

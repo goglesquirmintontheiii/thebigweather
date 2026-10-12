@@ -8,7 +8,7 @@
 //! metres from the radar, with lat = lat0 + y/R, lon = lon0 + x/(R·cos lat) (R = 6 371 000 m),
 //! which is what the app's shader inverts. Layer k is centred z0 + k·dz metres above the radar.
 
-use super::geom::{bearing_dist, slant_from, PolarSweep, R_EARTH};
+use super::geom::{bearing_dist, destination, slant_from, PolarSweep, R_EARTH};
 use super::level2::{tilts, Moment, Volume};
 use anyhow::{anyhow, bail, Result};
 use rayon::prelude::*;
@@ -167,6 +167,9 @@ fn layers<'a>(v: &'a Volume, kind: Kind) -> Vec<Layer<'a>> {
     let (scale, offset) = kind.quant();
     let mut picked: Vec<usize> = vec![];
     let mut angles: Vec<f32> = vec![];
+    // ODIM volumes may carry KDP itself; prefer it over deriving it from PHI
+    let native_kdp = kind == Kind::Kdp && tilts(v).iter().any(|t| t.sweeps.contains_key("KDP"));
+    let m = if native_kdp { Moment::Kdp } else { m };
     for t in tilts(v) {
         let Some(&si) = t.sweeps.get(m.code()) else { continue };
         // SAILS / MESO-SAILS repeat low tilts: one sweep per angle is enough for 3D
@@ -186,7 +189,7 @@ fn layers<'a>(v: &'a Volume, kind: Kind) -> Vec<Layer<'a>> {
             let ng = polar.ngates;
             let mut bytes = vec![0u8; polar.radials.len() * ng];
             for (ri, row) in bytes.chunks_mut(ng).enumerate() {
-                if kind == Kind::Kdp {
+                if kind == Kind::Kdp && !native_kdp {
                     let phi: Vec<Option<f32>> = (0..ng).map(|g| polar.value(ri, g)).collect();
                     for (o, k) in row.iter_mut().zip(kdp_radial(&phi, polar.gate)) {
                         *o = quantize(k, scale, offset);
@@ -239,37 +242,118 @@ pub fn grid(v: &Volume, kind: Kind, spec: Spec) -> Result<(Vec<u8>, usize)> {
             bearing_dist(lat0, lon0, lat, lon)
         })
         .collect();
-    let elevs: Vec<f64> = ls.iter().map(|l| l.elev).collect();
-    let (lo, hi) = (elevs[0] - HALF_BEAM, elevs[elevs.len() - 1] + HALF_BEAM);
-    let interp = kind.interpolates();
+    let smp = Sampler::new(&ls, kind);
     let mut out = vec![0u8; n * n * spec.nz];
     out.par_chunks_mut(n * n).enumerate().for_each(|(k, slab)| {
         let h = spec.z0() + k as f64 * spec.dz;
         for (o, &(az, s)) in slab.iter_mut().zip(cols.iter()) {
-            let (r, el) = slant_from(s, h);
-            if el < lo || el > hi {
-                continue;
-            }
-            let kk = elevs.partition_point(|&e| e < el);
-            *o = if kk == 0 {
-                ls[0].at(az, r)
-            } else if kk >= ls.len() {
-                ls[ls.len() - 1].at(az, r)
-            } else {
-                let (a, b) = (&ls[kk - 1], &ls[kk]);
-                let w = (el - a.elev) / (b.elev - a.elev).max(1e-6);
-                let (va, vb) = (a.at(az, r), b.at(az, r));
-                match (va, vb) {
-                    (0, 0) => 0,
-                    (x, 0) => if el - a.elev <= HALF_BEAM { x } else { 0 },
-                    (0, y) => if b.elev - el <= HALF_BEAM { y } else { 0 },
-                    (x, y) if interp => (x as f64 + (y as f64 - x as f64) * w).round().clamp(1.0, 255.0) as u8,
-                    (x, y) => if w < 0.5 { x } else { y },
-                }
-            };
+            *o = smp.at(az, s, h);
         }
     });
     Ok((out, ls.len()))
+}
+
+/// Value byte at (azimuth, ground distance, height above the radar), interpolated between the
+/// tilts above and below like a 3D volume voxel.
+struct Sampler<'s, 'a> {
+    ls: &'s [Layer<'a>],
+    elevs: Vec<f64>,
+    lo: f64,
+    hi: f64,
+    interp: bool,
+}
+
+impl<'s, 'a> Sampler<'s, 'a> {
+    fn new(ls: &'s [Layer<'a>], kind: Kind) -> Self {
+        let elevs: Vec<f64> = ls.iter().map(|l| l.elev).collect();
+        let (lo, hi) = (elevs[0] - HALF_BEAM, elevs[elevs.len() - 1] + HALF_BEAM);
+        Self { ls, elevs, lo, hi, interp: kind.interpolates() }
+    }
+
+    #[inline]
+    fn at(&self, az: f64, s: f64, h: f64) -> u8 {
+        let ls = self.ls;
+        let (r, el) = slant_from(s, h);
+        if el < self.lo || el > self.hi {
+            return 0;
+        }
+        let kk = self.elevs.partition_point(|&e| e < el);
+        if kk == 0 {
+            ls[0].at(az, r)
+        } else if kk >= ls.len() {
+            ls[ls.len() - 1].at(az, r)
+        } else {
+            let (a, b) = (&ls[kk - 1], &ls[kk]);
+            let w = (el - a.elev) / (b.elev - a.elev).max(1e-6);
+            let (va, vb) = (a.at(az, r), b.at(az, r));
+            match (va, vb) {
+                (0, 0) => 0,
+                (x, 0) => if el - a.elev <= HALF_BEAM { x } else { 0 },
+                (0, y) => if b.elev - el <= HALF_BEAM { y } else { 0 },
+                (x, y) if self.interp => (x as f64 + (y as f64 - x as f64) * w).round().clamp(1.0, 255.0) as u8,
+                (x, y) => if w < 0.5 { x } else { y },
+            }
+        }
+    }
+}
+
+/// Vertical cross-section request: the line from point 1 to point 2, `nx` columns, `nz` levels
+/// from the ground (MSL 0) to `ztop` metres MSL.
+#[derive(Debug, Clone, Copy)]
+pub struct XSec {
+    pub lat1: f64,
+    pub lon1: f64,
+    pub lat2: f64,
+    pub lon2: f64,
+    pub nx: usize,
+    pub nz: usize,
+    pub ztop: f64,
+}
+
+/// Cross-section body: `u32 L`, `L` bytes JSON header
+/// `{nx, nz, dist_m, ztop, dz, z0, scale, offset, moment, time, site, lat1, lon1, lat2, lon2, radar_height_m, tilts}`,
+/// then `nx*nz` u8 (x fastest from point 1 to point 2, then z bottom→top; level k is centred
+/// at z0 + k·dz metres MSL; byte 0 = no data; value = (byte − offset) / scale).
+pub fn xsection(v: &Volume, moment: &str, x: &XSec) -> Result<Vec<u8>> {
+    let kind = Kind::parse(moment).ok_or_else(|| anyhow!("unknown moment {moment} (REF|VEL|ZDR|CC|SW|KDP|PHI)"))?;
+    if v.lat == 0.0 && v.lon == 0.0 {
+        bail!("volume has no radar location");
+    }
+    if !(2..=2000).contains(&x.nx) || !(2..=600).contains(&x.nz) || !(500.0..=30_000.0).contains(&x.ztop) {
+        bail!("nx 2..2000, nz 2..600, ztop 500..30000 m");
+    }
+    let ls = layers(v, kind);
+    if ls.is_empty() {
+        bail!("{} not found in this volume", kind.code());
+    }
+    let smp = Sampler::new(&ls, kind);
+    let (lat0, lon0) = (v.lat as f64, v.lon as f64);
+    let (brg, dist) = bearing_dist(x.lat1, x.lon1, x.lat2, x.lon2);
+    let cols: Vec<(f64, f64)> = (0..x.nx)
+        .map(|i| {
+            let (la, lo) = destination(x.lat1, x.lon1, brg, dist * (i as f64 + 0.5) / x.nx as f64);
+            bearing_dist(lat0, lon0, la, lo)
+        })
+        .collect();
+    let dz = x.ztop / x.nz as f64;
+    let mut out = vec![0u8; x.nx * x.nz];
+    out.par_chunks_mut(x.nx).enumerate().for_each(|(k, row)| {
+        let h = (k as f64 + 0.5) * dz - v.height_m as f64;
+        if h < 0.0 {
+            return;
+        }
+        for (o, &(az, s)) in row.iter_mut().zip(cols.iter()) {
+            *o = smp.at(az, s, h);
+        }
+    });
+    let (scale, offset) = kind.quant();
+    let hdr = serde_json::json!({
+        "nx": x.nx, "nz": x.nz, "dist_m": dist, "ztop": x.ztop, "dz": dz, "z0": dz / 2.0, "z_ref": "msl",
+        "scale": scale, "offset": offset, "moment": kind.code(), "time": v.start_ms(), "site": v.site,
+        "lat1": x.lat1, "lon1": x.lon1, "lat2": x.lat2, "lon2": x.lon2,
+        "radar_lat": v.lat, "radar_lon": v.lon, "radar_height_m": v.height_m, "tilts": ls.len(),
+    });
+    Ok(with_header(&hdr, &out))
 }
 
 /// Full response body: header + voxels.
@@ -352,6 +436,44 @@ mod tests {
         assert_eq!(h["proj"], "aeqd");
         assert_eq!(h["z0"], 250.0);
         assert_eq!(body.len(), 4 + l + 256 * 256 * 40);
+    }
+
+    #[test]
+    fn cross_section_through_a_cell() {
+        // same ball as above: 50 dBZ 2–4 km above the radar (400 m MSL), 60–80 km out, az 30–60°
+        let elevs: Vec<f32> = vec![0.5, 0.9, 1.3, 1.8, 2.4, 3.1, 4.0, 5.1, 6.4, 8.0, 10.0, 12.5, 15.6, 19.5];
+        let v = synth_volume(&elevs, 920, 30.0, |m, az, r, el| {
+            if m != Moment::Ref {
+                return None;
+            }
+            let (h, s) = beam_height(r, el);
+            let inside = (2000.0..4000.0).contains(&h) && (60_000.0..80_000.0).contains(&s) && (30.0..60.0).contains(&az);
+            Some(if inside { 50.0 } else { 10.0 })
+        });
+        // radial line along 45° from 40 km to 100 km
+        let (la1, lo1) = destination(35.0, -97.0, 45.0, 40_000.0);
+        let (la2, lo2) = destination(35.0, -97.0, 45.0, 100_000.0);
+        let x = XSec { lat1: la1, lon1: lo1, lat2: la2, lon2: lo2, nx: 60, nz: 40, ztop: 10_000.0 };
+        let body = xsection(&v, "REF", &x).unwrap();
+        let l = u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize;
+        let h: serde_json::Value = serde_json::from_slice(&body[4..4 + l]).unwrap();
+        assert_eq!(h["nx"], 60);
+        assert!((h["dist_m"].as_f64().unwrap() - 60_000.0).abs() < 10.0);
+        let px = &body[4 + l..];
+        assert_eq!(px.len(), 60 * 40);
+        let (sc, off) = Kind::Ref.quant();
+        let val = |i: usize, z_msl: f64| {
+            let k = (z_msl / 250.0 - 0.5).round() as usize;
+            let b = px[k * 60 + i];
+            if b == 0 { None } else { Some((b as f32 - off) / sc) }
+        };
+        // column i centre = 40 km + (i + 0.5) km; 70 km → i = 29; 3.4 km MSL = 3 km above radar
+        assert_eq!(val(29, 3400.0).map(|x| x.round()), Some(50.0));
+        assert_eq!(val(29, 6400.0).map(|x| x.round()), Some(10.0));
+        assert_eq!(val(5, 3400.0).map(|x| x.round()), Some(10.0));
+        // below the radar's height: empty
+        assert_eq!(px[0], 0);
+        assert!(xsection(&v, "XYZ", &x).is_err());
     }
 
     #[test]

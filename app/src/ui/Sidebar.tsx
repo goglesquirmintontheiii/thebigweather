@@ -16,6 +16,8 @@ import { AlertsPanel } from "./panels/AlertsPanel";
 import { PointsPanel } from "./panels/PointsPanel";
 import { SourcesPanel } from "./panels/SourcesPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
+import { Bookmark } from "lucide-preact"; // workflow
+import { WorkspacePanel } from "./panels/WorkspacePanel"; // workflow
 
 const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "radar", icon: Radar, label: "Radar" },
@@ -32,6 +34,7 @@ const MORE: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "search", icon: Search, label: "Search" },
   { id: "record", icon: CircleDot, label: "Recordings" },
   { id: "files", icon: FolderOpen, label: "Files & backup" },
+  { id: "workspaces", icon: Bookmark, label: "Workspaces" }, // workflow
 ];
 
 export function Rail() {
@@ -62,7 +65,7 @@ export function Rail() {
   );
 }
 
-const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings" };
+const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */ };
 
 export function SidePanel() {
   const p = openPanel.value;
@@ -88,6 +91,7 @@ export function SidePanel() {
         {p === "points" && <PointsPanel />}
         {p === "sources" && <SourcesPanel />}
         {p === "settings" && <SettingsPanel />}
+        {p === "workspaces" && <WorkspacePanel /> /* workflow */}
       </div>
     </aside>
   );

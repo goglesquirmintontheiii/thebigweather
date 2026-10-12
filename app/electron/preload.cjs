@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webFrame } = require("electron");
 
 // Optional settings injection (first-run provisioning / automated screenshots)
 try {
@@ -15,5 +15,9 @@ contextBridge.exposeInMainWorld("tbw", {
     write: (id, buf) => ipcRenderer.invoke("screenrec-write", id, buf),
     close: (id) => ipcRenderer.invoke("screenrec-close", id),
   },
+  /* workflow */
+  saveFile: (name, buf) => ipcRenderer.invoke("save-file", name, buf),
+  captureBuf: (rect) => ipcRenderer.invoke("capture-buf", rect),
+  setZoom: (f) => webFrame.setZoomFactor(f),
   isElectron: true,
 });

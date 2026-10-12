@@ -26,6 +26,8 @@ pub enum Moment {
     Phi,
     Rho,
     Cfp,
+    /// specific differential phase (°/km); only from ODIM volumes (Level II has no KDP)
+    Kdp,
 }
 
 impl Moment {
@@ -50,6 +52,7 @@ impl Moment {
             Moment::Phi => "PHI",
             Moment::Rho => "RHO",
             Moment::Cfp => "CFP",
+            Moment::Kdp => "KDP",
         }
     }
     pub fn parse(s: &str) -> Option<Moment> {
@@ -61,10 +64,11 @@ impl Moment {
             "PHI" => Some(Moment::Phi),
             "RHO" | "CC" => Some(Moment::Rho),
             "CFP" => Some(Moment::Cfp),
+            "KDP" => Some(Moment::Kdp),
             _ => None,
         }
     }
-    pub const ALL: [Moment; 7] = [
+    pub const ALL: [Moment; 8] = [
         Moment::Ref,
         Moment::Vel,
         Moment::Sw,
@@ -72,6 +76,7 @@ impl Moment {
         Moment::Phi,
         Moment::Rho,
         Moment::Cfp,
+        Moment::Kdp,
     ];
 }
 

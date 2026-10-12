@@ -7,6 +7,7 @@ import { frames, currentFrame, activeTable, loading, radarError, liveSweep, disp
 import { gridFrames, gridLoading, gridError, gridTableActive, gridRaster, gridReady } from "./grid/controller";
 import { gibsTimes } from "./grid/gibs";
 import { gridDef } from "./weather";
+import { intlTimes, intlReady, intlBad, intlError, intlListLoading } from "./intl/radar"; // intl & forecast tools
 import type { ColorTable } from "./radar/colormaps";
 
 export interface ActiveFrame {
@@ -21,6 +22,10 @@ export const activeFrames = computed<ActiveFrame[]>(() => {
   const w = settings.value.weather;
   if (w.kind === "radar") return frames.value.map((f) => ({ key: f.key, time: f.sweep?.start ?? f.time, state: f.sweep ? "ok" : f.error ? "err" : "wait", live: f.live }));
   if (w.kind === "gibs") return gibsTimes.value.map((t) => ({ key: String(t), time: t, state: "ok" }));
+  if (w.kind === "intl") {
+    const rd = intlReady.value, bad = intlBad.value;
+    return intlTimes.value.map((t, i) => ({ key: String(t), time: t, state: bad.has(i) ? "err" : rd.has(i) ? "ok" : "wait" }));
+  }
   const ready = gridReady.value;
   return gridFrames.value.map((f) => ({ key: f.key, time: f.time, label: f.label || undefined, state: f.error ? "err" : ready.has(f.key) ? "ok" : "wait" }));
 });
@@ -56,8 +61,8 @@ export const activeLegend = computed<{ table: ColorTable; units: string; grid: b
   return null;
 });
 
-export const activeLoading = computed(() => (settings.value.weather.kind === "radar" ? loading.value : settings.value.weather.kind === "grid" ? gridLoading.value : false));
-export const activeError = computed(() => (settings.value.weather.kind === "radar" ? radarError.value : settings.value.weather.kind === "grid" ? gridError.value : null));
+export const activeLoading = computed(() => (settings.value.weather.kind === "radar" ? loading.value : settings.value.weather.kind === "grid" ? gridLoading.value : settings.value.weather.kind === "intl" ? intlListLoading.value && !intlTimes.value.length : false));
+export const activeError = computed(() => (settings.value.weather.kind === "radar" ? radarError.value : settings.value.weather.kind === "grid" ? gridError.value : settings.value.weather.kind === "intl" ? intlError.value : null));
 
 /** Loading progress for the timeline bars: frames ready / total, and whether the frame on screen is still loading. */
 export const loadProgress = computed(() => {

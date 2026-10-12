@@ -6,6 +6,7 @@ import { mapRef, flyToSite } from "../../map/mapview";
 import { distance, fmtDist } from "../../util";
 import { Search, Upload, Crosshair } from "lucide-preact";
 import { Slider, smoothLabel } from "../controls";
+import { siteMatches, siteShown, siteRegion, siteRegions, hiddenRegions, toggleRegion, noLevel3, REGION_NAMES, type AnySite } from "../../intl/sites"; // intl & forecast tools
 
 export function RadarPanel() {
   const r = settings.value.radar;
@@ -14,7 +15,7 @@ export function RadarPanel() {
       <SitePicker />
       <section>
         <div class="seg">
-          {(["L2", "L3"] as const).map((src) => (
+          {(["L2", "L3"] as const).filter((src) => src === "L2" || !noLevel3(currentSite.value)).map((src) => (
             <button
               key={src}
               class={r.source === src ? "on" : ""}
@@ -47,11 +48,13 @@ function SitePicker() {
   const center = mapRef.value?.getCenter();
   const shown = useMemo(() => {
     const qq = q.trim().toUpperCase();
-    let l = list.map((s) => ({ s, d: center ? distance(center.lat, center.lng, s.lat, s.lon) : 0 }));
-    if (qq) l = l.filter(({ s }) => s.id.includes(qq) || s.name?.toUpperCase().includes(qq) || s.state === qq);
+    let l = (list as AnySite[]).filter(siteShown).map((s) => ({ s, d: center ? distance(center.lat, center.lng, s.lat, s.lon) : 0 }));
+    if (qq) l = l.filter(({ s }) => siteMatches(s, qq));
     l.sort((a, b) => a.d - b.d);
     return l.slice(0, qq ? 30 : 6);
-  }, [q, list, center?.lat, center?.lng]);
+  }, [q, list, center?.lat, center?.lng, settings.value.ovl["base:sites"]]);
+  const regs = siteRegions.value;
+  const hidden = hiddenRegions();
   return (
     <section>
       <label class="lbl">Radar site</label>
@@ -62,6 +65,15 @@ function SitePicker() {
           <Crosshair size={14} />
         </button>
       </div>
+      {regs.length > 1 && (
+        <div class="site-regs" title="Radar sites shown on the map and in this list">
+          {regs.map((r) => (
+            <button key={r} class={`chip ${hidden.has(r) ? "" : "on"}`} onClick={() => toggleRegion(r)}>
+              {REGION_NAMES[r]}
+            </button>
+          ))}
+        </div>
+      )}
       <div class="site-list">
         {shown.map(({ s, d }) => (
           <button
@@ -71,8 +83,9 @@ function SitePicker() {
             onClick={(e) => (selectSite(s.id, e.ctrlKey || e.metaKey), setQ(""))}
           >
             <span class="sid">{s.id}</span>
-            <span class="sname">{[s.name, s.state].filter(Boolean).join(", ")}</span>
+            <span class="sname">{[s.name, s.state, (s as AnySite).country && siteRegion(s) !== "US" ? (s as AnySite).country : ""].filter(Boolean).join(", ")}</span>
             {s.type === "TDWR" && <span class="tag tdwr">TDWR</span>}
+            {siteRegion(s) !== "US" && <span class="tag intl">{(s as AnySite).kind === "odim" ? "ODIM" : siteRegion(s)}</span>}
             <span class="sdist">{fmtDist(d)}</span>
           </button>
         ))}

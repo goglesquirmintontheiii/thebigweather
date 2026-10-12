@@ -36,6 +36,17 @@ import "../shake";
 import "../overlays/moredefs";
 import { ScanBar } from "./ScanBar";
 import { StormTable } from "./LayerExtras";
+// intl & forecast tools
+import { SoundingCenter } from "./SoundingCenter";
+import { IntlLegend } from "./IntlLegend";
+import "../intl/sites";
+// workflow
+import "../theme";
+import "../saver";
+import "../overlays/cambadges";
+import { XSection } from "./XSection";
+import { MetarPanels } from "./MetarPanels";
+import { TrackPanel } from "./TrackPanel";
 
 export function App() {
   const mapEl = useRef<HTMLDivElement>(null);
@@ -70,6 +81,7 @@ export function App() {
       <Rail />
       <SidePanel />
       <Legend />
+      <IntlLegend /> {/* intl & forecast tools */}
       <View3D /> {/* 3D */}
       <div class="bottom-dock">
         <HistoryBar />
@@ -81,8 +93,12 @@ export function App() {
       <AlertDetail />
       <OverlayPopup />
       <CameraPanels />
+      <XSection /> {/* workflow */}
+      <MetarPanels /> {/* workflow */}
+      <TrackPanel /> {/* workflow */}
       <ConfigModal />
       <ForecastCenter />
+      <SoundingCenter /> {/* intl & forecast tools */}
       <RadioCenter />
       <ShakeCenter />
       <RadioPlayers />

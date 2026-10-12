@@ -84,12 +84,20 @@ export function setHistory(start: number | null, end: number | null) {
   });
 }
 
+/* ---------- workflow: bandwidth saver caps live frame counts (saver.ts sets this) ---------- */
+let liveFrameCap: () => number = () => Infinity;
+export function setLiveFrameCap(fn: () => number) {
+  liveFrameCap = fn;
+}
+/* ---------- end workflow ---------- */
+
 /** Most frames any layer loads for a history window (evenly spaced when there are more). */
 export const HIST_CAP = 200;
 
 /** How many frames to ask the server for, given the layer's cadence in minutes. */
 export function framesToRequest(countSetting: number, cadenceMin: number, cap = 240): number {
   const h = histRange.value;
+  if (!h) cap = Math.min(cap, liveFrameCap()); // workflow: bandwidth saver
   if (h) return Math.max(2, Math.min(cap, Math.ceil((h.end - h.start) / 60_000 / cadenceMin) + 2));
   const a = settings.value.anim;
   if (a.mode === "time") return Math.max(2, Math.min(cap, Math.ceil(a.minutes / cadenceMin) + 2));

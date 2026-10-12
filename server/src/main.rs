@@ -155,6 +155,7 @@ async fn main() -> anyhow::Result<()> {
         health.clone(),
     ));
     radar.spawn_cache_janitor();
+    radar.odim.spawn();
 
     let replay = cli.replay_dir.clone().map(|dir| radar::live::ReplayCfg {
         site: cli.replay_site.to_ascii_uppercase(),

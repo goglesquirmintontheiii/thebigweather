@@ -13,6 +13,12 @@ import { GridLayer } from "../grid/GridLayer";
 import { attachGrid, gridRaster } from "../grid/controller";
 import { rasterValue } from "../grid/raster";
 import { attachGibs, rebuildGibs } from "../grid/gibs";
+/* ---------- intl & forecast tools ---------- */
+import { attachIntl, rebuildIntl } from "../intl/radar";
+import { attachParticles, type ParticleLayer } from "../grid/particles";
+import { siteRegion, siteShown, type AnySite } from "../intl/sites";
+import { attachSoundingMap } from "../sounding/maplayer";
+/* ---------- end intl & forecast tools ---------- */
 import { frameIndex } from "../anim";
 import { sampleAt } from "../radar/sweep";
 import { alerts } from "../alerts";
@@ -28,9 +34,13 @@ export const bearingInfo = signal<{ dist: number; brg: number } | null>(null);
 export const contextMenu = signal<{ x: number; y: number; lat: number; lon: number } | null>(null);
 /** map frames rendered in the last second (null = idle) */
 export const fps = signal<number | null>(null);
+/* ---------- workflow: map click hooks (return true to consume the click) ---------- */
+export const mapClickHooks: ((e: maplibregl.MapMouseEvent) => boolean)[] = [];
+/* ---------- end workflow ---------- */
 
 let radarLayer: RadarLayer;
 let gridLayer: GridLayer;
+let particleLayer: ParticleLayer; // intl & forecast tools
 let googleSess: { key: string; session: string } | null = null;
 let siteMarkers = new Map<string, maplibregl.Marker>();
 let pointMarkers: maplibregl.Marker[] = [];
@@ -64,6 +74,7 @@ function addOverlays(map: MLMap) {
   const before = firstTopLayer(map);
   if (!map.getLayer(gridLayer.id)) map.addLayer(gridLayer, before);
   if (!map.getLayer(radarLayer.id)) map.addLayer(radarLayer, before);
+  if (!map.getLayer(particleLayer.id)) map.addLayer(particleLayer, before); // intl & forecast tools
   const dark = isDarkBasemap(settings.value.basemap, settings.value.customBasemaps);
   map.addSource("counties", { type: "geojson", data: "geo/counties.json" });
   map.addSource("states", { type: "geojson", data: "geo/states.json" });
@@ -126,6 +137,7 @@ function addOverlays(map: MLMap) {
   refreshTools(map);
   refreshSweepLine(map);
   rebuildGibs();
+  rebuildIntl(); // intl & forecast tools
 }
 
 // RapidSweep beams (main radar and any ctrl+clicked radars): live events arrive every few
@@ -349,9 +361,9 @@ function refreshTools(map: MLMap) {
   src.setData({ type: "FeatureCollection", features: feats } as any);
 }
 
-function siteEl(id: string, type: string): HTMLElement {
+function siteEl(id: string, type: string, region = "US"): HTMLElement {
   const el = document.createElement("button");
-  el.className = `site-marker ${type === "TDWR" ? "tdwr" : "nexrad"}`;
+  el.className = `site-marker ${type === "TDWR" ? "tdwr" : "nexrad"}${region !== "US" ? ` intl-site r-${region.toLowerCase()}` : ""}`;
   el.textContent = id;
   el.title = `${id} — click to view · Ctrl+click to add/remove alongside the current radar`;
   el.addEventListener("click", (e) => {
@@ -365,7 +377,7 @@ function refreshSiteMarkers(map: MLMap) {
   // radar sites only matter while a radar layer is shown
   const show = settings.value.overlays.sites && settings.value.weather.kind === "radar";
   const sel = settings.value.radar.site;
-  const list = sites.value;
+  const list = (sites.value as AnySite[]).filter(siteShown); // intl & forecast tools: region filter
   if (!show) {
     for (const m of siteMarkers.values()) m.remove();
     siteMarkers.clear();
@@ -376,7 +388,7 @@ function refreshSiteMarkers(map: MLMap) {
   for (const s of list) {
     let m = siteMarkers.get(s.id);
     if (!m) {
-      m = new maplibregl.Marker({ element: siteEl(s.id, s.type), anchor: "center" }).setLngLat([s.lon, s.lat]).addTo(map);
+      m = new maplibregl.Marker({ element: siteEl(s.id, s.type, siteRegion(s)), anchor: "center" }).setLngLat([s.lon, s.lat]).addTo(map);
       siteMarkers.set(s.id, m);
     }
     m.getElement().classList.toggle("selected", s.id === sel);
@@ -444,6 +456,9 @@ export function createMap(container: HTMLElement): MLMap {
   gridLayer = new GridLayer();
   attachGrid(gridLayer, map);
   attachGibs(map, () => (map.getLayer("grid") ? "grid" : firstTopLayer(map)));
+  attachIntl(map, () => (map.getLayer("grid") ? "grid" : firstTopLayer(map))); // intl & forecast tools
+  particleLayer = attachParticles(map);
+  attachSoundingMap(map, mapClickHooks);
   mapRef.value = map;
   attachOverlays(map);
   attachDraw(map);
@@ -514,6 +529,7 @@ export function createMap(container: HTMLElement): MLMap {
     contextMenu.value = null;
     popup.value = null;
     if (tool.value === "draw") return;
+    if (mapClickHooks.some((h) => h(e))) return; // workflow: cross-section, SRV cell pick
     if (tool.value === "measure") {
       measurePts.value = [...measurePts.value, [e.lngLat.lng, e.lngLat.lat]];
       return;
@@ -570,6 +586,7 @@ export function createMap(container: HTMLElement): MLMap {
     void settings.value.overlays.sites;
     void settings.value.extraSites;
     void settings.value.weather.kind;
+    void settings.value.ovl["base:sites"]; // intl & forecast tools: region filter
     refreshSiteMarkers(map);
     refreshRings(map);
   });

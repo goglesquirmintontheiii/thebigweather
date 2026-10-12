@@ -9,6 +9,7 @@ import { api } from "../api";
 import { activeServer } from "../store";
 import { RadioCenter } from "./RadioCenter";
 import { RadioPlayers } from "./RadioPlayer";
+import { MetarFull } from "./MetarPanels"; // workflow
 
 export function PopoutApp({ spec }: { spec: PopoutSpec }) {
   useEffect(() => {
@@ -20,6 +21,7 @@ export function PopoutApp({ spec }: { spec: PopoutSpec }) {
     <div class={`popout popout-${spec.kind}`}>
       {spec.kind === "camera" && spec.data && <CameraFull c={spec.data} />}
       {spec.kind === "radio" && <NowPlaying />}
+      {/* workflow */ spec.kind === "metar" && spec.data && <MetarFull id={spec.data.id} />}
       {spec.kind === "radiocenter" && (
         <>
           <RadioCenter popped />

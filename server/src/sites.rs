@@ -12,9 +12,21 @@ pub struct Site {
     pub lat: f64,
     pub lon: f64,
     pub elev_m: f64,
-    /// NEXRAD | TDWR
+    /// NEXRAD | TDWR | ODIM
     #[serde(rename = "type")]
     pub kind: String,
+    /// ISO 3166 alpha-2 (ODIM sites only)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// "EU" for European ODIM sites
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// data format family: "odim" (absent for NEXRAD/TDWR Level II sites)
+    #[serde(default, rename = "kind", skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    /// upstream source(s), e.g. "opera" or "opera+fmi" (ODIM sites only)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 impl Site {
@@ -65,6 +77,10 @@ pub fn parse_homr(text: &str) -> Vec<Site> {
             lon,
             elev_m: (elev * 0.3048 * 10.0).round() / 10.0,
             kind: kind.to_string(),
+            country: None,
+            region: None,
+            format: None,
+            source: None,
         });
     }
     out

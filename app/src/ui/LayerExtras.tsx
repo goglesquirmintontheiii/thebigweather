@@ -148,6 +148,7 @@ export function StormTable() {
               <th>VIL</th>
               <th>Hail</th>
               <th>Moving</th>
+              <th>ETA</th>{/* workflow */}
             </tr>
           </thead>
           <tbody>
@@ -164,6 +165,7 @@ export function StormTable() {
                   <td>{p.vil ?? "—"}</td>
                   <td>{p.posh != null ? `${p.posh}%` : "—"}</td>
                   <td>{p.dir_to != null && p.sknt ? `${compass(p.dir_to)} ${fmtKt(p.sknt)}` : "—"}</td>
+                  <td class="fl">{p._eta || "—"}</td>{/* workflow */}
                 </tr>
               );
             })}

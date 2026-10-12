@@ -135,6 +135,7 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/radar/upload", post(radar_upload))
         .route("/radar/rotation", get(radar_rotation))
         .route("/radar/volume3d", get(radar_volume3d))
+        .route("/radar/xsection", get(radar_xsection))
         .route("/live/{site}", get(live_status))
         .route("/l3/{site}/{prod}/list", get(l3_list))
         .route("/l3/data", get(l3_data))
@@ -206,7 +207,9 @@ async fn info(State(st): St) -> Json<Value> {
 }
 
 async fn sites(State(st): St) -> Json<Value> {
-    Json(json!(*st.sites.read()))
+    let mut v = st.sites.read().clone();
+    v.extend(st.radar.odim.sites());
+    Json(json!(v))
 }
 
 async fn l3_products(State(st): St) -> Json<Value> {
@@ -226,7 +229,61 @@ fn valid_site(s: &str) -> Result<String, ApiError> {
     Ok(s)
 }
 
+// ---------- European ODIM sites (5-letter OPERA ids such as "deess"; keys "odim:…") ----------
+
+async fn odim_latest(st: &AppState, site: &str, n: usize) -> Result<Json<Value>, ApiError> {
+    let v = st.radar.odim.latest(site, n).await?;
+    Ok(Json(json!({"site": site, "volumes": v, "live": {"site": site, "active": false}})))
+}
+
+async fn odim_day(st: &AppState, site: &str, date: &str) -> Result<Json<Value>, ApiError> {
+    let (y, m, d) = parse_date(date).map_err(|e| bad(&e.to_string()))?;
+    let v = st.radar.odim.day(site, y, m, d).await?;
+    Ok(Json(json!({"site": site, "date": date, "volumes": v})))
+}
+
+#[derive(Deserialize)]
+struct XsecQ {
+    key: String,
+    moment: Option<String>,
+    lat1: f64,
+    lon1: f64,
+    lat2: f64,
+    lon2: f64,
+    nx: Option<usize>,
+    nz: Option<usize>,
+    ztop: Option<f64>,
+}
+
+/// Vertical cross-section of a Level II / ODIM volume along a line (u32 header length, JSON header, u8 cells).
+async fn radar_xsection(State(st): St, Query(q): Query<XsecQ>) -> Result<Response, ApiError> {
+    let moment = q.moment.unwrap_or_else(|| "REF".into());
+    if crate::radar::volume3d::Kind::parse(&moment).is_none() {
+        return Err(bad("moment must be REF|VEL|ZDR|CC|SW|KDP|PHI"));
+    }
+    let x = crate::radar::volume3d::XSec { lat1: q.lat1, lon1: q.lon1, lat2: q.lat2, lon2: q.lon2, nx: q.nx.unwrap_or(400), nz: q.nz.unwrap_or(120), ztop: q.ztop.unwrap_or(18_000.0) };
+    if !(2..=2000).contains(&x.nx) || !(2..=600).contains(&x.nz) || !(500.0..=30_000.0).contains(&x.ztop) || [x.lat1, x.lat2].iter().any(|l| l.abs() > 90.0) || [x.lon1, x.lon2].iter().any(|l| l.abs() > 360.0) {
+        return Err(bad("nx 2..2000, nz 2..600, ztop 500..30000, valid lat/lon"));
+    }
+    let live = q.key.starts_with("live:");
+    let body = if live {
+        let lm = st.live.clone();
+        let k = q.key.clone();
+        Bytes::from(
+            tokio::task::spawn_blocking(move || lm.with_volume(&k, |v| crate::radar::volume3d::xsection(v, &moment, &x)))
+                .await
+                .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??,
+        )
+    } else {
+        st.radar.xsection(&q.key, &moment, x).await?
+    };
+    Ok(volume_response(body, !live && crate::radar::odim_src::settled(&q.key)))
+}
+
 async fn radar_latest(State(st): St, Path(site): Path<String>, Query(q): Query<NQ>) -> Result<Json<Value>, ApiError> {
+    if let Some(id) = st.radar.odim.canonical(&site) {
+        return odim_latest(&st, &id, q.n.unwrap_or(1).clamp(1, 200)).await;
+    }
     let site = valid_site(&site)?;
     st.live.touch(&site);
     let n = q.n.unwrap_or(1).clamp(1, 200);
@@ -235,6 +292,9 @@ async fn radar_latest(State(st): St, Path(site): Path<String>, Query(q): Query<N
 }
 
 async fn radar_day(State(st): St, Path((site, date)): Path<(String, String)>) -> Result<Json<Value>, ApiError> {
+    if let Some(id) = st.radar.odim.canonical(&site) {
+        return odim_day(&st, &id, &date).await;
+    }
     let site = valid_site(&site)?;
     let (y, m, d) = parse_date(&date).map_err(|e| bad(&e.to_string()))?;
     let v = st.radar.list_day(&site, y, m, d).await?;
@@ -266,7 +326,7 @@ async fn radar_sweep(State(st): St, headers: HeaderMap, Query(q): Query<SweepQ>)
         return Ok(sweep_response(&headers, b, false));
     }
     let b = st.radar.sweep(&q.key, q.tilt, &q.moment).await?;
-    Ok(sweep_response(&headers, b, true))
+    Ok(sweep_response(&headers, b, crate::radar::odim_src::settled(&q.key)))
 }
 
 #[derive(Deserialize)]
@@ -280,8 +340,10 @@ async fn radar_rotation(State(st): St, Query(q): Query<RotQ>) -> Result<Response
     let key = match (q.key.filter(|k| !k.is_empty()), q.site) {
         (Some(k), _) => k,
         (None, Some(site)) => {
-            let site = valid_site(&site)?;
-            let v = st.radar.latest(&site, 1).await?;
+            let v = match st.radar.odim.canonical(&site) {
+                Some(id) => st.radar.odim.latest(&id, 1).await?,
+                None => st.radar.latest(&valid_site(&site)?, 1).await?,
+            };
             v.last().map(|e| e.key.clone()).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no volumes found for {site}")))?
         }
         _ => return Err(bad("key or site required")),
@@ -329,7 +391,7 @@ async fn radar_volume3d(State(st): St, Query(q): Query<Vol3dQ>) -> Result<Respon
     } else {
         st.radar.volume3d(&q.key, &moment, &res).await?
     };
-    Ok(volume_response(body, !live))
+    Ok(volume_response(body, !live && crate::radar::odim_src::settled(&q.key)))
 }
 
 fn volume_response(body: Bytes, cacheable: bool) -> Response {

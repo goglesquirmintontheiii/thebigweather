@@ -43,6 +43,10 @@ pub struct VolMeta {
     pub end: i64,
     pub complete: bool,
     pub tilts: Vec<TiltMeta>,
+    /// volume-derived pseudo-moments for `/radar/sweep` (any tilt index): CREF, ET, VIL
+    pub derived: Vec<String>,
+    /// "ODIM_H5" for European volumes, the Archive II version string otherwise
+    pub format: String,
 }
 
 pub fn vol_meta(key: &str, v: &Volume) -> VolMeta {
@@ -69,11 +73,28 @@ pub fn vol_meta(key: &str, v: &Volume) -> VolMeta {
                 }
             })
             .collect(),
+        derived: super::derived::available(v),
+        format: if v.version == "ODIM_H5" { "ODIM_H5".into() } else { "L2".into() },
     }
 }
 
-/// Encode a sweep of a volume by tilt index + moment.
+/// Decode any single radar file: Level II (archive / gzip) or ODIM_H5.
+pub fn decode_any(raw: &[u8], site_hint: &str) -> Result<Volume> {
+    if super::odim::is_hdf5(raw) {
+        let mut v = super::odim::decode_volume("", &[Bytes::copy_from_slice(raw)])?;
+        if v.site.is_empty() {
+            v.site = site_hint.to_string();
+        }
+        return Ok(v);
+    }
+    Decoder::decode_file(raw)
+}
+
+/// Encode a sweep of a volume by tilt index + moment (derived products ignore the tilt).
 pub fn encode_tilt(v: &Volume, tilt: usize, moment: &str) -> Result<Vec<u8>> {
+    if super::derived::is_derived(moment) {
+        return super::derived::encode(v, moment);
+    }
     let m = Moment::parse(moment).ok_or_else(|| anyhow!("unknown moment {moment}"))?;
     let t = tilts(v);
     let t = t.get(tilt).ok_or_else(|| anyhow!("tilt {tilt} not found"))?;
@@ -138,7 +159,11 @@ pub struct RadarService {
     decode_sem: Arc<Semaphore>,
     pub health: Arc<Health>,
     pub l3_catalog: Vec<serde_json::Value>,
+    /// European ODIM_H5 single-site volumes
+    pub odim: Arc<super::odim_src::OdimService>,
 }
+
+type OdimFiles = (super::odim_src::Src, String, Vec<super::odim_src::FileRef>);
 
 fn safe_name(key: &str) -> String {
     key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' }).collect()
@@ -187,7 +212,9 @@ impl RadarService {
         let local_dir = if cfg.local_archive_dir.is_empty() { None } else { Some(PathBuf::from(&cfg.local_archive_dir)) };
         let l3_catalog: Vec<serde_json::Value> =
             serde_json::from_str(include_str!("../../data/level3_products.json")).unwrap_or_default();
+        let odim = super::odim_src::OdimService::new(http.clone(), health.clone(), cache_dir.clone());
         Self {
+            odim,
             http,
             l2_buckets: cfg.level2_buckets.clone(),
             l3_buckets: cfg.level3_buckets.clone(),
@@ -348,9 +375,37 @@ impl RadarService {
 
     // ---------- decode ----------
 
+    /// Cache identity of a key. ODIM volumes are assembled from several files, so the file count
+    /// is part of it: a volume decoded while files were still arriving is redone once they land.
+    async fn cache_id(&self, key: &str) -> Result<(String, Option<OdimFiles>)> {
+        if key.starts_with("odim:") {
+            let (src, site, files) = self.odim.resolve(key).await?;
+            return Ok((format!("{key}#{}", files.len()), Some((src, site, files))));
+        }
+        Ok((key.to_string(), None))
+    }
+
     pub async fn volume(&self, key: &str) -> Result<Arc<Volume>> {
-        if let Some(v) = self.volumes.lock().get(key) {
+        let (id, odim) = self.cache_id(key).await?;
+        self.volume_id(key, &id, odim).await
+    }
+
+    async fn volume_id(&self, key: &str, id: &str, odim: Option<OdimFiles>) -> Result<Arc<Volume>> {
+        if let Some(v) = self.volumes.lock().get(id) {
             return Ok(v);
+        }
+        if let Some((src, site, files)) = odim {
+            let raws = self.odim.fetch(src, &files).await?;
+            let _permit = self.decode_sem.clone().acquire_owned().await?;
+            if let Some(v) = self.volumes.lock().get(id) {
+                return Ok(v);
+            }
+            let k = key.to_string();
+            let vol = tokio::task::spawn_blocking(move || super::odim::decode_volume(&site, &raws).with_context(|| format!("decode {k}"))).await??;
+            let size = volume_bytes(&vol);
+            let vol = Arc::new(vol);
+            self.volumes.lock().put(id.to_string(), vol.clone(), size);
+            return Ok(vol);
         }
         let raw = self.raw(key).await?;
         let _permit = self.decode_sem.clone().acquire_owned().await?;
@@ -359,10 +414,10 @@ impl RadarService {
         }
         let k = key.to_string();
         let vol = tokio::task::spawn_blocking(move || -> Result<Volume> {
-            let mut v = Decoder::decode_file(&raw).with_context(|| format!("decode {k}"))?;
+            let base = k.rsplit(['/', ':']).next().unwrap_or("");
+            let mut v = decode_any(&raw, base).with_context(|| format!("decode {k}"))?;
             if v.site.is_empty() {
                 // legacy files carry no ICAO; take it from the filename
-                let base = k.rsplit(['/', ':']).next().unwrap_or("");
                 v.site = base.chars().take(4).collect::<String>().to_ascii_uppercase();
             }
             Ok(v)
@@ -370,7 +425,7 @@ impl RadarService {
         .await??;
         let size = volume_bytes(&vol);
         let vol = Arc::new(vol);
-        self.volumes.lock().put(key.to_string(), vol.clone(), size);
+        self.volumes.lock().put(id.to_string(), vol.clone(), size);
         Ok(vol)
     }
 
@@ -381,11 +436,14 @@ impl RadarService {
 
     /// zstd-compressed TBWS sweep
     pub async fn sweep(&self, key: &str, tilt: usize, moment: &str) -> Result<Bytes> {
-        let ck = format!("{key}|{tilt}|{moment}");
+        let (id, odim) = self.cache_id(key).await?;
+        let moment = moment.to_ascii_uppercase();
+        let tilt = if super::derived::is_derived(&moment) { 0 } else { tilt };
+        let ck = format!("{id}|{tilt}|{moment}");
         if let Some(b) = self.encoded.lock().get(&ck) {
             return Ok(b);
         }
-        let v = self.volume(key).await?;
+        let v = self.volume_id(key, &id, odim).await?;
         let moment = moment.to_string();
         let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
             let raw = encode_tilt(&v, tilt, &moment)?;
@@ -402,11 +460,12 @@ impl RadarService {
     pub async fn volume3d(&self, key: &str, moment: &str, res: &str) -> Result<Bytes> {
         let res = if res.eq_ignore_ascii_case("hi") { "hi" } else { "lo" };
         let moment = moment.to_ascii_uppercase();
-        let ck = format!("{key}|{moment}|{res}");
+        let (id, odim) = self.cache_id(key).await?;
+        let ck = format!("{id}|{moment}|{res}");
         if let Some(b) = self.vol3d.lock().get(&ck) {
             return Ok(b);
         }
-        let v = self.volume(key).await?;
+        let v = self.volume_id(key, &id, odim).await?;
         let _permit = self.decode_sem.clone().acquire_owned().await?;
         if let Some(b) = self.vol3d.lock().get(&ck) {
             return Ok(b);
@@ -418,15 +477,24 @@ impl RadarService {
 
     /// Rotation detections (GeoJSON) for a volume.
     pub async fn rotation(&self, key: &str) -> Result<Bytes> {
-        if let Some(b) = self.rotation.lock().get(key) {
+        let (id, odim) = self.cache_id(key).await?;
+        if let Some(b) = self.rotation.lock().get(&id) {
             return Ok(b.clone());
         }
-        let v = self.volume(key).await?;
+        let v = self.volume_id(key, &id, odim).await?;
         let _permit = self.decode_sem.clone().acquire_owned().await?;
         let k = key.to_string();
         let b = Bytes::from(tokio::task::spawn_blocking(move || serde_json::to_vec(&super::rotation::geojson(&v, &k))).await??);
-        self.rotation.lock().put(key.to_string(), b.clone());
+        self.rotation.lock().put(id, b.clone());
         Ok(b)
+    }
+
+    /// Vertical cross-section of one moment (see `volume3d::xsection` for the format).
+    pub async fn xsection(&self, key: &str, moment: &str, x: super::volume3d::XSec) -> Result<Bytes> {
+        let v = self.volume(key).await?;
+        let _permit = self.decode_sem.clone().acquire_owned().await?;
+        let moment = moment.to_string();
+        Ok(Bytes::from(tokio::task::spawn_blocking(move || super::volume3d::xsection(&v, &moment, &x)).await??))
     }
 
     pub async fn store_upload(&self, name: &str, body: Bytes) -> Result<String> {
@@ -436,7 +504,7 @@ impl RadarService {
         }
         // ensure the name carries a site + time for listing; decode once to check
         let b2 = body.clone();
-        let vol = tokio::task::spawn_blocking(move || Decoder::decode_file(&b2)).await??;
+        let vol = tokio::task::spawn_blocking(move || decode_any(&b2, "")).await??;
         if vol.sweeps.is_empty() {
             bail!("no radar sweeps found in file");
         }

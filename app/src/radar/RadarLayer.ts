@@ -7,6 +7,15 @@ import type { CustomLayerInterface, CustomRenderMethodInput, Map as MLMap } from
 import { type Sweep, sweepRange } from "./sweep";
 import { type ColorTable, rasterize, TEX_SIZE } from "./colormaps";
 import { gateFor, radarGateKey, onGateChange } from "../gate";
+import { effect } from "@preact/signals";
+import { srvMotion } from "./srv";
+
+/** all live radar layers (main map + panes), repainted when the SRV motion changes */
+const layers = new Set<RadarLayer>();
+effect(() => {
+  void srvMotion.value;
+  for (const l of layers) l.map?.triggerRepaint();
+});
 
 const VS = `#version 300 es
 precision highp float;
@@ -52,6 +61,9 @@ uniform sampler2D u_cmap;
 // a pixel belongs to whichever radar is closest, since data is better nearer the radar
 uniform int u_nother;
 uniform vec3 u_others[8];
+// storm-relative velocity: x = storm speed (native units), y = direction it moves toward (rad)
+uniform int u_srvon;
+uniform vec2 u_srv;
 
 const float PI = 3.141592653589793;
 const float R = 6371000.0;
@@ -145,6 +157,7 @@ void main() {
     }
     v = mix(v, sm, min(1.0, u_smooth * 2.0));
   }
+  if (u_srvon == 1) v -= u_srv.x * cos(radians(az) - u_srv.y);
   float gv = u_gabs == 1 ? abs(v) : v;
   if (gv < u_gmin || gv > u_gmax) discard;
   float t = (v - u_cmin) / (u_cmax - u_cmin);
@@ -192,7 +205,7 @@ export class RadarLayer implements CustomLayerInterface {
   id: string;
   type = "custom" as const;
   renderingMode = "2d" as const;
-  private map?: MLMap;
+  map?: MLMap;
   private gl?: WebGL2RenderingContext;
   private prog?: WebGLProgram;
   private vbo?: WebGLBuffer;
@@ -212,13 +225,14 @@ export class RadarLayer implements CustomLayerInterface {
   onAdd(map: MLMap, gl: WebGL2RenderingContext) {
     this.map = map;
     this.gl = gl;
+    layers.add(this);
     const p = gl.createProgram()!;
     gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VS));
     gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, FS));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || "link error");
     this.prog = p;
-    for (const n of ["u_matrix", "u_extent", "u_cy", "u_lat0", "u_lon0", "u_first", "u_gate", "u_cosel", "u_ngates", "u_nrad", "u_word", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth", "u_gmin", "u_gmax", "u_gabs", "u_rf", "u_data", "u_azidx", "u_az", "u_lut", "u_cmap", "u_nother", "u_others"]) {
+    for (const n of ["u_matrix", "u_extent", "u_cy", "u_lat0", "u_lon0", "u_first", "u_gate", "u_cosel", "u_ngates", "u_nrad", "u_word", "u_scale", "u_offset", "u_cmin", "u_cmax", "u_opacity", "u_smooth", "u_gmin", "u_gmax", "u_gabs", "u_rf", "u_data", "u_azidx", "u_az", "u_lut", "u_cmap", "u_nother", "u_others", "u_srvon", "u_srv"]) {
       this.loc[n] = gl.getUniformLocation(p, n);
     }
     this.vao = gl.createVertexArray()!;
@@ -240,6 +254,7 @@ export class RadarLayer implements CustomLayerInterface {
   onRemove() {
     this.unGate?.();
     this.unGate = undefined;
+    layers.delete(this);
     const gl = this.gl;
     if (!gl) return;
     for (const g of this.cache.values()) this.freeGpu(g);
@@ -354,6 +369,7 @@ export class RadarLayer implements CustomLayerInterface {
     gl.disable(gl.CULL_FACE);
     gl.colorMask(true, true, true, true);
     const L = this.loc;
+    const srv = srvMotion.peek();
     for (const it of this.items) {
       const s = it.sweep;
       // nearest-radar priority between the radars on screen
@@ -395,6 +411,10 @@ export class RadarLayer implements CustomLayerInterface {
       gl.uniform1f(L.u_gmin, gate ? gate[0] : -1e30);
       gl.uniform1f(L.u_gmax, gate ? gate[1] : 1e30);
       gl.uniform1i(L.u_gabs, gate?.[2] ? 1 : 0);
+      // SRV only for Level II velocity sweeps (native m/s)
+      const srvOn = !!srv && s.product === "VEL";
+      gl.uniform1i(L.u_srvon, srvOn ? 1 : 0);
+      gl.uniform2f(L.u_srv, srvOn ? srv!.speed : 0, srvOn ? (srv!.dir * Math.PI) / 180 : 0);
       const rf = it.table.rf ?? [0, 0, 0, 0];
       gl.uniform4f(L.u_rf, rf[0] / 255, rf[1] / 255, rf[2] / 255, rf[3] / 255);
       const bind = (unit: number, tex: WebGLTexture, name: string) => {
