@@ -6,7 +6,7 @@ Set-Location -LiteralPath $PSScriptRoot
 $first = Get-ChildItem -Filter "TheBigWeather-*.exe.part0.zip" | Sort-Object Name | Select-Object -Last 1
 if (-not $first) { Write-Host "Put this script next to the TheBigWeather-...exe.partN.zip files"; Read-Host "Press Enter"; exit 1 }
 $name = $first.Name -replace '\.part0\.zip$', ''
-$tmp = Join-Path $env:TEMP ("tbw-join-" + [guid]::NewGuid())
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("tbw-join-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 $i = 0
 $out = [System.IO.File]::Create((Join-Path $PSScriptRoot $name))
