@@ -194,6 +194,8 @@ const SATS = [
   { id: "19", name: "GOES-19 (East)" },
   { id: "18", name: "GOES-18 (West)" },
   { id: "himawari", name: "Himawari-9 (NASA imagery)" },
+  { id: "meteosat", name: "Meteosat (Europe / Africa)" },
+  { id: "polar", name: "Polar orbiters & global (NASA)" },
 ];
 const REGIONS: Record<string, string> = { conus: "CONUS", full: "Full Disk", meso1: "Mesoscale 1", meso2: "Mesoscale 2" };
 
@@ -201,7 +203,7 @@ function SatList({ pick }: { pick: Pick }) {
   const goes = gridLayers.value.filter((d) => d.source === "goes");
   const w = settings.value.weather;
   // current selection → satellite / region
-  const cur = w.kind === "grid" && w.id.startsWith("goes/") ? w.id.split("/") : w.kind === "gibs" ? [w.id.startsWith("himawari") ? "himawari" : w.id.includes("west") ? "18" : "19", "full"] : [];
+  const cur = w.kind === "grid" && w.id.startsWith("goes/") ? w.id.split("/") : w.kind === "gibs" ? [GIBS.find((g) => g.id === w.id)?.sat ?? "19", "full"] : [];
   const curSat = cur[0] === "goes" ? cur[1] : cur[0];
   const curReg = cur[0] === "goes" ? cur[2] : cur[1];
   const [sat, setSat] = useState(curSat ?? "19");
@@ -209,7 +211,8 @@ function SatList({ pick }: { pick: Pick }) {
   const inSector = goes.filter((d) => d.id.startsWith(`goes/${sat}/${reg}/`));
   const rgbs = inSector.filter((d) => d.cmap === "RGB");
   const bands = inSector.filter((d) => d.cmap !== "RGB");
-  const gibs = GIBS.filter((g) => (sat === "himawari" ? g.id.startsWith("himawari") : reg === "full" && g.id.startsWith(sat === "19" ? "goes-east" : "goes-west")));
+  const imageOnly = sat === "himawari" || sat === "meteosat" || sat === "polar";
+  const gibs = GIBS.filter((g) => g.sat === sat && (imageOnly || reg === "full"));
   return (
     <>
       <label class="lbl">Satellite</label>
@@ -220,7 +223,7 @@ function SatList({ pick }: { pick: Pick }) {
           </option>
         ))}
       </select>
-      {sat !== "himawari" && (
+      {!imageOnly && (
         <>
           <label class="lbl">Region</label>
           <select value={reg} onChange={(e) => setReg((e.target as HTMLSelectElement).value)}>
@@ -244,7 +247,7 @@ function SatList({ pick }: { pick: Pick }) {
       )}
       {gibs.length > 0 && (
         <>
-          <label class="lbl">NASA imagery (GIBS)</label>
+          <label class="lbl">{sat === "meteosat" ? "EUMETSAT imagery" : "NASA imagery (GIBS)"}</label>
           <div class="lp-grid">
             {gibs.map((x) => (
               <Item key={x.id} on={w.kind === "gibs" && w.id === x.id} name={x.name} onClick={() => pick(() => selectWeather({ kind: "gibs", id: x.id }))} />
@@ -262,7 +265,7 @@ function SatList({ pick }: { pick: Pick }) {
           </div>
         </>
       )}
-      {sat !== "himawari" && !goes.length && <div class="muted small">Connect to a server to list GOES layers.</div>}
+      {!imageOnly && !goes.length && <div class="muted small">Connect to a server to list GOES layers.</div>}
     </>
   );
 }

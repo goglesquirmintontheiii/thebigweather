@@ -118,7 +118,7 @@ function typeSounds(fs: any[]) {
     if (!alertVisible(p.event)) continue;
     const snd = alertStyle(p.event).sound;
     if (snd === "off") continue;
-    if (scope === "points" && !s.points.some((pt) => pointInGeometry(pt.lon, pt.lat, f.geometry))) continue;
+    if (scope === "points" && !s.points.some((pt) => !(s.alertCfg.soundSkip ?? []).includes(pt.id) && pointInGeometry(pt.lon, pt.lat, f.geometry))) continue;
     if (!best || p.priority > best.pri) best = { pri: p.priority, sound: snd };
   }
   if (best && Date.now() - lastSound > 3000) {

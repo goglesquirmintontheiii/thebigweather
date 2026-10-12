@@ -74,6 +74,8 @@ export interface AlertTypeCfg {
 export interface AlertCfg {
   /** play per-type sounds for every new alert, or only ones covering a saved point */
   soundScope?: "all" | "points";
+  /** saved point ids left out of "My points only" sounds (new points are included) */
+  soundSkip?: string[];
   hiddenCats: string[];
   hidden: string[];
   cats: Record<string, AlertTypeCfg>;

@@ -40,7 +40,9 @@ export function StatsPanel() {
   }, []);
   if (!p.open) return null;
   const s = stats.value;
-  const x = p.x < 0 ? window.innerWidth - 232 : p.x;
+  // keep it on screen even if it was saved on a bigger window / another monitor
+  const x = p.x < 0 ? window.innerWidth - 232 : Math.max(0, Math.min(p.x, window.innerWidth - 230));
+  const y = Math.max(0, Math.min(p.y, window.innerHeight - 120));
   const onDown = (e: PointerEvent) => {
     const el = ref.current!;
     const ox = e.clientX - el.offsetLeft;
@@ -89,7 +91,7 @@ export function StatsPanel() {
   const h = history.value;
   const path = h.length > 1 ? h.map((v, i) => `${i === 0 ? "M" : "L"}${(i / 39) * 100},${30 - (v / 100) * 28}`).join(" ") : "";
   return (
-    <div ref={ref} class="stats glass" style={{ left: `${x}px`, top: `${p.y}px` }}>
+    <div ref={ref} class="stats glass" style={{ left: `${x}px`, top: `${y}px` }}>
       <div class="stats-head" onPointerDown={onDown as any}>
         <GripVertical size={12} />
         <Cpu size={12} />

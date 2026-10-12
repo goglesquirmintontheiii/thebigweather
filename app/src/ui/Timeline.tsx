@@ -10,15 +10,18 @@ import { fmtTime } from "../util";
 import { gridDef } from "../weather";
 import { SkipBack, SkipForward, History, SlidersHorizontal, X } from "lucide-preact";
 
-const SPANS: [number, string][] = [
-  [15, "15 min"],
-  [30, "30 min"],
-  [60, "1 h"],
-  [120, "2 h"],
-  [180, "3 h"],
-  [360, "6 h"],
-  [720, "12 h"],
-  [1440, "24 h"],
+/** "90" → "1.5 h" style label for a span in minutes. */
+export function spanLabel(m: number) {
+  if (m % 1440 === 0) return `${m / 1440} d`;
+  if (m >= 60 && m % 60 === 0) return `${m / 60} h`;
+  if (m > 120) return `${+(m / 60).toFixed(1)} h`;
+  return `${m} min`;
+}
+
+const UNITS: [string, number][] = [
+  ["min", 1],
+  ["hours", 60],
+  ["days", 1440],
 ];
 
 function fpsLabel(f: number) {
@@ -83,8 +86,10 @@ function FramesBox() {
   const radar = s.weather.kind === "radar";
   const count = radar ? s.radar.frames : s.grid.frames;
   const setCount = (n: number) => update((x) => (radar ? (x.radar.frames = n) : (x.grid.frames = n)));
-  const [mins, setMins] = useState(String(a.minutes));
-  useEffect(() => setMins(String(a.minutes)), [a.minutes]);
+  const [unit, setUnit] = useState(a.minutes % 1440 === 0 ? 1440 : a.minutes % 60 === 0 ? 60 : 1);
+  const [val, setVal] = useState(String(a.minutes / unit));
+  useEffect(() => setVal(String(+(a.minutes / unit).toFixed(2))), [a.minutes, unit]);
+  const apply = (v: string, u: number) => update((x) => (x.anim.minutes = Math.max(5, Math.min(10080, Math.round((+v || 1) * u)))));
   const fi = Math.max(0, FPS_STEPS.findIndex((f) => f >= a.fps));
   return (
     <div class="tl-frames">
@@ -107,16 +112,16 @@ function FramesBox() {
         </div>
       ) : (
         <>
-          <div class="chips">
-            {SPANS.map(([m, l]) => (
-              <button key={m} class={`chip ${a.minutes === m ? "on" : ""}`} onClick={() => update((x) => (x.anim.minutes = m))}>
-                {l}
-              </button>
-            ))}
-          </div>
           <div class="row">
-            <span>Minutes</span>
-            <input class="num" type="number" min={5} max={2880} value={mins} onInput={(e) => setMins((e.target as HTMLInputElement).value)} onChange={() => update((x) => (x.anim.minutes = Math.max(5, Math.min(2880, +mins || 60))))} />
+            <span>Length</span>
+            <input class="num" type="number" min={unit === 1 ? 5 : 0.25} step={unit === 1 ? 5 : unit === 60 ? 0.5 : 0.25} value={val} onInput={(e) => setVal((e.target as HTMLInputElement).value)} onChange={(e) => apply((e.target as HTMLInputElement).value, unit)} />
+            <select value={String(unit)} onChange={(e) => setUnit(+(e.target as HTMLSelectElement).value)}>
+              {UNITS.map(([l, u]) => (
+                <option key={u} value={u}>
+                  {l}
+                </option>
+              ))}
+            </select>
           </div>
           {isForecast.value && <p class="muted small">Forecast layers always show the whole run.</p>}
         </>
@@ -217,7 +222,7 @@ export function Timeline() {
         <span class="tl-sep" />
         <button class={`tl-btn ${pop === "frames" ? "on" : ""}`} onClick={() => setPop(pop === "frames" ? null : "frames")} title="Frames, time span and speed">
           <SlidersHorizontal size={13} />
-          <span>{settings.value.anim.mode === "time" ? SPANS.find((s) => s[0] === settings.value.anim.minutes)?.[1] ?? `${settings.value.anim.minutes} min` : `${n}`}</span>
+          <span>{settings.value.anim.mode === "time" ? spanLabel(settings.value.anim.minutes) : `${n}`}</span>
           <span class="muted">· {fpsLabel(settings.value.anim.fps)}</span>
         </button>
         <button class={`tl-btn ${pop === "hist" || hist ? "on" : ""}`} onClick={() => setPop(pop === "hist" ? null : "hist")} title="Load history">

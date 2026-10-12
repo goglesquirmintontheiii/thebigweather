@@ -1,3 +1,5 @@
+import { Toggle } from "./RadarPanel";
+import { settings, update } from "../../store";
 import { useEffect } from "preact/hooks";
 import { signal } from "@preact/signals";
 import { api } from "../../api";
@@ -21,6 +23,7 @@ export function SourcesPanel() {
   const conn = connection.value;
   return (
     <div class="stack">
+      <Toggle label="Server stats panel (CPU, RAM, disk, network)" on={settings.value.panels.stats.open} set={(v) => update((x) => (x.panels.stats = { ...x.panels.stats, open: v }))} />
       <div class="source-row">
         <span class={`sdot ${conn === "online" ? "ok" : conn === "connecting" ? "idle" : "error"}`} />
         <span class="sname">Server connection</span>

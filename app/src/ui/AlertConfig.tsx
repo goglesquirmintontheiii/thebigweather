@@ -175,6 +175,47 @@ function Editor({ target }: { target: { kind: "cat" | "type"; name: string } }) 
   );
 }
 
+/** Pick which saved points trigger sounds, with a tick for all. */
+function SoundPoints() {
+  const pts = settings.value.points;
+  const skip = settings.value.alertCfg.soundSkip ?? [];
+  if (!pts.length) return <p class="muted small">No saved points yet. Add them in the Points tab.</p>;
+  const on = pts.filter((p) => !skip.includes(p.id)).length;
+  return (
+    <div class="al-pts">
+      <label class="chk">
+        <input
+          type="checkbox"
+          checked={on === pts.length}
+          ref={(el) => el && (el.indeterminate = on > 0 && on < pts.length)}
+          onChange={(e) => setCfg((c) => (c.soundSkip = (e.target as HTMLInputElement).checked ? [] : pts.map((p) => p.id)))}
+        />
+        <b>All points</b>
+        <small class="muted">
+          {on}/{pts.length}
+        </small>
+      </label>
+      {pts.map((p) => (
+        <label key={p.id} class="chk">
+          <input
+            type="checkbox"
+            checked={!skip.includes(p.id)}
+            onChange={(e) =>
+              setCfg((c) => {
+                const s = new Set(c.soundSkip ?? []);
+                (e.target as HTMLInputElement).checked ? s.delete(p.id) : s.add(p.id);
+                c.soundSkip = [...s];
+              })
+            }
+          />
+          <i class="dot" style={{ background: p.color }} />
+          {p.name}
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export function AlertConfig() {
   const cfg = settings.value.alertCfg;
   const [q, setQ] = useState("");
@@ -256,6 +297,7 @@ export function AlertConfig() {
               ))}
             </div>
           </div>
+          {cfg.soundScope === "points" && <SoundPoints />}
           <label class="toggle">
             <span>Read new warnings aloud</span>
             <input type="checkbox" checked={settings.value.speak} onChange={(e) => update((s) => (s.speak = (e.target as HTMLInputElement).checked))} />

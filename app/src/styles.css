@@ -2692,3 +2692,32 @@ input.sm {
 .popout-radio {
   justify-content: center;
 }
+
+/* ---------- 0.5 ---------- */
+.al-pts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 160px;
+  overflow: auto;
+  padding: 4px 6px;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  border-radius: 8px;
+  margin: 4px 0 8px;
+}
+.chk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.chk .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.chk small {
+  margin-left: auto;
+}
