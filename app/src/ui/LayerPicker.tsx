@@ -5,7 +5,7 @@ import { settings, update } from "../store";
 import { gridLayers, GIBS, activeLabel, selectWeather, gridDef, type GridLayerDef } from "../weather";
 import { currentSite } from "../radar/controller";
 import { Layers, ChevronDown, Search, Radar, Satellite, Grid3x3, CloudSun, Thermometer, CalendarClock, FastForward, Globe } from "lucide-preact";
-import { intlSources, intlErrors, intlListLoading, loadIntlList, selectIntl, flyForGrid, intlRegion, INTL_REGIONS, INTL_NAMES, SMN_ALL } from "../intl/radar"; // intl & forecast tools
+import { intlSources, intlErrors, intlListLoading, loadIntlList, selectIntl, flyForGrid, intlRegion, INTL_REGIONS, INTL_NAMES, groupOf, allIdOf, groupName, errKey, curPrecip, setIntlPrecip, type IntlSource, type Precip } from "../intl/radar"; // intl & forecast tools
 import { noLevel3 } from "../intl/sites";
 
 type Cat = "radar" | "world" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs";
@@ -313,7 +313,10 @@ function SearchResults({ q, pick }: { q: string; pick: Pick }) {
     if (match("radar level iii l3 nexrad")) out.push({ key: "l3", name: "Level III radar", sub: "Radar", on: false, go: () => update((s) => ((s.weather = { kind: "radar" }), (s.radar.source = "L3"), (s.radar.product = currentSite.value?.type === "TDWR" ? "TZL" : "N0B"))) });
     for (const d of gridLayers.value) if (match(`${d.name} ${d.group} ${d.id}`)) out.push({ key: d.id, name: d.name, sub: d.group, on: w.kind === "grid" && w.id === d.id, go: () => selectWeather({ kind: "grid", id: d.id }) });
     for (const x of intlSources.value) if (match(`${x.name} ${x.region} ${intlRegion(x.id)} world radar`)) out.push({ key: `intl:${x.id}`, name: x.name, sub: `World radar · ${intlRegion(x.id, x.region)}`, on: w.kind === "intl" && w.id === x.id, go: () => selectIntl(x.id) });
-    if (intlSources.value.some((x) => x.id.startsWith("smn_")) && match("all mexico radars world smn")) out.push({ key: "intl:all", name: "All Mexico radars", sub: "World radar · Mexico", on: w.kind === "intl" && w.id === SMN_ALL, go: () => selectIntl(SMN_ALL) });
+    for (const all of new Set(intlSources.value.filter((x) => groupOf(x)).map(allIdOf))) {
+      const reg = intlRegion(all);
+      if (match(`${groupName(all)} ${reg} world radar ${all}`)) out.push({ key: `intl:${all}`, name: groupName(all), sub: `World radar · ${reg}`, on: w.kind === "intl" && w.id === all, go: () => selectIntl(all) });
+    }
     for (const g of GIBS) if (match(`${g.name} ${g.group}`)) out.push({ key: g.id, name: g.name, sub: g.group, on: w.kind === "gibs" && w.id === g.id, go: () => selectWeather({ kind: "gibs", id: g.id }) });
     return out.slice(0, 60);
   }, [q, gridLayers.value, intlSources.value]);
@@ -338,6 +341,47 @@ function WItem({ on, name, sub, onClick, err, tip }: { on: boolean; name: string
   );
 }
 
+/** short label of a per-radar source in the group grid */
+function radarLabel(x: IntlSource): { name: string; sub?: string } {
+  if (x.site) return { name: x.site.name, sub: `${x.site.id}${x.site.province ? ` · ${x.site.province}` : ""}` };
+  return { name: x.id.slice(x.id.indexOf("_") + 1).toUpperCase() };
+}
+
+/** "All … radars" + one button per radar, with a rain / snow switch when the radars have both. */
+function RadarGroup({ all, list, pick }: { all: string; list: IntlSource[]; pick: Pick }) {
+  const w = settings.value.weather;
+  const onIntl = (id: string) => w.kind === "intl" && w.id === id;
+  const snow = list.some((x) => x.frames_snow);
+  const inGroup = w.kind === "intl" && (w.id === all || list.some((x) => x.id === w.id));
+  const [pref, setPref] = useState<Precip>(inGroup ? curPrecip() : "rain");
+  const precip: Precip = inGroup ? curPrecip() : pref;
+  const choose = (p: Precip) => (setPref(p), inGroup && setIntlPrecip(p));
+  const kind = list[0]?.kind === "image" ? "images" : "tiles";
+  const src = all.startsWith("smn") ? "SMN" : all.startsWith("eccc") ? "ECCC / GeoMet" : "";
+  return (
+    <>
+      <div class="lp-gall">
+        <WItem on={onIntl(all)} name={groupName(all)} sub={`${list.length} radars${src ? ` · ${src}` : ""} ${kind}${snow ? ` · ${precip}` : ""}`} onClick={() => pick(() => selectIntl(all, snow ? precip : undefined))} />
+        {snow && (
+          <div class="seg sm lp-precip" title="Rain or snow rate">
+            {(["rain", "snow"] as Precip[]).map((p) => (
+              <button key={p} class={precip === p ? "on" : ""} onClick={() => choose(p)}>
+                {p === "rain" ? "Rain" : "Snow"}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div class={`lp-grid ${list.some((x) => x.site) ? "lp-sites" : "lp-smn"}`}>
+        {list.map((x) => {
+          const l = radarLabel(x);
+          return <WItem key={x.id} on={onIntl(x.id)} name={l.name} sub={l.sub} tip={x.name} onClick={() => pick(() => selectIntl(x.id, snow ? precip : undefined))} />;
+        })}
+      </div>
+    </>
+  );
+}
+
 function WorldList({ pick }: { pick: Pick }) {
   useEffect(() => {
     loadIntlList();
@@ -347,16 +391,16 @@ function WorldList({ pick }: { pick: Pick }) {
   const errs = intlErrors.value;
   const grids = gridLayers.value.filter((d) => catOf(d) === "world");
   const onIntl = (id: string) => w.kind === "intl" && w.id === id;
-  const smn = srcs.filter((x) => x.id.startsWith("smn_"));
+  const grouped = srcs.filter((x) => groupOf(x));
   const kindSub = (k: string) => (k === "image" ? "Images" : k === "wms" ? "WMS tiles" : "Tiles");
   return (
     <>
       {INTL_REGIONS.map((reg) => {
         const g = grids.filter((d) => intlRegion(d.id, d.id.startsWith("cwa") ? "Asia" : "Europe") === reg);
-        const r = srcs.filter((x) => !x.id.startsWith("smn_") && intlRegion(x.id, x.region) === reg);
-        const bad = Object.entries(errs).filter(([k]) => k !== "_all" && intlRegion(k) === reg && !srcs.some((x) => x.id === k || (k === "smn" && x.id.startsWith("smn_"))));
-        const mex = reg === "Mexico" && smn.length > 0;
-        if (!g.length && !r.length && !bad.length && !mex) return null;
+        const r = srcs.filter((x) => !groupOf(x) && intlRegion(x.id, x.region) === reg);
+        const bad = Object.entries(errs).filter(([k]) => k !== "_all" && intlRegion(k) === reg && !srcs.some((x) => x.id === k || errKey(x.id) === k));
+        const groups = [...new Set(grouped.filter((x) => intlRegion(x.id, x.region) === reg).map(allIdOf))];
+        if (!g.length && !r.length && !bad.length && !groups.length) return null;
         return (
           <div key={reg}>
             <label class="lbl">World radar · {reg}</label>
@@ -366,16 +410,9 @@ function WorldList({ pick }: { pick: Pick }) {
             {r.map((x) => (
               <WItem key={x.id} on={onIntl(x.id)} name={x.name} sub={`${kindSub(x.kind)} · every ${x.step_min} min`} tip={`${x.attribution}${x.license_note ? ` · ${x.license_note}` : ""}`} onClick={() => pick(() => selectIntl(x.id))} />
             ))}
-            {mex && (
-              <>
-                <WItem on={onIntl(SMN_ALL)} name="All Mexico radars" sub={`${smn.length} radars · SMN images`} onClick={() => pick(() => selectIntl(SMN_ALL))} />
-                <div class="lp-grid lp-smn">
-                  {smn.map((x) => (
-                    <WItem key={x.id} on={onIntl(x.id)} name={x.id.slice(4).toUpperCase()} onClick={() => pick(() => selectIntl(x.id))} />
-                  ))}
-                </div>
-              </>
-            )}
+            {groups.map((all) => (
+              <RadarGroup key={all} all={all} list={grouped.filter((x) => allIdOf(x) === all)} pick={pick} />
+            ))}
             {bad.map(([k, e]) => (
               <WItem key={k} on={false} name={INTL_NAMES[k] ?? k} err={e} />
             ))}

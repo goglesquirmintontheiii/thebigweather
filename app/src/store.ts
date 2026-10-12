@@ -102,7 +102,7 @@ export type WeatherSel =
   | { kind: "grid"; id: string; run?: string; storm?: string }
   | { kind: "gibs"; id: string }
   /** intl & forecast tools: international raster radar (see intl/radar.ts) */
-  | { kind: "intl"; id: string };
+  | { kind: "intl"; id: string; precip?: "rain" | "snow" };
 export type RadarSource = "L2" | "L3";
 
 export interface Settings {

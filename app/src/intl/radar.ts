@@ -1,6 +1,7 @@
 // International raster radar (JMA, MSC GeoMet, DWD, PAGASA, SMN): tiles, WMS or georeferenced
 // images through the server's /api/intlradar proxy. One MapLibre source per frame (per radar for
-// "All Mexico"), animation flips opacities like the GIBS imagery layer.
+// the "All Mexico / All Canada radars" groups), animation flips opacities like the GIBS imagery
+// layer. Sources are added lazily, when their frame is first shown or warmed up.
 
 import { signal, effect } from "@preact/signals";
 import * as maplibregl from "maplibre-gl";
@@ -29,13 +30,83 @@ export interface IntlSource {
   evenZoomsOnly?: boolean;
   tileSize?: number;
   crs?: string;
+  /** per-radar sources: the "All … radars" group they belong to */
+  group?: string;
+  country?: string;
+  site?: IntlSite;
+  /** snow-rate frames (same times/bounds as `frames`, which are rain) */
+  frames_snow?: IntlFrame[];
 }
+export interface IntlSite {
+  id: string;
+  name: string;
+  province?: string;
+  lat: number;
+  lon: number;
+  range_km?: number;
+}
+export type Precip = "rain" | "snow";
 
 /** "All Mexico radars" pseudo source */
 export const SMN_ALL = "smn_all";
+/** "All Canada radars" pseudo source */
+export const ECCC_ALL = "eccc_all";
 /** most frames loaded per source (each frame is its own set of tiles / images) */
 const MAX_FRAMES = 12;
 const MAX_FRAMES_ALL = 8;
+/** images an "All … radars" animation may hold (radars × frames): 33 Canadian radars → 4 frames */
+const ALL_IMAGE_BUDGET = 140;
+const MIN_FRAMES_ALL = 3;
+
+// ---------- radar groups ("All Mexico radars", "All Canada radars") ----------
+
+const GROUP_NAMES: Record<string, string> = { smn_all: "All Mexico radars", eccc_all: "All Canada radars" };
+/** "smn_cun" → "smn" */
+export const idPrefix = (id: string) => (id.includes("_") ? id.slice(0, id.indexOf("_")) : id);
+/** Group name of a per-radar source (Mexico predates the server's `group` field). */
+export function groupOf(s: IntlSource): string | undefined {
+  return s.group ?? (s.id.startsWith("smn_") ? GROUP_NAMES.smn_all : undefined);
+}
+/** pseudo id of the source's group ("eccc_all") */
+export const allIdOf = (s: IntlSource) => `${idPrefix(s.id)}_all`;
+export function isGroupAll(id: string): boolean {
+  return id.endsWith("_all") && (id in GROUP_NAMES || intlSources.value.some((s) => groupOf(s) && allIdOf(s) === id));
+}
+export function groupMembers(allId: string): IntlSource[] {
+  return intlSources.value.filter((s) => groupOf(s) && allIdOf(s) === allId);
+}
+export function groupName(allId: string): string {
+  const m = groupMembers(allId)[0];
+  return (m && groupOf(m)) ?? GROUP_NAMES[allId] ?? allId;
+}
+/** sources that belong to `id` (itself, or every radar of a group) */
+function membersOf(id: string): IntlSource[] {
+  if (isGroupAll(id)) return groupMembers(id);
+  const s = intlSource(id);
+  return s ? [s] : [];
+}
+function unionBounds(list: IntlSource[]): [number, number, number, number] | undefined {
+  const b = list.map((s) => s.bounds).filter(Boolean) as [number, number, number, number][];
+  if (!b.length) return undefined;
+  return [Math.min(...b.map((x) => x[0])), Math.min(...b.map((x) => x[1])), Math.max(...b.map((x) => x[2])), Math.max(...b.map((x) => x[3]))];
+}
+/** key of `intlErrors` for a source id (per-radar sources report under their base id) */
+export function errKey(id: string): string {
+  const p = idPrefix(id);
+  return p === "smn" || p === "eccc" ? p : id;
+}
+/** precipitation type of the active selection */
+export function curPrecip(): Precip {
+  const w = settings.value.weather;
+  return w.kind === "intl" && w.precip === "snow" ? "snow" : "rain";
+}
+/** whether a source (or any radar of a group) has separate snow frames */
+export function hasSnow(id: string): boolean {
+  return membersOf(id).some((s) => !!s.frames_snow);
+}
+function framesOf(s: IntlSource, p: Precip): IntlFrame[] {
+  return p === "snow" && s.frames_snow ? s.frames_snow : s.frames;
+}
 
 export const intlSources = signal<IntlSource[]>([]);
 /** base source id (jma, smn, geomet_rain…) → error from the server */
@@ -57,6 +128,7 @@ export function intlRegion(id: string, fallback = ""): string {
   if (id === "dwd" || id.startsWith("opera")) return "Europe";
   if (id === "pagasa" || id.startsWith("cwa")) return "Asia";
   if (id.startsWith("smn")) return "Mexico";
+  if (id.startsWith("eccc")) return "Canada";
   return fallback;
 }
 
@@ -76,6 +148,7 @@ export const INTL_NAMES: Record<string, string> = {
   dwd: "Germany radar (DWD)",
   pagasa: "Philippines radar (PAGASA)",
   smn: "Mexico radars (SMN)",
+  eccc: "Canada radars (ECCC)",
 };
 
 export function intlSource(id: string): IntlSource | undefined {
@@ -83,8 +156,9 @@ export function intlSource(id: string): IntlSource | undefined {
 }
 
 export function intlName(id: string): string {
-  if (id === SMN_ALL) return "All Mexico radars";
-  return intlSource(id)?.name ?? INTL_NAMES[id] ?? id;
+  const base = isGroupAll(id) ? groupName(id) : intlSource(id)?.name ?? INTL_NAMES[id] ?? id;
+  const w = settings.value.weather;
+  return w.kind === "intl" && w.id === id && w.precip === "snow" && hasSnow(id) ? `${base} · snow` : base;
 }
 
 /** Simple static legends (colors are the provider's, approximate where not published). */
@@ -102,7 +176,8 @@ const RAIN_GENERIC: [string, string][] = [
   ["#e8191a", ""],
   ["#b4006a", "heavy"],
 ];
-export function intlLegend(id: string): IntlLegend {
+export function intlLegend(id: string, precip: Precip = "rain"): IntlLegend {
+  if (idPrefix(id) === "eccc") return precip === "snow" ? { title: "Snow rate", units: "cm/h", stops: RAIN_GENERIC } : { title: "Rain rate", units: "mm/h", stops: RAIN_GENERIC };
   if (id === "jma")
     return {
       title: "Precip intensity",
@@ -138,7 +213,10 @@ export function loadIntlList(force = false): Promise<void> {
     .get<{ sources: IntlSource[]; errors?: Record<string, string> }>("/api/intlradar")
     .then((r) => {
       listAt = Date.now();
-      for (const s of r.sources ?? []) s.frames = (s.frames ?? []).slice().sort((a, b) => a.t - b.t);
+      for (const s of r.sources ?? []) {
+        s.frames = (s.frames ?? []).slice().sort((a, b) => a.t - b.t);
+        if (s.frames_snow) s.frames_snow = s.frames_snow.slice().sort((a, b) => a.t - b.t);
+      }
       intlSources.value = r.sources ?? [];
       intlErrors.value = r.errors ?? {};
     })
@@ -208,16 +286,35 @@ interface Built {
   parts: Part[];
 }
 
+/** radars of a group worth loading for the current view (all of them before the map exists) */
+function groupInView(list: IntlSource[]): IntlSource[] {
+  const m = map;
+  if (!m || m.isMoving()) return list;
+  const v = m.getBounds();
+  const padX = (v.getEast() - v.getWest()) * 0.25;
+  const padY = (v.getNorth() - v.getSouth()) * 0.25;
+  const w = v.getWest() - padX, e = v.getEast() + padX, so = v.getSouth() - padY, n = v.getNorth() + padY;
+  const inv = list.filter((s) => !s.bounds || !(s.bounds[0] > e || s.bounds[2] < w || s.bounds[1] > n || s.bounds[3] < so));
+  // nothing nearby (the view is elsewhere): keep them all, the view flies there
+  return inv.length ? inv : list;
+}
+
 function framesFor(id: string): Built[] {
   const g = settings.value.grid;
   const h = histRange.value;
-  if (id === SMN_ALL) {
-    const list = intlSources.value.filter((s) => s.id.startsWith("smn_") && s.frames.length && s.bounds);
+  const p = curPrecip();
+  if (isGroupAll(id)) {
+    const list = groupInView(groupMembers(id).filter((s) => framesOf(s, p).length && s.bounds));
     if (!list.length) return [];
-    const newest = Math.max(...list.map((s) => s.frames[s.frames.length - 1].t));
-    const stepMs = 10 * 60_000;
+    const newest = Math.max(...list.map((s) => framesOf(s, p)[framesOf(s, p).length - 1].t));
+    // a common time grid: SMN radars scan every 5–10 min at their own times, GeoMet crops share the mosaic's 6 min
+    const stepMin = idPrefix(id) === "smn" ? 10 : Math.max(5, ...list.map((s) => s.step_min || 10));
+    const stepMs = stepMin * 60_000;
+    const tol = Math.min(8 * 60_000, stepMs * 0.8);
     const end = h ? Math.min(h.end, newest) : newest;
-    const n = Math.min(MAX_FRAMES_ALL, framesToRequest(g.frames, 10, MAX_FRAMES_ALL));
+    // many radars → fewer frames (every frame is one image per radar)
+    const cap = Math.max(MIN_FRAMES_ALL, Math.min(MAX_FRAMES_ALL, Math.floor(ALL_IMAGE_BUDGET / list.length)));
+    const n = Math.min(cap, framesToRequest(g.frames, stepMin, cap));
     const out: Built[] = [];
     for (let k = n - 1; k >= 0; k--) {
       const t = end - k * stepMs;
@@ -225,7 +322,7 @@ function framesFor(id: string): Built[] {
       const parts: Part[] = [];
       for (const s of list) {
         let best: IntlFrame | null = null;
-        for (const f of s.frames) if (Math.abs(f.t - t) <= 8 * 60_000 && (!best || Math.abs(f.t - t) < Math.abs(best.t - t))) best = f;
+        for (const f of framesOf(s, p)) if (Math.abs(f.t - t) <= tol && (!best || Math.abs(f.t - t) < Math.abs(best.t - t))) best = f;
         if (best) parts.push({ src: s, url: best.url });
       }
       if (parts.length) out.push({ t, parts });
@@ -234,7 +331,7 @@ function framesFor(id: string): Built[] {
   }
   const s = intlSource(id);
   if (!s) return [];
-  let fr = s.frames.map((f) => ({ time: f.t, url: f.url }));
+  let fr = framesOf(s, p).map((f) => ({ time: f.t, url: f.url }));
   if (h) fr = thinEven(fr.filter((f) => f.time >= h.start - 60_000 && f.time <= h.end + 60_000), MAX_FRAMES);
   else {
     fr = trimToSpan(fr);
@@ -265,6 +362,47 @@ function clear(m: MLMap) {
   for (const id of Object.keys(style.sources)) if (id.startsWith("intl-")) m.removeSource(id);
 }
 
+/** frames whose sources and layers exist (added on first use: a 33-radar group would otherwise
+ * request every image of every frame at once) */
+const created = new Set<number>();
+/** image sources of a group frame that failed to load (the frame shows without them) */
+const failedParts = new Set<string>();
+function ensureFrame(i: number) {
+  const m = map;
+  const f = built[i];
+  if (!m || !f || created.has(i)) return;
+  created.add(i);
+  f.parts.forEach((p, j) => {
+    const s = p.src;
+    const url = intlUrl(p.url);
+    try {
+      if (s.kind === "image") {
+        const [w0, s0, e0, n0] = s.bounds ?? [-180, -85, 180, 85];
+        m.addSource(sid(i, j), { type: "image", url, coordinates: [[w0, n0], [e0, n0], [e0, s0], [w0, s0]] } as any);
+        // image sources take no attribution option, but the control reads the property
+        const src: any = m.getSource(sid(i, j));
+        if (src) src.attribution = attributionFor(s);
+      } else {
+        m.addSource(sid(i, j), {
+          type: "raster",
+          tiles: [s.evenZoomsOnly ? evenUrl(url) : url],
+          tileSize: s.tileSize ?? 256,
+          minzoom: s.minzoom ?? 0,
+          maxzoom: s.evenZoomsOnly ? Math.floor((s.maxzoom ?? 10) / 2) * 2 : s.maxzoom ?? 12,
+          bounds: s.bounds,
+          attribution: attributionFor(s),
+        } as any);
+      }
+      m.addLayer({ id: lid(i, j), type: "raster", source: sid(i, j), layout: { visibility: "none" }, paint: { "raster-opacity": 0, "raster-fade-duration": 0 } }, before());
+    } catch (e) {
+      const b = new Set(intlBad.value);
+      b.add(i);
+      intlBad.value = b;
+      console.warn("intl radar layer", e);
+    }
+  });
+}
+
 function attributionFor(s: IntlSource) {
   return s.license_note ? `${s.attribution} · ${s.license_note}` : s.attribution;
 }
@@ -274,6 +412,8 @@ function build() {
   const m = map;
   if (!m || !m.getStyle()) return;
   clear(m);
+  created.clear();
+  failedParts.clear();
   held = -1;
   touched.clear();
   gotTiles.clear();
@@ -285,37 +425,8 @@ function build() {
     return;
   }
   built = framesFor(w.id);
+  intlError.value = built.length ? null : intlErrors.value[errKey(w.id)] ?? (intlSources.value.length || !listP ? (histRange.peek() ? "This source has no archive for that window (recent frames only)" : "No frames available for this source right now") : null);
   const bad = new Set<number>();
-  intlError.value = built.length ? null : intlErrors.value[w.id.startsWith("smn") ? "smn" : w.id] ?? (intlSources.value.length || !listP ? (histRange.peek() ? "This source has no archive for that window (recent frames only)" : "No frames available for this source right now") : null);
-  built.forEach((f, i) =>
-    f.parts.forEach((p, j) => {
-      const s = p.src;
-      const url = intlUrl(p.url);
-      try {
-        if (s.kind === "image") {
-          const [w0, s0, e0, n0] = s.bounds ?? [-180, -85, 180, 85];
-          m.addSource(sid(i, j), { type: "image", url, coordinates: [[w0, n0], [e0, n0], [e0, s0], [w0, s0]] } as any);
-          // image sources take no attribution option, but the control reads the property
-          const src: any = m.getSource(sid(i, j));
-          if (src && i === built.length - 1) src.attribution = attributionFor(s);
-        } else {
-          m.addSource(sid(i, j), {
-            type: "raster",
-            tiles: [s.evenZoomsOnly ? evenUrl(url) : url],
-            tileSize: s.tileSize ?? 256,
-            minzoom: s.minzoom ?? 0,
-            maxzoom: s.evenZoomsOnly ? Math.floor((s.maxzoom ?? 10) / 2) * 2 : s.maxzoom ?? 12,
-            bounds: s.bounds,
-            attribution: attributionFor(s),
-          } as any);
-        }
-        m.addLayer({ id: lid(i, j), type: "raster", source: sid(i, j), layout: { visibility: "none" }, paint: { "raster-opacity": 0, "raster-fade-duration": 0 } }, before());
-      } catch (e) {
-        bad.add(i);
-        console.warn("intl radar layer", e);
-      }
-    }),
-  );
   intlBad.value = bad;
   intlReady.value = new Set();
   intlTimes.value = built.map((f) => f.t);
@@ -337,7 +448,7 @@ function loadedFrame(i: number): boolean {
   if (!m || !built[i]) return false;
   if (!gotTiles.has(i) && built[i].parts.some((p) => p.src.kind !== "image" && inView(p.src.bounds) && m.getZoom() >= (p.src.minzoom ?? 0) - 1)) return false;
   try {
-    return built[i].parts.every((_, j) => !!m.getSource(sid(i, j)) && m.isSourceLoaded(sid(i, j)));
+    return built[i].parts.every((_, j) => failedParts.has(sid(i, j)) || (!!m.getSource(sid(i, j)) && m.isSourceLoaded(sid(i, j))));
   } catch {
     return false;
   }
@@ -367,7 +478,7 @@ function show() {
     // one held under it, the frames warming up and the ones already loaded stay "visible"
     const on = i === cur || i === hold;
     const vis = on || warm.has(i) || ready.has(i);
-    if (vis) touched.add(i);
+    if (vis) touched.add(i), ensureFrame(i);
     for (let j = 0; j < built[i].parts.length; j++) {
       if (!m.getLayer(lid(i, j))) continue;
       m.setLayoutProperty(lid(i, j), "visibility", vis ? "visible" : "none");
@@ -391,8 +502,12 @@ function scheduleReady() {
   }, 120);
 }
 
+/** set once the map is attached (markers wait for it) */
+const mapReady = signal(false);
+
 export function attachIntl(m: MLMap, beforeFn: () => string | undefined) {
   map = m;
+  mapReady.value = true;
   before = beforeFn;
   m.on("sourcedata", (e: any) => {
     if (typeof e.sourceId === "string" && e.sourceId.startsWith("intl-")) {
@@ -407,6 +522,12 @@ export function attachIntl(m: MLMap, beforeFn: () => string | undefined) {
     if (!id?.startsWith("intl-")) return void console.error(e.error ?? e);
     const i = +id.split("-")[1];
     const f = built[i];
+    // a group frame (one image per radar) survives a few missing radars
+    if (f && f.parts.length > 1 && f.parts.every((p) => p.src.kind === "image")) {
+      failedParts.add(id);
+      const bad = f.parts.filter((_, j) => failedParts.has(sid(i, j))).length;
+      if (bad <= f.parts.length / 2) return void scheduleReady();
+    }
     // a missing image ruins its frame; a missing tile doesn't
     if (f && f.parts.some((p) => p.src.kind === "image")) {
       const b = new Set(intlBad.value);
@@ -419,7 +540,11 @@ export function attachIntl(m: MLMap, beforeFn: () => string | undefined) {
       scheduleReady();
     }
   });
+  m.on("zoom", () => markerDensity());
   m.on("moveend", () => {
+    // a radar group only loads the radars near the view
+    const w = settings.value.weather;
+    if (w.kind === "intl" && isGroupAll(w.id)) viewTick.value++;
     // tiles for the new view: frames count as unloaded until drawn again
     if (!built.length || built.every((f) => f.parts.every((p) => p.src.kind === "image"))) return;
     touched.clear();
@@ -444,12 +569,16 @@ function sigNow() {
   const a = settings.value.anim;
   const h = histRange.value;
   const fr = framesFor(w.id);
-  return `${w.id}|${fr.map((f) => f.t).join(",")}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}|${api.base}|${settings.value.saver}`;
+  return `${w.id}|${w.precip ?? ""}|${fr.map((f) => f.t).join(",")}|${isGroupAll(w.id) ? fr[fr.length - 1]?.parts.map((p) => p.src.id).join(",") : ""}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}|${api.base}|${settings.value.saver}`;
 }
+
+/** bumped after the map moves while a radar group is shown */
+const viewTick = signal(0);
 
 effect(() => {
   void intlSources.value;
   void intlErrors.value;
+  void viewTick.value;
   const p = playing.value;
   const sig = sigNow();
   if (sig === buildSig) return;
@@ -492,12 +621,88 @@ export function flyIfFar(b: [number, number, number, number] | undefined) {
   if (!inside) m.fitBounds([[w, s], [e, n]], { padding: 40, duration: 1400, maxZoom: 7 });
 }
 
-/** Pick an international raster radar (and fly there if the map is elsewhere). */
-export function selectIntl(id: string) {
-  update((s) => (s.weather = { kind: "intl", id }));
-  const b = id === SMN_ALL ? MEXICO_BOUNDS : intlSource(id)?.bounds;
-  flyIfFar(b);
+/** Pick an international raster radar. Radar groups and single radars fit the view to their
+ * coverage; other sources fly there only when the map is elsewhere. `precip` defaults to the
+ * current choice. */
+export function selectIntl(id: string, precip?: Precip) {
+  const p = hasSnow(id) ? precip ?? curPrecip() : "rain";
+  // move first: a group built while the map flies loads all its radars, then trims on arrival
+  if (isGroupAll(id)) fitTo(id === SMN_ALL ? MEXICO_BOUNDS : unionBounds(groupMembers(id)), 5.5);
+  else {
+    const s = intlSource(id);
+    if (s?.site) fitTo(s.bounds, 8);
+    else flyIfFar(s?.bounds);
+  }
+  update((s) => (s.weather = { kind: "intl", id, ...(p === "snow" ? { precip: p } : {}) }));
 }
+
+function fitTo(b: [number, number, number, number] | undefined, maxZoom: number) {
+  const m = map;
+  if (!m || !b) return;
+  m.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, duration: 1200, maxZoom });
+}
+
+/** Rain / snow frames for sources that have both (Canada). */
+export function setIntlPrecip(p: Precip) {
+  update((s) => {
+    if (s.weather.kind !== "intl") return;
+    const { precip: _old, ...rest } = s.weather;
+    s.weather = p === "snow" ? { ...rest, precip: p } : rest;
+  });
+}
+
+// ---------- radar positions (groups whose sources carry a `site`, e.g. Canada) ----------
+
+const siteMarkers = new Map<string, maplibregl.Marker>();
+
+function markerDensity() {
+  const m = map;
+  if (m) m.getContainer().classList.toggle("intl-dots", m.getZoom() < 4.6);
+}
+
+/** radars to mark for the current selection: the group's sites while one of its sources (or a
+ * mosaic of the same region) is shown */
+function markedSources(): IntlSource[] {
+  const w = settings.value.weather;
+  if (w.kind !== "intl" || !settings.value.overlays.sites) return [];
+  const cur = intlSource(w.id);
+  const all = isGroupAll(w.id) ? w.id : cur && groupOf(cur) ? allIdOf(cur) : null;
+  if (all) return groupMembers(all).filter((s) => s.site);
+  // a mosaic (GeoMet) of the same region: show where its radars are
+  const reg = intlRegion(w.id, cur?.region);
+  return intlSources.value.filter((s) => s.site && groupOf(s) && intlRegion(s.id, s.region) === reg);
+}
+
+function siteEl(s: IntlSource): HTMLElement {
+  const el = document.createElement("button");
+  const st = s.site!;
+  el.className = `site-marker intl-site r-ca-eccc`;
+  el.textContent = st.id;
+  el.title = `${st.name}${st.province ? `, ${st.province}` : ""} (${st.id}) — click to show this radar`;
+  el.addEventListener("click", (e) => {
+    e.stopPropagation();
+    selectIntl(s.id);
+  });
+  return el;
+}
+
+effect(() => {
+  const list = markedSources();
+  const w = settings.value.weather;
+  const m = mapReady.value ? map : null;
+  if (!m) return;
+  const ids = new Set(list.map((s) => s.id));
+  for (const [id, mk] of siteMarkers) if (!ids.has(id)) (mk.remove(), siteMarkers.delete(id));
+  for (const s of list) {
+    let mk = siteMarkers.get(s.id);
+    if (!mk) {
+      mk = new maplibregl.Marker({ element: siteEl(s), anchor: "center" }).setLngLat([s.site!.lon, s.site!.lat]).addTo(m);
+      siteMarkers.set(s.id, mk);
+    }
+    mk.getElement().classList.toggle("selected", w.kind === "intl" && w.id === s.id);
+  }
+  markerDensity();
+});
 
 /** Pick an international grid layer (OPERA, CWA) and fly there if needed. */
 export function flyForGrid(id: string) {

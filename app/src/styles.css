@@ -6491,3 +6491,84 @@ body.loopx-hide .loopx {
   font-variant-numeric: tabular-nums;
   margin-right: 3px;
 }
+/* keyless traffic: per-source status in the layer settings */
+.feed-srcs {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 3px;
+}
+.feed-srcs > .btn {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+.feed-src {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.feed-src .dot {
+  position: static;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+}
+.feed-src.bad .dot {
+  background: #ef4444;
+}
+.feed-src small {
+  font-size: 10.5px;
+}
+.feed-src .feed-err {
+  grid-column: 2 / 4;
+  overflow-wrap: anywhere;
+}
+/* Canadian radars (world radar markers) */
+.site-marker.intl-site.r-ca-eccc {
+  border-color: rgba(248, 113, 113, 0.8);
+  color: #ffe1e1;
+}
+.site-marker.intl-site.r-ca-eccc.selected {
+  background: #f87171;
+  color: #1d0606;
+  border-color: #fff;
+}
+.intl-dots .site-marker.r-ca-eccc:not(.selected) {
+  font-size: 0;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border-radius: 2px;
+  background: rgba(248, 113, 113, 0.92);
+  transform: rotate(45deg) scale(0.85);
+}
+.lp-precip {
+  margin: 2px 0 6px;
+}
+.lp-sites {
+  grid-template-columns: repeat(3, 1fr);
+  margin: 2px 0 4px;
+}
+.lp-sites .lp-item {
+  padding: 4px 6px;
+  font-size: 11px;
+  min-width: 0;
+}
+.lp-sites .lp-item span,
+.lp-sites .lp-item small {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lp-gall {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lp-gall > .lp-item {
+  flex: 1;
+}

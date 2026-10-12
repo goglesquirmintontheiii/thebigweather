@@ -9,6 +9,7 @@ import { nhcPrepare, nhcNowLayers, atcfPrepare, atcfLayers, atcfClick, atcfStorm
 import { stormPrepare, stormLayers, stormClick } from "./stormcells";
 import { rotationLayers, rotationClick, scanLayers, scanClick } from "./rotation";
 import { trafficSource, trafficLayers, incPrepare, incLayers, incClick } from "./traffic";
+import { roadTrafficDefs } from "./roadtraffic";
 import { api } from "../api";
 
 /** NOAA ArcGIS raster services through the server's tile proxy */
@@ -339,7 +340,7 @@ const environment: OverlayDef[] = [
 const traffic: OverlayDef[] = [
   {
     id: "traffic",
-    name: "Traffic flow (TomTom)",
+    name: "Traffic flow (TomTom key)",
     group: "Traffic",
     feed: "client",
     refresh: 0,
@@ -386,7 +387,7 @@ place(tropical, "nhc");
 place([hazards[0]], undefined, "Hazards");
 place([hazards[1]], "fires");
 place(environment, undefined, "Hazards");
-place(traffic, undefined, "Cameras");
+place([...traffic, ...roadTrafficDefs], undefined, "Cameras");
 place(extras.slice(0, 2), undefined, "Hazards");
 place(extras.slice(2), "recon");
 

@@ -6,7 +6,8 @@ import { signal } from "@preact/signals";
 import { settings, update } from "../store";
 import { api } from "../api";
 import { mapRef } from "../map/mapview";
-import { ovlStatus, refreshOverlay } from "../overlays/manager";
+import { ovlStatus, ovlMeta, refreshOverlay } from "../overlays/manager";
+import type { FeedMeta } from "../overlays/roadtraffic";
 import { stormCells, cellFlags, hasTvs, mesoRank, hasHail, fmtKt } from "../overlays/stormcells";
 import { siteFor } from "../overlays/rotation";
 import { NO_KEY } from "../overlays/traffic";
@@ -98,6 +99,13 @@ export function LayerExtra({ id }: { id: string }) {
         {!stormCells.value.cells.length && <span class="muted small"> Turn the layer on first</span>}
       </section>
     );
+  if (id === "roadwork" || id === "trafficflow")
+    return (
+      <section>
+        <label class="lbl">Sources</label>
+        <FeedSources id={id} />
+      </section>
+    );
   if (id === "traffic") {
     const st = ovlStatus.value.traffic;
     const inc = ovlStatus.value.trafficinc;
@@ -109,6 +117,39 @@ export function LayerExtra({ id }: { id: string }) {
     );
   }
   return null;
+}
+
+// ---------- keyless traffic: per-source status ----------
+
+const ago = (s: number | null) => (s == null ? "never" : s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`);
+
+function FeedSources({ id }: { id: string }) {
+  const m: FeedMeta | undefined = ovlMeta.value[id];
+  if (!settings.value.ovl[id]?.on) return <div class="muted small">Turn the layer on to see its sources.</div>;
+  if (!m) return <div class="muted small">{ovlStatus.value[id]?.note ?? "Loading…"}</div>;
+  if (!m.sources.length) return <div class="muted small">No source has reported yet (the first fetch can take a few seconds).</div>;
+  const bad = m.sources.filter((s) => s.error).length;
+  const list = [...m.sources].sort((a, b) => +!!b.error - +!!a.error || a.name.localeCompare(b.name));
+  return (
+    <div class="feed-srcs">
+      <div class="muted small">
+        {m.sources.length} sources{bad ? ` · ${bad} failing` : " · all OK"}
+        {m.total != null ? ` · ${m.total.toLocaleString()} in this area` : ""}
+        {m.truncated ? " (only the most severe shown)" : ""}
+      </div>
+      {list.map((s) => (
+        <div key={s.id} class={`feed-src ${s.error ? "bad" : ""}`} title={s.error ?? `${s.id}`}>
+          <i class="dot" />
+          <span>{s.name}</span>
+          <small class="muted">{s.error ? "error" : `${s.count.toLocaleString()} · ${ago(s.age)}`}</small>
+          {s.error && <small class="err-text feed-err">{s.error}</small>}
+        </div>
+      ))}
+      <button class="btn xs ghost" onClick={() => refreshOverlay(id)}>
+        Refresh now
+      </button>
+    </div>
+  );
 }
 
 // ---------- storm table ----------

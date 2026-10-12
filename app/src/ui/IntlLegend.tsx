@@ -1,13 +1,14 @@
 // Static legend for international raster radar (the picture's own colors; no values on hover).
 
 import { settings } from "../store";
-import { intlLegend, intlSource, SMN_ALL } from "../intl/radar";
+import { intlLegend, intlSource, isGroupAll, idPrefix, groupMembers, curPrecip } from "../intl/radar";
 
 export function IntlLegend() {
   const w = settings.value.weather;
   if (w.kind !== "intl") return null;
-  const l = intlLegend(w.id === SMN_ALL ? "smn" : w.id);
-  const s = intlSource(w.id);
+  const all = isGroupAll(w.id);
+  const l = intlLegend(all ? idPrefix(w.id) : w.id, curPrecip());
+  const s = all ? groupMembers(w.id)[0] : intlSource(w.id);
   return (
     <div class="legend glass cat intl-legend" title={s ? `${s.attribution}${s.license_note ? ` · ${s.license_note}` : ""}` : undefined}>
       <span class="il-title">

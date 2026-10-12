@@ -626,7 +626,113 @@ function aqiDot(fill: string): Draw {
   };
 }
 
+/* ---------- keyless traffic: road event icons ---------- */
+/** Work zone: orange traffic cone with white bands on a dark base. */
+const roadCone: Draw = (c, s) => {
+  c.strokeStyle = "rgba(0,0,0,.85)";
+  c.lineWidth = 1.4;
+  c.lineJoin = "round";
+  // base plate
+  c.fillStyle = "#1f2937";
+  c.beginPath();
+  c.roundRect(2, s - 5.5, s - 4, 3.5, 1.2);
+  c.fill();
+  c.stroke();
+  // cone body
+  c.fillStyle = "#f97316";
+  c.beginPath();
+  c.moveTo(s / 2 - 2, 2.5);
+  c.lineTo(s / 2 + 2, 2.5);
+  c.lineTo(s - 5, s - 5.5);
+  c.lineTo(5, s - 5.5);
+  c.closePath();
+  c.fill();
+  c.stroke();
+  // reflective bands
+  c.fillStyle = "#fff";
+  const band = (y: number, h: number) => {
+    const half = (yy: number) => 2 + ((s / 2 - 7) * (yy - 2.5)) / (s - 8);
+    c.beginPath();
+    c.moveTo(s / 2 - half(y), y);
+    c.lineTo(s / 2 + half(y), y);
+    c.lineTo(s / 2 + half(y + h), y + h);
+    c.lineTo(s / 2 - half(y + h), y + h);
+    c.closePath();
+    c.fill();
+  };
+  band(s * 0.33, s * 0.11);
+  band(s * 0.57, s * 0.11);
+};
+/** Closure: red/white striped barrier board on two legs. */
+const roadBarrier: Draw = (c, s) => {
+  c.strokeStyle = "rgba(0,0,0,.85)";
+  c.lineWidth = 1.4;
+  c.fillStyle = "#374151";
+  c.fillRect(s * 0.24, s * 0.5, 2.4, s * 0.42);
+  c.fillRect(s * 0.76 - 2.4, s * 0.5, 2.4, s * 0.42);
+  c.strokeRect(s * 0.24, s * 0.5, 2.4, s * 0.42);
+  c.strokeRect(s * 0.76 - 2.4, s * 0.5, 2.4, s * 0.42);
+  const x = 1.5, y = s * 0.22, w = s - 3, h = s * 0.32;
+  c.save();
+  c.beginPath();
+  c.roundRect(x, y, w, h, 1.5);
+  c.clip();
+  c.fillStyle = "#fff";
+  c.fillRect(x, y, w, h);
+  c.fillStyle = "#dc2626";
+  for (let k = -h; k < w + h; k += 7) {
+    c.beginPath();
+    c.moveTo(x + k, y + h);
+    c.lineTo(x + k + 3.5, y + h);
+    c.lineTo(x + k + 3.5 + h, y);
+    c.lineTo(x + k + h, y);
+    c.closePath();
+    c.fill();
+  }
+  c.restore();
+  c.beginPath();
+  c.roundRect(x, y, w, h, 1.5);
+  c.stroke();
+};
+/** Incident: yellow warning triangle with an exclamation mark. */
+const roadIncident: Draw = (c, s) => {
+  c.fillStyle = "#facc15";
+  c.strokeStyle = "rgba(0,0,0,.85)";
+  c.lineWidth = 1.5;
+  c.lineJoin = "round";
+  c.beginPath();
+  c.moveTo(s / 2, 2);
+  c.lineTo(s - 1.8, s - 2.5);
+  c.lineTo(1.8, s - 2.5);
+  c.closePath();
+  c.fill();
+  c.stroke();
+  c.fillStyle = "#111";
+  c.beginPath();
+  c.moveTo(s / 2 - 1.4, s * 0.36);
+  c.lineTo(s / 2 + 1.4, s * 0.36);
+  c.lineTo(s / 2 + 0.8, s * 0.66);
+  c.lineTo(s / 2 - 0.8, s * 0.66);
+  c.closePath();
+  c.fill();
+  c.beginPath();
+  c.arc(s / 2, s * 0.77, 1.3, 0, Math.PI * 2);
+  c.fill();
+};
+/** Traffic speed dot (SDF: coloured per feature). */
+const flowDot: Draw = (c, s) => {
+  c.fillStyle = "#fff";
+  c.beginPath();
+  c.arc(s / 2, s / 2, s / 2 - 3, 0, Math.PI * 2);
+  c.fill();
+};
+/* ---------- end keyless traffic ---------- */
+
 export function registerIcons(map: MLMap) {
+  make(map, "road-workzone", 22, roadCone);
+  make(map, "road-closure", 22, roadBarrier);
+  make(map, "road-incident", 22, roadIncident);
+  make(map, "flow-dot", 18, flowDot, true);
   registerIcons05(map);
   AQI_COLORS.forEach((col, i) => make(map, `aqi-${i}`, 26, aqiDot(col)));
   make(map, "cam-img", 22, camera);
