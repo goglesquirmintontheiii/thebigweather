@@ -1,0 +1,11 @@
+{"type":"FeatureCollection","total":4,"truncated":false,"features":[
+{"type":"Feature","geometry":{"type":"Point","coordinates":[-93.1,45.0]},"properties":{"kind":"closure","desc":"Road closed for bridge work","road":"MN 9","dir":"northbound","start":1791720000000,"end":1791932400000,"severity":3,"source":"mndot"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[-122.80289,39.09787]},"properties":{"kind":"incident","desc":"Trfc Collision-1141 Enrt (Clear Lake)","road":"5829-5898 Sr20","dir":"","start":1791671100000,"end":null,"severity":2,"source":"California Highway Patrol"}},
+{"type":"Feature","geometry":{"type":"LineString","coordinates":[[-111.8,40.7],[-111.795,40.705],[-111.79,40.71]]},"properties":{"kind":"workzone","desc":"Pavement replacement; expect lane shifts and minor delays","road":"I-80","dir":"eastbound","start":1790838000000,"end":1798700400000,"severity":2,"source":"udot"}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[-76.55166,39.12938]},"properties":{"kind":"incident","desc":"Weather Service Event @ MD 177 AT GEORGE WILLING AVE","road":"MD 177 AT GEORGE WILLING AVE","dir":"","start":1791733446000,"end":null,"severity":1,"source":"Maryland CHART"}}
+],"sources":[
+{"id":"chart","name":"Maryland CHART","count":1,"age":42,"error":null},
+{"id":"chp","name":"California Highway Patrol","count":1,"age":42,"error":null},
+{"id":"wzdx:mndot","name":"Minnesota DOT (WZDx)","count":1,"age":42,"error":null},
+{"id":"wzdx:udot","name":"Utah DOT (WZDx)","count":1,"age":42,"error":null}
+]}

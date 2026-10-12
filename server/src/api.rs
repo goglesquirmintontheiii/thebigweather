@@ -160,6 +160,10 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/intlradar/img", get(intl_img))
         .route("/shake/channels", get(shake_channels))
         .route("/shake/data", get(shake_data))
+        .route("/hist/warnings", get(hist_warnings))
+        .route("/hist/warning", get(hist_warning))
+        .route("/hist/tropical", get(hist_tropical))
+        .route("/hist/tropical/{id}", get(hist_tropical_track))
         .route("/traffic/incidents", get(traffic_incidents))
         .route("/traffic/{z}/{x}/{y}", get(traffic_tile))
         .route("/rec", get(rec_list).post(rec_create))
@@ -541,6 +545,47 @@ async fn overlay(State(st): St, Path(id): Path<String>, Query(q): Query<std::col
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(r)
+}
+
+// ---------- history archives (see crate::hist) ----------
+
+fn json_bytes(b: Bytes) -> Response {
+    let mut r = Response::new(Body::from(b));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    r
+}
+
+fn hist_err(e: anyhow::Error) -> ApiError {
+    let msg = format!("{e:#}");
+    if msg.starts_with("bad ") || msg.contains("must ") || msg.contains("limited to") || msg.contains("too large") || msg.contains("archive starts") {
+        ApiError(StatusCode::BAD_REQUEST, msg)
+    } else if msg.contains("try again in a few minutes") {
+        ApiError(StatusCode::SERVICE_UNAVAILABLE, msg)
+    } else {
+        e.into()
+    }
+}
+
+/// Historical NWS warnings search (IEM VTEC archive).
+async fn hist_warnings(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(crate::hist::warn::search(&st.overlays, &q).await.map_err(hist_err)?))
+}
+
+/// One historical warning as GeoJSON (`vtec=OUN.TO.W.0042&year=2024`).
+async fn hist_warning(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+    let vtec = q.get("vtec").ok_or_else(|| bad("vtec required"))?;
+    let year = q.get("year").map(|y| y.parse::<i32>().map_err(|_| bad("bad year"))).transpose()?;
+    Ok(json_bytes(crate::hist::warn::detail(&st.overlays, vtec, year).await.map_err(hist_err)?))
+}
+
+/// Historical tropical cyclones (HURDAT2 / IBTrACS).
+async fn hist_tropical(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(crate::hist::tc::list(&st.overlays, &q).await.map_err(hist_err)?))
+}
+
+/// One storm's best track as GeoJSON.
+async fn hist_tropical_track(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(crate::hist::tc::track(&st.overlays, &id).await.map_err(hist_err)?))
 }
 
 #[derive(Deserialize)]

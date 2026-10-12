@@ -1,0 +1,10 @@
+{"type":"FeatureCollection","total":4,"truncated":false,"features":[
+{"type":"Feature","geometry":{"type":"Point","coordinates":[24.94,60.17]},"properties":{"speed":80.0,"free_flow":100.0,"ratio":0.8,"road":"vt1 (vt1 Espoo Vanttila)","dir":"1","source":"Fintraffic Digitraffic","t":1791781140000}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[24.94,60.17]},"properties":{"speed":42.0,"free_flow":98.0,"ratio":0.43,"road":"vt1 (vt1 Espoo Vanttila)","dir":"2","source":"Fintraffic Digitraffic","t":1791781140000}},
+{"type":"Feature","geometry":{"type":"Point","coordinates":[-77.02321,38.79327]},"properties":{"speed":89.0,"free_flow":null,"ratio":null,"road":"I-95 PRIOR TO I-295","dir":"north","source":"Maryland CHART","t":1791659860000}},
+{"type":"Feature","geometry":{"type":"LineString","coordinates":[[-73.79019,40.78795],[-73.78812,40.78647],[-73.78778,40.78621]]},"properties":{"speed":54.0,"free_flow":null,"ratio":null,"road":"CVE NB GCP - WILLETS PT BLVD","dir":"","source":"NYC DOT","t":1791755466000}}
+],"sources":[
+{"id":"chart-tss","name":"Maryland CHART speeds","count":1,"age":30,"error":null},
+{"id":"digitraffic","name":"Fintraffic Digitraffic (Finland)","count":2,"age":30,"error":null},
+{"id":"nyc","name":"NYC DOT speeds","count":1,"age":30,"error":null}
+]}

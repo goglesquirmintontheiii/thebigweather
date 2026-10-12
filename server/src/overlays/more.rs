@@ -75,7 +75,7 @@ fn round_to(v: f64, d: i32) -> f64 {
 
 /// Round every coordinate of a (Multi)Polygon/LineString geometry, dropping repeated points and
 /// rings that collapse.
-fn round_geom(g: &mut Value, d: i32) {
+pub(crate) fn round_geom(g: &mut Value, d: i32) {
     fn ring(r: &Value, d: i32) -> Vec<Value> {
         let mut out: Vec<[f64; 2]> = vec![];
         for p in r.as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
