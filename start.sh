@@ -78,7 +78,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$(uname -s)" == "Linux" ]] || die "This server runs on Linux."
+[[ "$(uname -s)" == "Linux" ]] || die "This script is for Linux. On Windows run start.ps1 (or double-click start.cmd)."
 
 SUDO=""
 if [[ $EUID -ne 0 ]]; then

@@ -21,4 +21,24 @@ contextBridge.exposeInMainWorld("tbw", {
   setZoom: (f) => webFrame.setZoomFactor(f),
   clientStats: () => ipcRenderer.invoke("client-stats"), // shake/stats/server 0.6
   isElectron: true,
+  /* Phase 6: tray, desktop options, bundled server, file associations */
+  tray: {
+    update: (info) => ipcRenderer.invoke("tray-update", info),
+    onMute: (cb) => {
+      const h = (_e, v) => cb(!!v);
+      ipcRenderer.on("tray-mute", h);
+      return () => ipcRenderer.removeListener("tray-mute", h);
+    },
+  },
+  desktop: {
+    get: () => ipcRenderer.invoke("desktop-get"),
+    set: (patch) => ipcRenderer.invoke("desktop-set", patch),
+  },
+  localServer: (action) => ipcRenderer.invoke("local-server", action || "status"),
+  onOpenFile: (cb) => {
+    const h = (_e, f) => cb(f);
+    ipcRenderer.on("open-file", h);
+    ipcRenderer.invoke("renderer-ready").then((list) => (list || []).forEach(cb));
+    return () => ipcRenderer.removeListener("open-file", h);
+  },
 });

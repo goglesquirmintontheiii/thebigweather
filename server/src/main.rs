@@ -7,6 +7,10 @@ mod alerts;
 mod caches;
 mod logbuf;
 mod overlays;
+mod platform;
+mod share;
+mod collab;
+mod rules;
 mod grid;
 mod api;
 mod config;
@@ -28,9 +32,11 @@ use std::sync::Arc;
 #[derive(Parser)]
 #[command(name = "tbw-server", version, about = "TheBigWeather data server")]
 struct Cli {
-    /// Config file (created on first run)
-    #[arg(short, long, default_value = "data/config.toml")]
-    config: PathBuf,
+    /// Config file (created on first run). Default: data/config.toml (Unix, relative to the
+    /// working directory); on Windows <exe folder>\data\config.toml when writable, else
+    /// %ProgramData%\TheBigWeather\data\config.toml. TBW_CONFIG / TBW_HOME override it.
+    #[arg(short, long)]
+    config: Option<PathBuf>,
     /// Replay a folder of Level II chunk files as a live site (offline RapidSweep testing)
     #[arg(long)]
     replay_dir: Option<PathBuf>,
@@ -70,6 +76,8 @@ enum Cmd {
     Inspect { files: Vec<PathBuf> },
     /// (Re)build the camera database from data/uploads and print what was kept
     Camdb,
+    /// Run as a Windows service (started by the service manager; see start.ps1 -InstallService)
+    Service,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -78,30 +86,69 @@ fn main() -> anyhow::Result<()> {
         use tracing_subscriber::util::SubscriberInitExt;
         tracing_subscriber::registry()
             .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=warn".into()))
-            .with(tracing_subscriber::fmt::layer().with_target(false))
+            .with(tracing_subscriber::fmt::layer().with_target(false).with_ansi(std::env::var_os("NO_COLOR").is_none() && !cfg!(windows)))
             .with(logbuf::RingLayer)
             .init();
     }
-    let cli = Cli::parse();
-    // the CPU share is needed before the async runtime exists
-    let pre = config::Config::load(&cli.config)?;
-    let prof = config::detect_profile(&pre);
-    let mut rt = tokio::runtime::Builder::new_multi_thread();
-    rt.enable_all().worker_threads(prof.cpu_threads.max(1));
-    if prof.cpu_percent < 100 {
-        // blocking pool also serves file I/O, so leave it some slack over the decode limit
-        rt.max_blocking_threads((prof.cpu_threads * 2).max(4));
+    let mut cli = Cli::parse();
+    let config = cli.config.clone().unwrap_or_else(platform::default_config);
+    cli.config = Some(config);
+    if matches!(cli.cmd, Some(Cmd::Service)) {
+        #[cfg(windows)]
+        {
+            let cli = Arc::new(parking_lot::Mutex::new(Some(cli)));
+            return platform::service::start(Box::new(move || {
+                let c = cli.lock().take().ok_or_else(|| anyhow::anyhow!("service already ran"))?;
+                // the service manager starts us in System32: work from the config's folder
+                if let Some(root) = cfg_path(&c).parent().and_then(|p| p.parent()) {
+                    std::env::set_current_dir(root).ok();
+                }
+                serve(c, true)
+            }));
+        }
+        #[cfg(not(windows))]
+        anyhow::bail!("`service` is for Windows; on Linux use the systemd unit from start.sh --install-service");
     }
-    let res = rt.build()?.block_on(run(cli, pre));
-    match res {
-        Ok(true) => admin::reexec(),
-        Ok(false) => Ok(()),
-        Err(e) => Err(e),
+    // Windows restarts inside the process: a new process would lose the console, the service
+    // manager's handle, and the PID the desktop app watches.
+    serve(cli, cfg!(windows))
+}
+
+fn cfg_path(cli: &Cli) -> &std::path::Path {
+    cli.config.as_deref().unwrap_or(std::path::Path::new("data/config.toml"))
+}
+
+/// Load the config, build the runtime and run until stopped. A restart from Server settings
+/// either re-executes the binary (Unix) or loops here (`in_process`).
+fn serve(cli: Cli, in_process: bool) -> anyhow::Result<()> {
+    loop {
+        // the CPU share is needed before the async runtime exists
+        let pre = config::Config::load(cfg_path(&cli))?;
+        let prof = config::detect_profile(&pre);
+        let mut rt = tokio::runtime::Builder::new_multi_thread();
+        rt.enable_all().worker_threads(prof.cpu_threads.max(1));
+        if prof.cpu_percent < 100 {
+            // blocking pool also serves file I/O, so leave it some slack over the decode limit
+            rt.max_blocking_threads((prof.cpu_threads * 2).max(4));
+        }
+        let rt = rt.build()?;
+        let res = rt.block_on(run(&cli, pre));
+        rt.shutdown_timeout(std::time::Duration::from_secs(5));
+        match res {
+            Ok(true) if in_process && !platform::stop_requested() => {
+                tracing::info!("restarting in this process");
+                admin::reset_restart();
+                continue;
+            }
+            Ok(true) => return admin::reexec(),
+            Ok(false) => return Ok(()),
+            Err(e) => return Err(e),
+        }
     }
 }
 
 /// Runs the server; Ok(true) means "restart requested".
-async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
+async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
     let mut cfg = cfg;
     match cli.cmd.as_ref().unwrap_or(&Cmd::Run) {
         Cmd::Token => {
@@ -110,7 +157,7 @@ async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
         }
         Cmd::NewToken => {
             cfg.server.token = config::new_token();
-            cfg.save(&cli.config)?;
+            cfg.save(cfg_path(cli))?;
             println!("{}", cfg.server.token);
             return Ok(false);
         }
@@ -119,11 +166,11 @@ async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
             return Ok(false);
         }
         Cmd::Inspect { files } => return inspect(files).map(|_| false),
-        Cmd::Run | Cmd::Camdb => {}
+        Cmd::Run | Cmd::Camdb | Cmd::Service => {}
     }
 
     // Resolve paths relative to the config file's directory's parent (the server root)
-    let root = cli.config.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_default();
+    let root = cfg_path(cli).parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_default();
     let abs = |p: &PathBuf| if p.is_absolute() { p.clone() } else { root.join(p) };
     if let Some(Cmd::Camdb) = cli.cmd.as_ref() {
         let data = abs(&cfg.server.data_dir);
@@ -137,10 +184,10 @@ async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
     let data_dir = abs(&cfg.server.data_dir);
     std::fs::create_dir_all(&data_dir)?;
     config::set_paths(config::Paths {
-        config: std::fs::canonicalize(&cli.config).unwrap_or_else(|_| cli.config.clone()),
-        data: std::fs::canonicalize(&data_dir).unwrap_or_else(|_| data_dir.clone()),
+        config: platform::canon(cfg_path(cli)),
+        data: platform::canon(&data_dir),
         cache: data_dir.join("cache"),
-        web: abs(&cfg.server.web_dir),
+        web: platform::find_web_dir(&abs(&cfg.server.web_dir)),
     });
     admin::set_args(std::env::args_os().collect());
 
@@ -227,14 +274,17 @@ async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
         }
     }
     let stats_latest = Arc::new(parking_lot::RwLock::new(stats::Stats::default()));
-    stats::spawn(hub.clone(), data_dir.clone(), profile.stats_interval_ms, stats_latest.clone());
+    // TBW_NO_STATS=1 skips the system stats sampler (Wine lacks some PDH calls sysinfo uses)
+    if std::env::var_os("TBW_NO_STATS").is_none() {
+        stats::spawn(hub.clone(), data_dir.clone(), profile.stats_interval_ms, stats_latest.clone());
+    }
 
     let bind = cfg.server.bind.clone();
     let other_mb = profile.budget.other_mb;
     let profile_full = profile.name == "full";
     let state = Arc::new(api::AppState {
         cfg: parking_lot::RwLock::new(cfg.clone()),
-        cfg_path: cli.config.clone(),
+        cfg_path: cfg_path(cli).to_path_buf(),
         profile,
         radar,
         live,
@@ -251,6 +301,9 @@ async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
             i
         },
         rec: recorder::Recorder::new(&data_dir, profile_full),
+        shares: share::Shares::new(&data_dir),
+        collab: collab::Collab::new(&data_dir),
+        rules: rules::Rules::new(&data_dir),
         overlays: {
             let o = overlays::Overlays::new(http.clone(), health.clone(), &data_dir, grids, profile_full);
             *o.fixtures.write() = cli.overlay_fixtures.clone();
@@ -259,6 +312,8 @@ async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
     });
 
     recorder::spawn(state.clone());
+    collab::spawn_janitor(state.collab.clone());
+    share::spawn_janitor(state.shares.clone());
 
     {
         let st = state.clone();
@@ -282,6 +337,7 @@ async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
         });
     }
 
+    let collab = state.collab.clone();
     let app = api::router(state);
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("listening on http://{bind}");
@@ -298,19 +354,14 @@ async fn run(cli: Cli, cfg: config::Config) -> anyhow::Result<bool> {
             tokio::time::sleep(std::time::Duration::from_secs(4)).await;
         } => {}
     }
+    // rooms are saved every 30 s; don't lose the last changes on shutdown/restart
+    collab.save();
     Ok(admin::restart_requested())
 }
 
 async fn shutdown() {
-    let ctrl_c = tokio::signal::ctrl_c();
     let restart = admin::restart_signal();
-    #[cfg(unix)]
-    {
-        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("signal");
-        tokio::select! { _ = ctrl_c => {}, _ = term.recv() => {}, _ = restart => {} }
-    }
-    #[cfg(not(unix))]
-    tokio::select! { _ = ctrl_c => {}, _ = restart => {} }
+    tokio::select! { _ = platform::shutdown_signal() => {}, _ = restart => {} }
     tracing::info!("shutting down{}", if admin::restart_requested() { " for restart" } else { "" });
 }
 
@@ -325,7 +376,7 @@ pub fn disk_cap_bytes(mb: u64, data_dir: &std::path::Path) -> u64 {
 
 fn free_space(p: &std::path::Path) -> u64 {
     let disks = sysinfo::Disks::new_with_refreshed_list();
-    let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let p = platform::canon(p);
     disks
         .list()
         .iter()

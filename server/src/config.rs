@@ -316,13 +316,14 @@ pub struct Paths {
     pub web: PathBuf,
 }
 
-static PATHS: once_cell::sync::OnceCell<Paths> = once_cell::sync::OnceCell::new();
+// a lock rather than a once-cell: an in-process restart (Windows) may move the data folder
+static PATHS: parking_lot::RwLock<Option<Paths>> = parking_lot::RwLock::new(None);
 
 pub fn set_paths(p: Paths) {
-    let _ = PATHS.set(p);
+    *PATHS.write() = Some(p);
 }
 pub fn paths() -> Paths {
-    PATHS.get().cloned().unwrap_or_default()
+    PATHS.read().clone().unwrap_or_default()
 }
 
 impl Config {
@@ -351,9 +352,7 @@ impl Config {
         }
         let existing = std::fs::read_to_string(path).unwrap_or_else(|_| TEMPLATE.to_string());
         let out = self.merge_into(&existing)?;
-        let tmp = path.with_extension("toml.tmp");
-        std::fs::write(&tmp, out)?;
-        std::fs::rename(&tmp, path)?;
+        crate::platform::write_atomic(path, out.as_bytes())?;
         Ok(())
     }
 

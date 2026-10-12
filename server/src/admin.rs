@@ -54,6 +54,11 @@ static ARGS: once_cell::sync::OnceCell<Vec<OsString>> = once_cell::sync::OnceCel
 pub fn set_args(a: Vec<OsString>) {
     let _ = ARGS.set(a);
 }
+/// Clear the restart flags after an in-process restart (Windows, service).
+pub fn reset_restart() {
+    RESTART.store(false, Ordering::SeqCst);
+    PENDING.store(false, Ordering::SeqCst);
+}
 pub fn restart_requested() -> bool {
     RESTART.load(Ordering::SeqCst)
 }
@@ -76,7 +81,9 @@ fn exe_path() -> std::io::Result<std::path::PathBuf> {
     Ok(p)
 }
 
-/// Replace this process with a fresh copy of the server binary (same arguments).
+/// Replace this process with a fresh copy of the server binary (same arguments). Unix uses
+/// exec (same PID); elsewhere a new process is started and this one exits (Windows normally
+/// restarts in-process instead, see `main::serve`).
 pub fn reexec() -> anyhow::Result<()> {
     let exe = exe_path()?;
     let args: Vec<OsString> = ARGS.get().cloned().unwrap_or_default().into_iter().skip(1).collect();

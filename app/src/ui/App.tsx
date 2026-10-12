@@ -49,6 +49,10 @@ import "../overlays/cambadges";
 import { XSection } from "./XSection";
 import { MetarPanels } from "./MetarPanels";
 import { TrackPanel } from "./TrackPanel";
+// share & collab (Phase 6)
+import { SharePanel } from "./SharePanel";
+import { CollabPanel } from "./CollabPanel";
+import "../share/desktop";
 
 export function App() {
   const mapEl = useRef<HTMLDivElement>(null);
@@ -98,6 +102,8 @@ export function App() {
       <XSection /> {/* workflow */}
       <MetarPanels /> {/* workflow */}
       <TrackPanel /> {/* workflow */}
+      <SharePanel /> {/* share & collab */}
+      <CollabPanel /> {/* share & collab */}
       <ConfigModal />
       <ForecastCenter />
       <SoundingCenter /> {/* intl & forecast tools */}

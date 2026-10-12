@@ -5,6 +5,7 @@ import { Toggle } from "./RadarPanel";
 import { Trash2, Check, Plus, Server } from "lucide-preact";
 import { playAlertSound } from "../../sound";
 import { ACCENTS } from "../../theme"; // workflow
+import { DesktopSection } from "../../share/DesktopSettings"; // Phase 6
 import { ServerSettingsSection } from "../ServerSettings"; // shake/stats/server 0.6
 
 const KEY_LABELS: Record<string, string> = {
@@ -141,6 +142,7 @@ export function SettingsPanel() {
         )}
       </section>
       <ServerSettingsSection /> {/* shake/stats/server 0.6 */}
+      <DesktopSection /> {/* Phase 6: tray, auto-start, built-in server */}
       <AppearanceSection />
       <section>
         <label class="lbl">Data use</label>

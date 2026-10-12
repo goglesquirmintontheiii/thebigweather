@@ -18,6 +18,9 @@ import { SrvControl } from "./SrvControl";
 import { WorkspaceMenu } from "./panels/WorkspacePanel";
 import { startXSection, xsLine } from "./XSection";
 import { trackPanel, recording } from "../gps";
+import { Share2, Users } from "lucide-preact"; // share & collab
+import { shareDialog } from "../share/share"; // share & collab
+import { teamOpen, team, unread } from "../share/collab"; // share & collab
 
 let locMarker: maplibregl.Marker | null = null;
 
@@ -123,6 +126,8 @@ export function Toolbar() {
             {item(loopDialog.value || !!loopProgress.value, "Export loop (GIF / MP4)", "", () => (loopDialog.value = !loopDialog.value), <Film size={16} />, frameCount.value < 1 || !!loopProgress.value)}
             {item(trackPanel.value, recording.value ? "GPS track · recording" : "GPS track & chasers", "", () => (trackPanel.value = !trackPanel.value), <Route size={16} />)}
             {item(wsOpen, "Workspaces", "", () => setWsOpen(!wsOpen), <Bookmark size={16} />)}
+            {/* share & collab */ item(shareDialog.value, "Share live view", "", () => (shareDialog.value = !shareDialog.value), <Share2 size={16} class="p6-owner" />)}
+            {item(teamOpen.value, team.value ? `Team · ${team.value.name}${unread.value ? ` (${unread.value})` : ""}` : "Team (live collaboration)", "", () => (teamOpen.value = !teamOpen.value), <Users size={16} class="p6-owner" />)}
           </div>
         </>
       )}

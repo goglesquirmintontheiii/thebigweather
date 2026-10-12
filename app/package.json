@@ -13,7 +13,9 @@
     "build": "tsc --noEmit && vite build",
     "prep-geo": "node scripts/prep-geo.mjs",
     "electron": "electron .",
-    "dist": "npm run build && electron-builder --linux AppImage"
+    "dist": "npm run build && electron-builder --linux AppImage",
+    "dist:win": "npm run build && electron-builder --win nsis portable --x64",
+    "dist:all": "npm run build && electron-builder --linux AppImage --win nsis portable --x64"
   },
   "dependencies": {},
   "devDependencies": {
@@ -48,6 +50,7 @@
     "files": [
       "dist/**",
       "electron/**",
+      "build/icon.png",
       "package.json"
     ],
     "asar": true,
@@ -64,12 +67,90 @@
       "icon": "build/icon.png",
       "synopsis": "Radar and weather workstation",
       "executableName": "thebigweather",
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "extraResources": [
+        {
+          "from": "../server/bin/tbw-server",
+          "to": "server/tbw-server"
+        }
+      ]
     },
     "appImage": {
       "artifactName": "TheBigWeather-${version}-x86_64.AppImage"
     },
-    "publish": null
+    "publish": null,
+    "fileAssociations": [
+      {
+        "ext": "pal",
+        "name": "Radar color table",
+        "description": "Radar color table (.pal)",
+        "role": "Editor",
+        "mimeType": "application/x-tbw-colortable"
+      },
+      {
+        "ext": "tbwws",
+        "name": "TheBigWeather workspace",
+        "description": "TheBigWeather workspace",
+        "role": "Editor",
+        "mimeType": "application/x-tbw-workspace"
+      },
+      {
+        "ext": "ar2v",
+        "name": "NEXRAD Level II volume",
+        "description": "NEXRAD Level II radar volume",
+        "role": "Viewer",
+        "mimeType": "application/x-nexrad-level2"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "executableName": "TheBigWeather",
+      "extraResources": [
+        {
+          "from": "../server/bin/tbw-server.exe",
+          "to": "server/tbw-server.exe"
+        },
+        {
+          "from": "../server/bin/ffmpeg.exe",
+          "to": "server/ffmpeg.exe"
+        },
+        {
+          "from": "../server/bin/yt-dlp.exe",
+          "to": "server/yt-dlp.exe"
+        }
+      ],
+      "signAndEditExecutable": true,
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "artifactName": "TheBigWeather-${version}-setup.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "TheBigWeather",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "portable": {
+      "artifactName": "TheBigWeather-${version}-portable.${ext}"
+    }
   },
   "desktopName": "thebigweather.desktop",
   "repository": {
