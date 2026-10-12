@@ -91,10 +91,12 @@ pub struct Keys {
     pub trafikverket: String,
     pub nsw_transport: String,
     pub trafficvision: String,
+    /// TomTom traffic flow tiles (/api/traffic)
+    pub tomtom: String,
 }
 
 impl Keys {
-    pub const NAMES: [&'static str; 11] = [
+    pub const NAMES: [&'static str; 12] = [
         "google_maps",
         "synoptic",
         "airnow",
@@ -106,6 +108,7 @@ impl Keys {
         "trafikverket",
         "nsw_transport",
         "trafficvision",
+        "tomtom",
     ];
     pub fn get(&self, k: &str) -> Option<&String> {
         Some(match k {
@@ -120,6 +123,7 @@ impl Keys {
             "trafikverket" => &self.trafikverket,
             "nsw_transport" => &self.nsw_transport,
             "trafficvision" => &self.trafficvision,
+            "tomtom" => &self.tomtom,
             _ => return None,
         })
     }
@@ -136,6 +140,7 @@ impl Keys {
             "trafikverket" => &mut self.trafikverket,
             "nsw_transport" => &mut self.nsw_transport,
             "trafficvision" => &mut self.trafficvision,
+            "tomtom" => &mut self.tomtom,
             _ => return false,
         };
         *slot = v;

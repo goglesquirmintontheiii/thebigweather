@@ -39,7 +39,9 @@ interface Rules {
 
 export const recs = signal<Rec[]>([]);
 const rules = signal<Rules | null>(null);
-const ffmpeg = signal(true);
+export const ffmpeg = signal(true);
+/** yt-dlp on the server (YouTube recording) */
+export const ytdlp = signal(false);
 
 export async function loadRecs() {
   try {
@@ -47,6 +49,7 @@ export async function loadRecs() {
     recs.value = r.recs;
     rules.value = r.rules;
     ffmpeg.value = r.ffmpeg;
+    ytdlp.value = !!r.ytdlp;
   } catch {
     /* offline */
   }
@@ -64,20 +67,27 @@ export function fileUrl(path: string) {
   return `${api.base}${path}${tok}`;
 }
 
-/** Start recording a camera (from its popup). */
+/** Start recording a camera (from its viewer). minutes 0 = until stopped. */
 export async function recordCamera(p: any, minutes = 60) {
-  const url = p.t === "hls" ? p.v : p.i;
+  const url = p.t === "hls" || p.t === "yt" ? p.v : p.i === "proxy" ? fileUrl(`/api/camimg?id=${encodeURIComponent(p.id)}`) : p.i;
   try {
     await api.send("POST", "/api/rec", {
       kind: "camera",
-      end: Date.now() + minutes * 60_000,
-      camera: { id: p.id ?? "", name: p.n ?? "Camera", url, kind: p.t, refresh: p.r ?? 60, lat: 0, lon: 0 },
+      end: minutes ? Date.now() + minutes * 60_000 : null,
+      camera: { id: p.id ?? "", name: p.n ?? "Camera", url, kind: p.t, refresh: p.r ?? 60, lat: p.lat ?? 0, lon: p.lon ?? 0 },
     });
-    toast(`Recording ${p.n ?? "camera"} for ${minutes} min (Recordings panel)`);
+    toast(`Recording ${p.n ?? "camera"}${minutes ? ` for ${minutes} min` : ""}`);
     loadRecs();
   } catch (e: any) {
     toast(e.message, "error", 7000);
   }
+}
+
+export function stopRec(id: string) {
+  return api
+    .send("POST", `/api/rec/${id}/stop`, {})
+    .then(loadRecs)
+    .catch((e: any) => toast(e.message, "error"));
 }
 
 export async function playRec(r: Rec) {
@@ -123,7 +133,8 @@ async function download(path: string, name: string) {
 }
 
 const size = (b: number) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} kB`);
-const when = (ms: number) => (ms ? new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: settings.value.utc ? "UTC" : undefined }) : "—");
+const when = (ms: number) =>
+  ms ? new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: settings.value.utc ? "UTC" : undefined }) : "—";
 
 const DURATIONS: [number, string][] = [
   [15, "15 min"],
@@ -139,7 +150,10 @@ function NewRadar() {
   const [src, setSrc] = useState<"L2" | "L3">(r.source);
   const [prods, setProds] = useState<string[]>(r.source === "L3" ? [r.product] : [r.product]);
   const [mins, setMins] = useState(60);
-  const [at, setAt] = useState("");
+  const [at, setAt] = useState(() => {
+    const d = new Date(Date.now() + 3600_000 - new Date().getTimezoneOffset() * 60_000);
+    return d.toISOString().slice(0, 16);
+  });
   const site = currentSite.value;
   const l3 = l3Products.value.filter((p) => !!p.tdwr === (site?.type === "TDWR"));
   const go = async () => {
@@ -195,14 +209,9 @@ function NewRadar() {
       <div class="row">
         <span>Start</span>
         <input type="datetime-local" value={at} onInput={(e) => setAt((e.target as HTMLInputElement).value)} />
-        {at && (
-          <button class="btn xs ghost" onClick={() => setAt("")}>
-            Now
-          </button>
-        )}
       </div>
-      <button class="btn sm rec-btn" onClick={go} disabled={src === "L3" && !prods.length}>
-        <Circle size={12} class="rec-dot" /> {at ? "Schedule" : "Record radar"}
+      <button class="btn sm rec-btn" onClick={go} disabled={(src === "L3" && !prods.length) || !at}>
+        <Circle size={12} class="rec-dot" /> Schedule
       </button>
     </div>
   );
@@ -270,7 +279,10 @@ function RecRow({ r }: { r: Rec }) {
       <div class="rec-main">
         <b title={r.title}>{r.title}</b>
         <small class="muted">
-          {r.status === "scheduled" ? `starts ${when(r.start)}` : `${when(r.t0 || r.start)}${r.t1 ? ` – ${new Date(r.t1).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: settings.value.utc ? "UTC" : undefined })}` : ""}`} · {r.files} {r.kind === "radar" ? "volumes" : "files"} · {size(r.bytes)}
+          {r.status === "scheduled"
+            ? `starts ${when(r.start)}`
+            : `${when(r.t0 || r.start)}${r.t1 ? ` – ${new Date(r.t1).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: settings.value.utc ? "UTC" : undefined })}` : ""}`}{" "}
+          · {r.files} {r.kind === "radar" ? "volumes" : "files"} · {size(r.bytes)}
           {r.trigger.startsWith("alert") ? ` · ${r.trigger}` : ""}
         </small>
         {r.error && <small class="err-text">{r.error}</small>}
@@ -286,7 +298,7 @@ function RecRow({ r }: { r: Rec }) {
         </button>
       )}
       {(live || r.status === "scheduled") && (
-        <button class="icon-btn" title="Stop" onClick={() => api.send("POST", `/api/rec/${r.id}/stop`, {}).then(loadRecs)}>
+        <button class="icon-btn" title="Stop" onClick={() => stopRec(r.id)}>
           <Square size={13} />
         </button>
       )}
@@ -331,9 +343,9 @@ export function RecordPanel() {
   return (
     <div class="stack">
       <section>
-        <label class="lbl">New radar recording</label>
+        <label class="lbl">Schedule a radar recording</label>
         <NewRadar />
-        <p class="muted small">To record a camera, click it on the map → Record. YouTube is watch-only.</p>
+        <p class="muted small">Record now: the ● button on the timeline. Cameras: the Rec button in a camera viewer.</p>
       </section>
       <section>
         <label class="lbl">Record on warnings</label>

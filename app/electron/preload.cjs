@@ -10,5 +10,10 @@ contextBridge.exposeInMainWorld("tbw", {
   info: () => ipcRenderer.invoke("app-info"),
   download: (url, name) => ipcRenderer.invoke("download", url, name),
   popout: (spec) => ipcRenderer.invoke("popout", spec),
+  screenRec: {
+    open: () => ipcRenderer.invoke("screenrec-open"),
+    write: (id, buf) => ipcRenderer.invoke("screenrec-write", id, buf),
+    close: (id) => ipcRenderer.invoke("screenrec-close", id),
+  },
   isElectron: true,
 });

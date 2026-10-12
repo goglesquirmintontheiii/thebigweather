@@ -1,5 +1,5 @@
 // Electron shell for TheBigWeather.
-const { app, BrowserWindow, ipcMain, shell, screen, nativeTheme, protocol, net, session } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, screen, nativeTheme, protocol, net, session, desktopCapturer } = require("electron");
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -162,6 +162,60 @@ ipcMain.handle("popout", (_e, spec) => {
   return true;
 });
 
+// ---------- screen recording (toolbar): the renderer streams WebM chunks, saved to Downloads/TheBigWeather ----------
+const screenRecs = new Map();
+ipcMain.handle("screenrec-open", () => {
+  const dir = path.join(app.getPath("downloads"), "TheBigWeather");
+  fs.mkdirSync(dir, { recursive: true });
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const file = path.join(dir, `TheBigWeather-${ts}.webm`);
+  const id = String(Date.now()) + Math.random().toString(36).slice(2, 6);
+  screenRecs.set(id, { file, fd: fs.openSync(file, "w") });
+  return { id, file };
+});
+ipcMain.handle("screenrec-write", (_e, id, buf) => {
+  const r = screenRecs.get(id);
+  if (!r) return false;
+  fs.writeSync(r.fd, Buffer.from(buf));
+  return true;
+});
+ipcMain.handle("screenrec-close", (_e, id) => {
+  const r = screenRecs.get(id);
+  if (!r) return null;
+  screenRecs.delete(id);
+  fs.closeSync(r.fd);
+  return r.file;
+});
+/** getDisplayMedia() from the app records the app itself (no picker): the requesting page's
+ * frame (tab capture: just the app, works on X11/Wayland alike); the OS window/screen otherwise. */
+function setupDisplayMedia() {
+  session.defaultSession.setDisplayMediaRequestHandler((req, cb) => {
+    let done = false;
+    const reply = (v) => {
+      if (done) return;
+      done = true;
+      try {
+        cb(v);
+      } catch (err) {
+        console.error("screenrec", err.message);
+      }
+    };
+    if (req.frame) {
+      if (process.env.TBW_LOG_CONSOLE) console.log("[screenrec] capturing the app frame");
+      return reply({ video: req.frame });
+    }
+    desktopCapturer
+      .getSources({ types: ["window", "screen"], thumbnailSize: { width: 0, height: 0 } })
+      .then((srcs) => {
+        const want = win && !win.isDestroyed() ? win.getMediaSourceId() : "";
+        const pick = srcs.find((s) => s.id === want) || srcs.find((s) => s.name === "TheBigWeather") || srcs.find((s) => s.id.startsWith("screen:")) || srcs[0];
+        if (process.env.TBW_LOG_CONSOLE) console.log(`[screenrec] sources=${srcs.length} want=${want} pick=${pick ? pick.id : "none"}`);
+        reply(pick ? { video: pick } : {});
+      })
+      .catch(() => reply({}));
+  });
+}
+
 ipcMain.handle("app-info", () => ({ version: app.getVersion(), platform: process.platform, displays: screen.getAllDisplays().length }));
 
 app.on("second-instance", () => {
@@ -193,7 +247,7 @@ function setupMediaHeaders() {
     const has = Object.keys(h).some((k) => k.toLowerCase() === "access-control-allow-origin");
     const ct = String(h["content-type"] || h["Content-Type"] || "");
     // media streams, plus map tiles from custom tile servers that don't send CORS headers
-    if (!has && (media.test(d.url) || d.resourceType === "media" || /mpegurl|^image\/|protobuf|vector-tile/i.test(ct))) {
+    if (!has && (media.test(d.url) || d.resourceType === "media" || /mpegurl|^image\/|protobuf|vector-tile|^audio\/|application\/ogg|video\/mp2t|scpls/i.test(ct))) {
       h["Access-Control-Allow-Origin"] = ["*"];
     }
     cb({ responseHeaders: h });
@@ -202,6 +256,7 @@ function setupMediaHeaders() {
 
 app.whenReady().then(() => {
   setupMediaHeaders();
+  setupDisplayMedia();
   protocol.handle("app", (req) => {
     const u = new URL(req.url);
     let p = path.normalize(decodeURIComponent(u.pathname)).replace(/^([/\\])+/, "");

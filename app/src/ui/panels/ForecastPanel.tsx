@@ -2,9 +2,10 @@ import { useEffect, useState } from "preact/hooks";
 import { api } from "../../api";
 import { settings, update } from "../../store";
 import { mapRef } from "../../map/mapview";
-import { Sun, Moon, Cloud, CloudSun, CloudMoon, CloudRain, CloudSnow, CloudLightning, CloudFog, CloudDrizzle, Wind, RefreshCw, MapPin } from "lucide-preact";
+import { Sun, Moon, Cloud, CloudSun, CloudMoon, CloudRain, CloudSnow, CloudLightning, CloudFog, CloudDrizzle, Wind, RefreshCw, MapPin, Maximize2 } from "lucide-preact";
+import { forecastOpen } from "../ForecastCenter";
 
-function iconFor(text: string, day: boolean) {
+export function iconFor(text: string, day: boolean) {
   const t = (text ?? "").toLowerCase();
   if (/thunder|t-storm/.test(t)) return CloudLightning;
   if (/snow|flurr|sleet|ice|wintry/.test(t)) return CloudSnow;
@@ -121,6 +122,9 @@ export function ForecastPanel() {
           )}
           <button class="icon-btn" title="Refresh" onClick={load}>
             <RefreshCw size={14} class={busy ? "spin" : ""} />
+          </button>
+          <button class="icon-btn" title="Open big view" onClick={() => (forecastOpen.value = true)}>
+            <Maximize2 size={14} />
           </button>
         </div>
         {data && (

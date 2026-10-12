@@ -127,6 +127,47 @@ if ! command -v ffmpeg >/dev/null; then
 else
   ok "ffmpeg"
 fi
+# yt-dlp: needed only to record YouTube cameras. YouTube changes often, so a distro package is
+# used only when it's recent (< ~4 months); otherwise the official standalone build is fetched.
+ytdlp_fresh() {
+  local v; v="$(yt-dlp --version 2>/dev/null | head -1)"
+  [[ "$v" =~ ^([0-9]{4})\.([0-9]{2})\.([0-9]{2}) ]] || return 1
+  local t; t="$(date -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}" +%s 2>/dev/null)" || return 1
+  (( $(date +%s) - t < 120 * 86400 ))
+}
+ytdlp_download() {
+  local name=yt-dlp
+  if ! command -v python3 >/dev/null; then
+    case "$(uname -m)" in
+      x86_64) name=yt-dlp_linux ;;
+      aarch64|arm64) name=yt-dlp_linux_aarch64 ;;
+      *) return 1 ;;
+    esac
+  fi
+  local tmp; tmp="$(mktemp)" || return 1
+  curl -fsSL --max-time 120 -o "$tmp" "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$name" \
+    && $SUDO install -m 0755 "$tmp" /usr/local/bin/yt-dlp
+  local rc=$?; rm -f "$tmp"; return $rc
+}
+if command -v yt-dlp >/dev/null && ytdlp_fresh; then
+  ok "yt-dlp"
+else
+  if command -v yt-dlp >/dev/null; then
+    warn "yt-dlp is old — updating it for YouTube camera recording (optional)"
+  else
+    warn "yt-dlp not found — installing it for YouTube camera recording (optional)"
+    pkg_install yt-dlp -- yt-dlp -- yt-dlp >/dev/null 2>&1 || true
+  fi
+  if command -v yt-dlp >/dev/null && ytdlp_fresh; then
+    ok "yt-dlp"
+  elif ytdlp_download >/dev/null 2>&1 && hash -r && command -v yt-dlp >/dev/null; then
+    ok "yt-dlp ($(yt-dlp --version 2>/dev/null | head -1))"
+  elif command -v yt-dlp >/dev/null; then
+    warn "couldn't update yt-dlp; YouTube recording may fail until it's updated"
+  else
+    warn "couldn't install yt-dlp; YouTube camera recording stays off"
+  fi
+fi
 
 # ---------- 2. server binary ----------
 step "Preparing the server binary"

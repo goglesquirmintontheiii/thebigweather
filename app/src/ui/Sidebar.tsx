@@ -6,7 +6,9 @@ import { ForecastPanel } from "./panels/ForecastPanel";
 import { SearchPanel } from "./panels/SearchPanel";
 import { RecordPanel, recs } from "./panels/RecordPanel";
 import { FilesPanel } from "./panels/FilesPanel";
-import { nowPlaying } from "../radio";
+import { nowPlaying, players } from "../radio";
+import { forecastOpen } from "./ForecastCenter";
+import { radioOpen } from "./RadioCenter";
 import { MapPanel } from "./panels/MapPanel";
 import { LayersPanel } from "./panels/LayersPanel";
 import { RadarPanel } from "./panels/RadarPanel";
@@ -46,9 +48,9 @@ export function Rail() {
       ))}
       <div class="rail-sep" />
       {MORE.map(({ id, icon: Icon, label }) => (
-        <button key={id} class={`rail-btn ${openPanel.value === id ? "on" : ""}`} title={label} onClick={() => (openPanel.value = openPanel.value === id ? null : id)}>
+        <button key={id} class={`rail-btn ${openPanel.value === id || (id === "forecast" && forecastOpen.value) || (id === "radio" && radioOpen.value) ? "on" : ""}`} title={label} onClick={() => (id === "forecast" ? (forecastOpen.value = !forecastOpen.value) : id === "radio" ? (radioOpen.value = !radioOpen.value) : (openPanel.value = openPanel.value === id ? null : id))}>
           <Icon size={20} />
-          {id === "radio" && nowPlaying.value && <span class="dot online" />}
+          {id === "radio" && (nowPlaying.value || players.value.length > 0) && <span class="dot online" />}
           {id === "record" && recs.value.some((r) => r.status === "recording") && <span class="dot rec" />}
         </button>
       ))}

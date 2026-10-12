@@ -138,7 +138,7 @@ export interface Settings {
   anim: { fps: number; dwellMs: number; mode: "count" | "time"; minutes: number };
   /** weather alert display, sounds and flashing (see alertstyle.ts) */
   alertCfg: AlertCfg;
-  ui: { cursorValue: boolean; legendTop: boolean; loadBars: boolean };
+  ui: { cursorValue: boolean; legendTop: boolean; loadBars: boolean; /** camera viewer size (resized by the user) */ camSize?: [number, number] };
   radio: { volume: number; favorites: string[]; custom: { name: string; url: string }[] };
   forecast: { point: string };
   /** speak new warnings aloud */
@@ -153,6 +153,8 @@ export interface Settings {
   points: SavedPoint[];
   view: { center: [number, number]; zoom: number };
   panels: { stats: { open: boolean; x: number; y: number } };
+  /* 3D volume view (ui/View3D.tsx) */
+  view3d: { on: boolean; src: "radar" | "mrms"; thr: Record<string, number>; density: number; exag: number; res: "lo" | "hi"; floor: boolean; smooth: boolean; shade: boolean };
 }
 
 const DEFAULTS: Settings = {
@@ -189,6 +191,8 @@ const DEFAULTS: Settings = {
   points: [],
   view: { center: [-97.3, 35.3], zoom: 6.4 },
   panels: { stats: { open: true, x: -1, y: 70 } },
+  /* 3D volume view */
+  view3d: { on: false, src: "radar", thr: {}, density: 1, exag: 4, res: "lo", floor: false, smooth: true, shade: true },
 };
 
 const KEY = "tbw.settings.v1";

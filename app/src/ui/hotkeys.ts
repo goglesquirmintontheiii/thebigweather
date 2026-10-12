@@ -5,6 +5,7 @@ import { tilts, l3Products } from "../radar/controller";
 import { togglePlay, stepFrame } from "../anim";
 import { locate, screenshot } from "./Toolbar";
 import { settings } from "../store";
+import { toggle3D } from "./View3D"; // 3D
 
 const PRODUCTS = ["REF", "VEL", "SW", "ZDR", "RHO", "PHI"];
 
@@ -14,6 +15,11 @@ export function useHotkeys() {
       const t = e.target as HTMLElement;
       if (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA") return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // 3D: Shift+3 (plain digits pick radar products)
+      if (e.shiftKey && e.code === "Digit3") {
+        toggle3D();
+        return;
+      }
       switch (e.key) {
         case " ":
           e.preventDefault();

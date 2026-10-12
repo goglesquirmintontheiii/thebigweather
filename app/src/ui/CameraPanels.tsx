@@ -4,11 +4,15 @@ import { signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 import Hls from "hls.js";
 import { api } from "../api";
-import { activeServer, settings } from "../store";
-import { X, ExternalLink, RefreshCw, Pause, Play as PlayIcon, PictureInPicture2 } from "lucide-preact";
+import { activeServer, settings, update } from "../store";
+import { X, ExternalLink, RefreshCw, Pause, Play as PlayIcon, PictureInPicture2, Circle, Square, Info, Trash2 } from "lucide-preact";
 import { activeTime } from "../active";
-import { fileUrl } from "./panels/RecordPanel";
+import { fileUrl, recs, loadRecs, recordCamera, stopRec, ytdlp, ffmpeg } from "./panels/RecordPanel";
 import { popout, canPopout } from "../popout";
+import { mapRef } from "../map/mapview";
+import { currentSite } from "../radar/controller";
+import { distance, bearing, compass, fmtDist } from "../util";
+import { fmtElapsed } from "../radarrec";
 
 export interface CamView {
   id: string;
@@ -23,16 +27,36 @@ export interface CamView {
   attribution?: string;
   /** the URL breaks with a cache-buster query: refetch with no-store instead */
   nobust?: boolean;
+  lat?: number;
+  lon?: number;
+  /** traffic / weather / buoy… */
+  cat?: string;
+  dir?: string;
+  stale?: boolean;
+  /** the raw feature properties (shown in Info) */
+  props?: Record<string, any>;
   x: number;
   y: number;
 }
 
 export const camPanels = signal<CamView[]>([]);
+/** bring an open viewer to the front */
+const front = signal<{ id: string; n: number } | null>(null);
 let z = 10;
 
+/** default viewer size: big, clamped to the window; the user's last resize wins */
+function camSize(): [number, number] {
+  const [w, h] = settings.value.ui.camSize ?? [680, 590];
+  return [Math.max(300, Math.min(w, window.innerWidth - 24)), Math.max(240, Math.min(h, window.innerHeight - 90))];
+}
+
 export function openCamera(p: any) {
-  if (camPanels.value.some((c) => c.id === p.id)) return;
+  if (camPanels.value.some((c) => c.id === p.id)) {
+    front.value = { id: p.id, n: (front.value?.n ?? 0) + 1 };
+    return;
+  }
   const n = camPanels.value.length;
+  const [w, h] = camSize();
   const view: CamView = {
     id: p.id,
     name: p.n ?? p.name ?? "Camera",
@@ -45,8 +69,14 @@ export function openCamera(p: any) {
     attribution: p.a ?? (String(p.s ?? "").startsWith("db:") ? `Camera database · ${String(p.s).slice(3)}` : undefined),
     nobust: !!p.nb,
     rec: p.rec,
-    x: 80 + ((n * 36) % 300),
-    y: 90 + ((n * 36) % 240),
+    lat: typeof p.lat === "number" ? p.lat : undefined,
+    lon: typeof p.lon === "number" ? p.lon : undefined,
+    cat: p.k,
+    dir: p.dir,
+    stale: !!p.stale,
+    props: p.rec ? undefined : { ...p },
+    x: Math.max(8, Math.min(80 + ((n * 36) % 300), window.innerWidth - w - 12)),
+    y: Math.max(56, Math.min(70 + ((n * 36) % 240), window.innerHeight - h - 12)),
   };
   camPanels.value = [...camPanels.value.slice(-5), view];
 }
@@ -87,7 +117,13 @@ function imageUrl(c: CamView, bust: number) {
   return c.img + (c.img.includes("?") ? "&" : "?") + `_tbw=${bust}`;
 }
 
-function Snapshot({ c }: { c: CamView }) {
+interface Meta {
+  at?: number;
+  w?: number;
+  h?: number;
+}
+
+function Snapshot({ c, onMeta }: { c: CamView; onMeta?: (m: Meta) => void }) {
   const [bust, setBust] = useState(() => Math.floor(Date.now() / 1000));
   const [err, setErr] = useState(false);
   const [at, setAt] = useState(0);
@@ -122,11 +158,13 @@ function Snapshot({ c }: { c: CamView }) {
         <div class="cam-empty">Image unavailable</div>
       ) : (
         <img
-          src={c.nobust ? blob ?? c.img ?? "" : imageUrl(c, bust)}
+          src={c.nobust ? (blob ?? c.img ?? "") : imageUrl(c, bust)}
           referrerpolicy="no-referrer"
-          onLoad={() => {
+          onLoad={(e) => {
             setErr(false);
             setAt(Date.now());
+            const im = e.currentTarget as HTMLImageElement;
+            onMeta?.({ at: Date.now(), w: im.naturalWidth, h: im.naturalHeight });
           }}
           onError={() => setErr(true)}
           alt={c.name}
@@ -142,7 +180,7 @@ function Snapshot({ c }: { c: CamView }) {
   );
 }
 
-function HlsVideo({ url }: { url: string }) {
+function HlsVideo({ url, onMeta }: { url: string; onMeta?: (m: Meta) => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -168,7 +206,14 @@ function HlsVideo({ url }: { url: string }) {
   }, [url]);
   return (
     <div class="cam-media">
-      <video ref={ref} muted autoplay playsinline controls />
+      <video
+        ref={ref}
+        muted
+        autoplay
+        playsinline
+        controls
+        onLoadedMetadata={(e) => onMeta?.({ w: (e.currentTarget as HTMLVideoElement).videoWidth, h: (e.currentTarget as HTMLVideoElement).videoHeight })}
+      />
       {err && <div class="cam-empty">Stream unavailable ({err})</div>}
     </div>
   );
@@ -219,9 +264,128 @@ function RecPlayer({ c }: { c: CamView }) {
   );
 }
 
+const TYPE_NAME: Record<string, string> = { img: "Still image", hls: "Live video (HLS)", yt: "YouTube", page: "Web page", rec: "Recording" };
+const KNOWN = new Set(["id", "n", "name", "s", "sn", "t", "i", "v", "p", "r", "k", "a", "dir", "nb", "stale", "lat", "lon", "mine", "rec", "x", "y"]);
+const ytRecordable = (u: string) => /\/watch|youtu\.be\/|\/live\/|\/embed\/|\/shorts\//i.test(u) && !/live_stream\?channel/i.test(u);
+
+/** Record / stop for this camera (server recording). */
+function RecControl({ c }: { c: CamView }) {
+  const [menu, setMenu] = useState(false);
+  const [, tick] = useState(0);
+  const r = recs.value.find((x) => x.kind === "camera" && x.camera?.id === c.id && (x.status === "recording" || x.status === "scheduled"));
+  useEffect(() => {
+    if (!r) return;
+    const t = setInterval(() => tick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [!!r]);
+  if (c.type === "rec" || c.type === "page") return null;
+  const stop = (e: Event) => e.stopPropagation();
+  if (r)
+    return (
+      <button class="cam-rec on" title="Stop recording" onPointerDown={stop} onClick={() => stopRec(r.id)}>
+        <i class="rec-pulse" />
+        {fmtElapsed(Date.now() - (r.t0 || r.start || r.created))}
+        <Square size={11} />
+      </button>
+    );
+  const why =
+    c.type === "yt" && !ytdlp.value
+      ? "Install yt-dlp on the server to record YouTube"
+      : c.type === "yt" && c.video && !ytRecordable(c.video)
+        ? "Only single YouTube videos/streams can be recorded"
+        : (c.type === "hls" || c.type === "yt") && !ffmpeg.value
+          ? "Install ffmpeg on the server to record video"
+          : "";
+  return (
+    <span class="cam-rec-wrap" onPointerDown={stop}>
+      <button class="cam-rec" disabled={!!why} title={why || "Record this camera on the server"} onClick={() => setMenu(!menu)}>
+        <Circle size={10} class="rec-dot" /> Rec
+      </button>
+      {menu && (
+        <div class="cam-rec-menu glass">
+          {[15, 30, 60, 120].map((m) => (
+            <button
+              key={m}
+              onClick={() => {
+                setMenu(false);
+                recordCamera({ id: c.id, n: c.name, t: c.type, i: c.img, v: c.video, r: c.refresh, lat: c.lat, lon: c.lon }, m);
+              }}
+            >
+              {m < 60 ? `${m} min` : `${m / 60} h`}
+            </button>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+function fmtVal(v: any): string {
+  if (v == null || v === "") return "";
+  if (typeof v === "object") return JSON.stringify(v).slice(0, 120);
+  return String(v);
+}
+
+function CamInfo({ c, meta }: { c: CamView; meta: Meta }) {
+  const p = c.props ?? {};
+  const rows: [string, any][] = [];
+  const src = c.source ?? String(p.s ?? "").replace(/^db:/, "");
+  if (src) rows.push(["Source", src]);
+  rows.push(["Type", `${TYPE_NAME[c.type] ?? c.type}${c.cat ? ` · ${c.cat}` : ""}`]);
+  if (c.lat != null && c.lon != null) rows.push(["Location", `${c.lat.toFixed(4)}, ${c.lon.toFixed(4)}`]);
+  for (const k of ["road", "route", "highway", "rt", "city", "county", "state", "region"]) if (p[k] != null && p[k] !== "") rows.push([k[0].toUpperCase() + k.slice(1), fmtVal(p[k])]);
+  if (c.dir) rows.push(["Facing", c.dir]);
+  if (c.type === "img" && c.refresh) rows.push(["Refresh", c.refresh >= 60 ? `every ${Math.round(c.refresh / 60)} min` : `every ${c.refresh} s`]);
+  if (meta.at) rows.push(["Updated", new Date(meta.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: settings.value.utc ? "UTC" : undefined })]);
+  if (meta.w && meta.h) rows.push(["Size", `${meta.w}×${meta.h}`]);
+  if (c.stale) rows.push(["Status", "May be out of date"]);
+  if (c.lat != null && c.lon != null) {
+    const m = mapRef.value?.getCenter();
+    if (m) rows.push(["From map center", `${fmtDist(distance(m.lat, m.lng, c.lat, c.lon))} ${compass(bearing(m.lat, m.lng, c.lat, c.lon))}`]);
+    const s = currentSite.value;
+    if (s) rows.push([`From ${s.id}`, `${fmtDist(distance(s.lat, s.lon, c.lat, c.lon))} ${compass(bearing(s.lat, s.lon, c.lat, c.lon))}`]);
+  }
+  for (const [k, v] of Object.entries(p)) if (!KNOWN.has(k) && !rows.some((r) => r[0].toLowerCase() === k) && fmtVal(v)) rows.push([k, fmtVal(v)]);
+  if (p.id ?? c.id) rows.push(["ID", String(p.id ?? c.id)]);
+  const links = [c.page && ["Page", c.page], c.video && ["Stream", c.video], c.img && c.img !== "proxy" && ["Image", c.img]].filter(Boolean) as [string, string][];
+  return (
+    <div class="cam-info" onPointerDown={(e) => e.stopPropagation()}>
+      {rows.map(([k, v]) => (
+        <div key={k}>
+          <span>{k}</span>
+          <b title={String(v)}>{v}</b>
+        </div>
+      ))}
+      {links.map(([k, u]) => (
+        <div key={k}>
+          <span>{k}</span>
+          <a href={u} target="_blank" rel="noreferrer" title={u}>
+            {u.replace(/^https?:\/\//, "")}
+          </a>
+        </div>
+      ))}
+      {p.mine && (
+        <div>
+          <span />
+          <button class="btn xs ghost" onClick={() => (update((st) => (st.myCams = st.myCams.filter((x) => x.id !== p.mine))), close(c.id))}>
+            <Trash2 size={12} /> Remove from my cameras
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Panel({ c }: { c: CamView }) {
   const ref = useRef<HTMLDivElement>(null);
   const [zi, setZ] = useState(++z);
+  const [size, setSize] = useState<[number, number]>(camSize);
+  const [info, setInfo] = useState(c.type !== "rec");
+  const [meta, setMeta] = useState<Meta>({});
+  const f = front.value;
+  useEffect(() => {
+    if (f?.id === c.id) setZ(++z);
+  }, [f?.n]);
   const onDown = (e: PointerEvent) => {
     const el = ref.current!;
     setZ(++z);
@@ -238,25 +402,59 @@ function Panel({ c }: { c: CamView }) {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+  const onResize = (e: PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const el = ref.current!;
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const [w0, h0] = [el.offsetWidth, el.offsetHeight];
+    let wh: [number, number] = [w0, h0];
+    const move = (ev: PointerEvent) => {
+      wh = [Math.max(300, Math.min(window.innerWidth - el.offsetLeft - 4, w0 + ev.clientX - sx)), Math.max(220, Math.min(window.innerHeight - el.offsetTop - 4, h0 + ev.clientY - sy))];
+      el.style.width = `${wh[0]}px`;
+      el.style.height = `${wh[1]}px`;
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setSize(wh);
+      update((s) => (s.ui.camSize = wh));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
   const link = c.page || c.video || c.img;
+  const stop = (e: Event) => e.stopPropagation();
   return (
-    <div ref={ref} class="cam-panel glass" style={{ left: `${c.x}px`, top: `${c.y}px`, zIndex: zi }} onPointerDown={() => setZ(++z)}>
+    <div ref={ref} class="cam-panel sized glass" style={{ left: `${c.x}px`, top: `${c.y}px`, width: `${size[0]}px`, height: `${size[1]}px`, zIndex: zi }} onPointerDown={() => setZ(++z)}>
       <div class="cam-head" onPointerDown={onDown as any}>
         <span class="cam-title" title={c.name}>
           {c.name}
           {c.source && <small> · {c.source}</small>}
         </span>
+        <RecControl c={c} />
+        {c.type !== "rec" && (
+          <button class={`icon-btn ${info ? "on" : ""}`} title="Camera info" onPointerDown={stop} onClick={() => setInfo(!info)}>
+            <Info size={13} />
+          </button>
+        )}
         {canPopout() && c.type !== "rec" && (
-          <button class="icon-btn" title="Pop out to its own window" onPointerDown={(e) => e.stopPropagation()} onClick={() => (popout({ kind: "camera", title: c.name, width: 720, height: 480, data: { ...c, x: 0, y: 0 } }), close(c.id))}>
+          <button
+            class="icon-btn"
+            title="Pop out to its own window"
+            onPointerDown={stop}
+            onClick={() => (popout({ kind: "camera", title: c.name, width: 720, height: 480, data: { ...c, x: 0, y: 0 } }), close(c.id))}
+          >
             <PictureInPicture2 size={13} />
           </button>
         )}
         {link && link !== "proxy" && (
-          <button class="icon-btn" title="Open in browser" onPointerDown={(e) => e.stopPropagation()} onClick={() => window.open(link, "_blank")}>
+          <button class="icon-btn" title="Open in browser" onPointerDown={stop} onClick={() => window.open(link, "_blank")}>
             <ExternalLink size={13} />
           </button>
         )}
-        <button class="icon-btn" title="Close" onPointerDown={(e) => e.stopPropagation()} onClick={() => close(c.id)}>
+        <button class="icon-btn" title="Close" onPointerDown={stop} onClick={() => close(c.id)}>
           <X size={14} />
         </button>
       </div>
@@ -267,9 +465,9 @@ function Panel({ c }: { c: CamView }) {
           <iframe src={youtubeEmbed(c.video)} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen referrerpolicy="strict-origin-when-cross-origin" />
         </div>
       ) : c.type === "hls" && c.video ? (
-        <HlsVideo url={c.video} />
+        <HlsVideo url={c.video} onMeta={setMeta} />
       ) : c.type === "img" ? (
-        <Snapshot c={c} />
+        <Snapshot c={c} onMeta={setMeta} />
       ) : (
         <div class="cam-media">
           <div class="cam-empty">
@@ -282,9 +480,9 @@ function Panel({ c }: { c: CamView }) {
           </div>
         </div>
       )}
-      <div class="cam-note">
-        {c.attribution ? `${c.attribution}. ` : ""}Feeds belong to their owners; recording or sharing some may need permission.
-      </div>
+      {info && c.type !== "rec" && <CamInfo c={c} meta={meta} />}
+      <div class="cam-note">{c.attribution ? `${c.attribution}. ` : ""}Feeds belong to their owners; recording or sharing some may need permission.</div>
+      <div class="cam-resize" title="Resize" onPointerDown={onResize as any} />
     </div>
   );
 }
@@ -310,6 +508,14 @@ export function CameraFull({ c }: { c: CamView }) {
 }
 
 export function CameraPanels() {
+  const open = camPanels.value.length > 0;
+  // keep the recording state fresh while a viewer is open
+  useEffect(() => {
+    if (!open) return;
+    loadRecs();
+    const t = setInterval(loadRecs, 10_000);
+    return () => clearInterval(t);
+  }, [open]);
   return (
     <>
       {camPanels.value.map((c) => (

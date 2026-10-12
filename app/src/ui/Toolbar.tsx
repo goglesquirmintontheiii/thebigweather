@@ -5,7 +5,10 @@ import { fmtDist } from "../util";
 import { Play, Pause, LocateFixed, Camera, Compass, Crosshair, Ruler, RadioTower, PenTool, MousePointer2 } from "lucide-preact";
 import * as maplibregl from "maplibre-gl";
 import { DrawBar } from "./DrawBar";
+import { Box } from "lucide-preact"; // 3D
+import { toggle3D } from "./View3D"; // 3D
 import { PaneButton } from "./Panes";
+import { ScreenRecButton } from "./ScreenRecButton";
 
 let locMarker: maplibregl.Marker | null = null;
 
@@ -83,6 +86,7 @@ export function Toolbar() {
         {btn(playing.value, "Play / pause loop (Space)", togglePlay, playing.value ? <Pause size={19} /> : <Play size={19} />, frameCount.value < 2)}
         {btn(false, "My location (L)", locate, <LocateFixed size={19} />)}
         {btn(false, "Screenshot (S)", screenshot, <Camera size={19} />)}
+        <ScreenRecButton />
         {btn(t === "bearing", "Distance & direction from radar (B)", () => (tool.value = t === "bearing" ? "none" : "bearing"), <Compass size={19} />)}
         {btn(crosshair.value, "Center crosshair value (C)", () => (crosshair.value = !crosshair.value), <Crosshair size={19} />)}
         {btn(settings.value.ui.cursorValue, "Show the value under the mouse (V) · or hold Shift", () => update((s) => (s.ui.cursorValue = !s.ui.cursorValue)), <MousePointer2 size={19} />)}
@@ -90,6 +94,7 @@ export function Toolbar() {
         {btn(settings.value.overlays.sites, "Show/hide radar sites (R)", () => update((s) => (s.overlays.sites = !s.overlays.sites)), <RadioTower size={19} />)}
         <PaneButton />
         {btn(t === "draw", "Drawing mode (D)", () => (tool.value = t === "draw" ? "none" : "draw"), <PenTool size={19} />)}
+        {/* 3D */ btn(settings.value.view3d.on, "3D radar volume (Shift+3)", toggle3D, <Box size={19} />)}
       </div>
     </div>
   );

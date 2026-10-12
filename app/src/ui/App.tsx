@@ -23,6 +23,13 @@ import { openPanel } from "../store";
 import { importFile, isMapFile, loadFiles } from "../overlays/files";
 import "../overlays/iss";
 import "../overlays/mycams";
+import { View3D } from "./View3D"; // 3D
+// center modals (forecast, radio, seismograph) + radio players
+import { ForecastCenter } from "./ForecastCenter";
+import { RadioCenter } from "./RadioCenter";
+import { RadioPlayers } from "./RadioPlayer";
+import { ShakeCenter } from "./ShakeCenter";
+import "../shake";
 
 export function App() {
   const mapEl = useRef<HTMLDivElement>(null);
@@ -55,6 +62,7 @@ export function App() {
       <Rail />
       <SidePanel />
       <Legend />
+      <View3D /> {/* 3D */}
       <div class="bottom-dock">
         <Timeline />
         <Toolbar />
@@ -65,6 +73,10 @@ export function App() {
       <OverlayPopup />
       <CameraPanels />
       <ConfigModal />
+      <ForecastCenter />
+      <RadioCenter />
+      <ShakeCenter />
+      <RadioPlayers />
       {openPanel.value !== "radio" && <NowPlaying compact />}
       <AddCameraDialog />
       <ContextMenu />

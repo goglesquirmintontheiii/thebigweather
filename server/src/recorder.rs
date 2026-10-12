@@ -104,6 +104,19 @@ pub struct Recorder {
     seen_alerts: Mutex<HashSet<String>>,
     max_cams: usize,
     pub ffmpeg: Mutex<Option<bool>>,
+    pub ytdlp: Mutex<Option<bool>>,
+}
+
+/// Any YouTube URL.
+fn is_youtube(url: &str) -> bool {
+    let l = url.to_ascii_lowercase();
+    l.contains("youtube.com") || l.contains("youtu.be") || l.contains("youtube-nocookie.com")
+}
+
+/// A YouTube URL that names one video / live stream (what yt-dlp can record).
+fn is_youtube_video(url: &str) -> bool {
+    let l = url.to_ascii_lowercase();
+    is_youtube(url) && (l.contains("/watch") || l.contains("youtu.be/") || l.contains("/live/") || l.contains("/embed/") || l.contains("/shorts/"))
 }
 
 fn now_ms() -> i64 {
@@ -142,6 +155,7 @@ impl Recorder {
             seen_alerts: Mutex::new(HashSet::new()),
             max_cams: if full { 8 } else { 2 },
             ffmpeg: Mutex::new(None),
+            ytdlp: Mutex::new(None),
         })
     }
 
@@ -149,6 +163,15 @@ impl Recorder {
         let mut f = self.ffmpeg.lock();
         if f.is_none() {
             *f = Some(std::process::Command::new("ffmpeg").arg("-version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false));
+        }
+        f.unwrap_or(false)
+    }
+
+    /// yt-dlp on PATH (checked once), needed to record YouTube cameras.
+    pub fn has_ytdlp(&self) -> bool {
+        let mut f = self.ytdlp.lock();
+        if f.is_none() {
+            *f = Some(std::process::Command::new("yt-dlp").arg("--version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map(|s| s.success()).unwrap_or(false));
         }
         f.unwrap_or(false)
     }
@@ -217,11 +240,17 @@ impl Recorder {
                 if !c.url.starts_with("http") {
                     bail!("bad camera URL");
                 }
-                let l = c.url.to_ascii_lowercase();
-                if l.contains("youtube.com") || l.contains("youtu.be") {
-                    bail!("YouTube is watch-only (its terms don't allow recording)");
-                }
-                if c.kind == "hls" && !self.has_ffmpeg() {
+                if is_youtube(&c.url) {
+                    if !is_youtube_video(&c.url) {
+                        bail!("record a YouTube video or live stream link (watch, youtu.be, /live/ or /embed/)");
+                    }
+                    if !self.has_ytdlp() {
+                        bail!("Install yt-dlp on the server to record YouTube");
+                    }
+                    if !self.has_ffmpeg() {
+                        bail!("recording video streams needs ffmpeg on the server (install it, e.g. sudo apt install ffmpeg)");
+                    }
+                } else if c.kind == "hls" && !self.has_ffmpeg() {
                     bail!("recording video streams needs ffmpeg on the server (install it, e.g. sudo apt install ffmpeg)");
                 }
                 let active = self.recs.lock().values().filter(|x| x.kind == "camera" && (x.status == "recording" || x.status == "scheduled")).count();
@@ -573,7 +602,8 @@ async fn radar_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<
 async fn camera_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<()> {
     let c = r.camera.clone().unwrap_or_default();
     let dir = st.rec.rec_dir(&r.id);
-    if c.kind == "hls" {
+    let yt = is_youtube(&c.url);
+    if c.kind == "hls" || yt {
         // copy the stream in 10-minute pieces so a dropped connection loses little
         let mut fails = 0;
         let mut short_runs = 0;
@@ -581,11 +611,31 @@ async fn camera_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result
             let left = r.end.map(|e| ((e - now_ms()) / 1000).max(1)).unwrap_or(600).min(600);
             let name = format!("{}.mp4", now_ms());
             let part = dir.join(format!("{name}.part"));
-            let mut child = tokio::process::Command::new("ffmpeg")
-                .args(["-y", "-loglevel", "error", "-rw_timeout", "15000000", "-i", &c.url, "-c", "copy", "-t", &left.to_string(), "-f", "mp4", "-movflags", "+faststart"])
-                .arg(&part)
-                .kill_on_drop(true)
-                .spawn()?;
+            // YouTube: yt-dlp resolves and downloads the stream, ffmpeg remuxes it into the same
+            // 10-minute .mp4 pieces as other video cameras (so playback/export/timelapse just work)
+            let (mut child, mut feeder) = if yt {
+                let mut dl = tokio::process::Command::new("yt-dlp")
+                    .args(["-q", "--no-warnings", "--no-part", "--no-playlist", "-f", "best[height<=1080]/best", "-o", "-", &c.url])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()?;
+                let out: std::process::Stdio = dl.stdout.take().ok_or_else(|| anyhow!("yt-dlp pipe"))?.try_into()?;
+                let ff = tokio::process::Command::new("ffmpeg")
+                    .args(["-y", "-loglevel", "error", "-i", "pipe:0", "-c", "copy", "-t", &left.to_string(), "-f", "mp4", "-movflags", "+faststart"])
+                    .arg(&part)
+                    .stdin(out)
+                    .kill_on_drop(true)
+                    .spawn()?;
+                (ff, Some(dl))
+            } else {
+                let ff = tokio::process::Command::new("ffmpeg")
+                    .args(["-y", "-loglevel", "error", "-rw_timeout", "15000000", "-i", &c.url, "-c", "copy", "-t", &left.to_string(), "-f", "mp4", "-movflags", "+faststart"])
+                    .arg(&part)
+                    .kill_on_drop(true)
+                    .spawn()?;
+                (ff, None)
+            };
             let started = std::time::Instant::now();
             let mut clean_exit = false;
             loop {
@@ -603,6 +653,11 @@ async fn camera_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result
                     break;
                 }
                 tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            // ffmpeg is done with this piece; yt-dlp is restarted for the next one
+            if let Some(mut dl) = feeder.take() {
+                dl.start_kill().ok();
+                let _ = tokio::time::timeout(Duration::from_secs(5), dl.wait()).await;
             }
             let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
             if size > 10_000 {

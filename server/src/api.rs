@@ -146,6 +146,10 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/metars", get(metars))
         .route("/ovl/{id}", get(overlay))
         .route("/camimg", get(camimg))
+        .route("/shake/channels", get(shake_channels))
+        .route("/shake/data", get(shake_data))
+        .route("/traffic/incidents", get(traffic_incidents))
+        .route("/traffic/{z}/{x}/{y}", get(traffic_tile))
         .route("/rec", get(rec_list).post(rec_create))
         .route("/rec/rules", put(rec_rules))
         .route("/rec/export", get(rec_export))
@@ -410,6 +414,70 @@ async fn camimg(State(st): St, Query(q): Query<CamQ>) -> Result<Response, ApiErr
     Ok(r)
 }
 
+// ---------- Raspberry Shake ----------
+
+/// Channels of one Raspberry Shake station.
+async fn shake_channels(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>, ApiError> {
+    let net = q.get("net").map(|s| s.trim().to_ascii_uppercase()).filter(|s| !s.is_empty()).unwrap_or_else(|| "AM".into());
+    let sta = q.get("sta").map(|s| s.trim().to_ascii_uppercase()).unwrap_or_default();
+    if !crate::shake::valid_code(&net, 1, 2) || !crate::shake::valid_code(&sta, 1, 5) {
+        return Err(bad("bad or missing net/sta"));
+    }
+    Ok(Json(crate::shake::channels(&st.overlays, &net, &sta).await?))
+}
+
+/// Waveform samples for one channel and window (≤ 2 h), decoded from miniSEED.
+async fn shake_data(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+    let r = crate::shake::DataReq::from_query(&q).map_err(|e| bad(&e))?;
+    let b = crate::shake::data(&st.overlays, &r).await?;
+    let mut resp = Response::new(Body::from(b));
+    resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=300"));
+    Ok(resp)
+}
+
+// ---------- traffic (TomTom) ----------
+
+fn tomtom_key(st: &AppState) -> Result<String, ApiError> {
+    let k = st.cfg.read().keys.tomtom.clone();
+    if k.is_empty() {
+        return Err(ApiError(StatusCode::NOT_FOUND, "Add a TomTom key in Settings → API keys".into()));
+    }
+    Ok(k)
+}
+
+/// TomTom traffic-flow tile (PNG). `style`: relative0 | relative0-dark (default) | absolute | relative-delay …
+async fn traffic_tile(State(st): St, Path((z, x, y)): Path<(u32, u32, String)>, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+    let key = tomtom_key(&st)?;
+    let y: u32 = y.trim_end_matches(".png").parse().map_err(|_| bad("bad tile"))?;
+    if z > 22 || x >= (1u32 << z) || y >= (1u32 << z) {
+        return Err(bad("bad tile"));
+    }
+    let style = q.get("style").map(|s| s.as_str()).unwrap_or("relative0-dark");
+    if !crate::overlays::more::TRAFFIC_STYLES.contains(&style) {
+        return Err(bad("bad style"));
+    }
+    let b = crate::overlays::more::traffic_tile(&st.overlays, &key, style, z, x, y).await?;
+    let mut resp = Response::new(Body::from(b));
+    resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    resp.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=120"));
+    Ok(resp)
+}
+
+/// TomTom traffic incidents in `bbox=w,s,e,n` (≤ 10,000 km²) as GeoJSON.
+async fn traffic_incidents(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>, ApiError> {
+    let key = tomtom_key(&st)?;
+    let b: Vec<f64> = q.get("bbox").map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
+    if b.len() != 4 || b[0] >= b[2] || b[1] >= b[3] || b[1] < -90.0 || b[3] > 90.0 {
+        return Err(bad("bbox=w,s,e,n required"));
+    }
+    let km2 = (b[2] - b[0]) * 111.32 * ((b[1] + b[3]) / 2.0).to_radians().cos() * (b[3] - b[1]) * 110.57;
+    if km2 > 10_000.0 {
+        return Err(bad("area too large for traffic incidents (max 10,000 km²); zoom in"));
+    }
+    Ok(Json(crate::overlays::more::traffic_incidents(&st.overlays, &key, [b[0], b[1], b[2], b[3]]).await?))
+}
+
 async fn grid_catalog(State(st): St) -> Json<Value> {
     Json(st.grids.catalog())
 }
@@ -464,7 +532,7 @@ async fn metars(State(st): St) -> Json<Value> {
 // ---------- recordings ----------
 
 async fn rec_list(State(st): St) -> Json<Value> {
-    Json(json!({"recs": st.rec.list(), "rules": *st.rec.rules.lock(), "ffmpeg": st.rec.has_ffmpeg()}))
+    Json(json!({"recs": st.rec.list(), "rules": *st.rec.rules.lock(), "ffmpeg": st.rec.has_ffmpeg(), "ytdlp": st.rec.has_ytdlp()}))
 }
 
 async fn rec_create(State(st): St, Json(r): Json<crate::recorder::Rec>) -> Result<Json<Value>, ApiError> {

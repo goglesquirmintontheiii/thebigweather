@@ -12,6 +12,7 @@ mod hub;
 mod radar;
 mod recorder;
 mod s3;
+mod shake;
 mod sites;
 mod stats;
 

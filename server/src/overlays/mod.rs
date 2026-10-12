@@ -9,6 +9,7 @@ pub mod cameras;
 pub mod camdb;
 pub mod extra;
 pub mod misc;
+pub mod more;
 pub mod noaa;
 pub mod obs;
 pub mod ships;
@@ -41,6 +42,10 @@ pub struct Overlays {
     pub cams: cameras::Cameras,
     pub flights: aviation::Flights,
     pub full: bool,
+    /// Raspberry Shake proxy state (rate limit, short caches)
+    pub shake: crate::shake::Shake,
+    /// proxied traffic tiles/incidents
+    pub tiles: more::TileCache,
     /// offline testing: `<id>.json` files served instead of live data
     pub fixtures: parking_lot::RwLock<Option<PathBuf>>,
 }
@@ -92,6 +97,19 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("forecast", 0),
     ("geocode", 3600),
     ("overpass", 600),
+    ("sbwhist", 600),
+    ("lsrhist", 600),
+    ("watchhist", 600),
+    ("mcdhist", 600),
+    ("stormattr", 120),
+    ("volcanoes", 1800),
+    ("drought", 3600 * 6),
+    ("svi", 86400),
+    ("hms", 1800),
+    ("airquality", 1800),
+    ("kp", 600),
+    ("atcf", 1800),
+    ("shake", 86400),
 ];
 
 pub fn ttl(id: &str) -> Option<u64> {
@@ -144,6 +162,8 @@ impl Overlays {
             cams: cameras::Cameras::default(),
             flights: aviation::Flights::default(),
             full,
+            shake: crate::shake::Shake::default(),
+            tiles: more::TileCache::default(),
             fixtures: parking_lot::RwLock::new(None),
         })
     }
@@ -331,6 +351,19 @@ impl Overlays {
             }
             "geocode" => extra::geocode(self, p("q")).await,
             "overpass" => extra::overpass(self, p("q"), p("bbox")).await,
+            "sbwhist" => more::sbw_hist(self, p("sts"), p("ets")).await,
+            "lsrhist" => more::lsr_hist(self, p("sts"), p("ets")).await,
+            "watchhist" => more::watch_hist(self, p("sts"), p("ets")).await,
+            "mcdhist" => more::mcd_hist(self, p("sts"), p("ets")).await,
+            "stormattr" => more::storm_attr(self, p("valid")).await,
+            "volcanoes" => more::volcanoes(self).await,
+            "drought" => more::drought(self).await,
+            "svi" => more::svi(self).await,
+            "hms" => more::hms(self, p("kind")).await,
+            "airquality" => more::air_quality(self).await,
+            "kp" => more::kp(self).await,
+            "atcf" => more::atcf(self, p("storm")).await,
+            "shake" => more::shake_stations(self).await,
             _ => bail!("unknown overlay {id}"),
         }
     }
@@ -377,6 +410,14 @@ fn label(id: &str) -> String {
         "forecast" => "Forecast (NWS / Open-Meteo)",
         "geocode" => "Place search (Nominatim)",
         "overpass" => "Map search (Overpass)",
+        "sbwhist" | "lsrhist" | "watchhist" | "mcdhist" | "stormattr" | "drought" => "Iowa Environmental Mesonet",
+        "volcanoes" => "USGS volcanoes",
+        "svi" => "CDC Social Vulnerability Index",
+        "hms" => "NOAA HMS fire & smoke",
+        "airquality" => "AirNow",
+        "kp" => "SWPC Kp index",
+        "atcf" => "NHC model tracks (ATCF)",
+        "shake" => "Raspberry Shake",
         _ => id,
     };
     n.to_string()

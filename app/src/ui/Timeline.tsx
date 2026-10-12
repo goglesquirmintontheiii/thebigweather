@@ -9,6 +9,7 @@ import { settings, update } from "../store";
 import { fmtTime } from "../util";
 import { gridDef } from "../weather";
 import { SkipBack, SkipForward, History, SlidersHorizontal, X } from "lucide-preact";
+import { RadarRecButton } from "./RadarRecButton"; // radar "record now" (cameras & recording)
 
 /** "90" → "1.5 h" style label for a span in minutes. */
 export function spanLabel(m: number) {
@@ -229,6 +230,7 @@ export function Timeline() {
           <History size={13} />
           {hist ? <span>{fmtTime(hist, true)}</span> : null}
         </button>
+        <RadarRecButton />
         {(hist || (radar && pinned.value)) && (
           <button class="tl-btn live" onClick={() => backToLatest()} title="Back to live data">
             Live

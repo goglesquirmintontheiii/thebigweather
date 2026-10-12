@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../../api";
 import { settings, update, toast, uid } from "../../store";
-import { playStream, stopStream, nowPlaying, radioState, type Stream } from "../../radio";
+import { playStream, stopStream, nowPlaying, radioState, openPlayer, type Stream } from "../../radio";
+import { radioOpen } from "../RadioCenter";
 import { popout, canPopout } from "../../popout";
-import { Search, Play, Square, Star, Plus, Trash2, ExternalLink, Loader } from "lucide-preact";
+import { Search, Play, Square, Star, Plus, Trash2, ExternalLink, Loader, AudioLines, Maximize2 } from "lucide-preact";
 import { Toggle } from "./RadarPanel";
 
 export function NowPlaying({ compact = false }: { compact?: boolean }) {
@@ -58,6 +59,9 @@ export function RadioPanel() {
         </button>
         <span class="rcall">{s.call}</span>
         <span class="rname">{s.city ?? s.name}</span>
+        <button class="icon-btn" title="Player (seek, record)" onClick={() => openPlayer(s)}>
+          <AudioLines size={12} />
+        </button>
         {s.id && !s.id.startsWith("custom:") && (
           <button class={`icon-btn ${r.favorites.includes(s.id) ? "fav" : ""}`} title="Favorite" onClick={() => fav(s.id)}>
             <Star size={12} />
@@ -68,6 +72,9 @@ export function RadioPanel() {
   };
   return (
     <div class="stack">
+      <button class="btn sm ghost" onClick={() => (radioOpen.value = true)}>
+        <Maximize2 size={13} /> Open big view
+      </button>
       <NowPlaying />
       <section>
         <div class="search">

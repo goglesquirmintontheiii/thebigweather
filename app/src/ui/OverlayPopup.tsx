@@ -7,9 +7,8 @@ import { nextPass } from "../overlays/iss";
 import { api } from "../api";
 import { settings, update } from "../store";
 import { mapRef } from "../map/mapview";
-import { X, ExternalLink, Video, Trash2, Radio, Circle } from "lucide-preact";
+import { X, ExternalLink, Video, Trash2, Radio } from "lucide-preact";
 import { playStream } from "../radio";
-import { recordCamera } from "./panels/RecordPanel";
 import { camDialog } from "./Overlays";
 
 const fmt = (ms: number) => new Date(ms).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: settings.value.utc ? "UTC" : undefined });
@@ -271,11 +270,6 @@ export function OverlayPopup() {
         {p.kind === "radio" && (
           <button class="btn sm" onClick={() => playStream({ id: props.id, name: `${props.city}, ${props.state}`, url: props.url, call: props.call, city: props.city, state: props.state })}>
             <Radio size={13} /> Listen
-          </button>
-        )}
-        {p.kind === "camera" && (props.t === "img" || props.t === "hls") && (
-          <button class="btn sm ghost" title="Record this camera on the server" onClick={() => recordCamera(props)}>
-            <Circle size={12} class="rec-dot" /> Record
           </button>
         )}
         {p.kind === "waffle" && props.web && (

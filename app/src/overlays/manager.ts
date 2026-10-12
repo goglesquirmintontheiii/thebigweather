@@ -5,6 +5,7 @@ import type { Map as MLMap, GeoJSONSource, MapMouseEvent } from "maplibre-gl";
 import { api } from "../api";
 import { settings, type DetailItem } from "../store";
 import { OVERLAYS, overlayDef, styleFor, optsFor, type OverlayDef, type Popup } from "./defs";
+import { openCamera } from "../ui/CameraPanels";
 import { registerIcons } from "./icons";
 import { fileOverlays, fileLayers, fileClick, ensureFileData, fileSourceOpts } from "./files";
 
@@ -285,6 +286,14 @@ export function pickOverlay(e: MapMouseEvent): { handled: boolean; panel: Detail
       if (!p) continue;
       if (oid === "cameras" && props.cl) {
         m.easeTo({ center: e.lngLat, zoom: Math.min(m.getZoom() + 2.5, 14) });
+        return { handled: true, panel: [] };
+      }
+      // cameras open their draggable viewer right away
+      if (p.kind === "camera") {
+        const c = (f.geometry as any)?.coordinates;
+        openCamera({ ...props, lon: c?.[0] ?? e.lngLat.lng, lat: c?.[1] ?? e.lngLat.lat });
+        showFlightTrack(null);
+        popup.value = null;
         return { handled: true, panel: [] };
       }
       if (oid === "flights") showFlightTrack(String(props.hex ?? ""));

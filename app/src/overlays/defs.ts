@@ -8,6 +8,12 @@ let selectSat: (name: string) => void = () => {};
 export function onSelectSat(fn: (name: string) => void) {
   selectSat = fn;
 }
+/* ---------- raspberry shake (shake.ts registers the click handler) ---------- */
+let shakeClick: (p: any) => void = () => {};
+export function onShakeClick(fn: (p: any) => void) {
+  shakeClick = fn;
+}
+/* ---------- end raspberry shake ---------- */
 
 export interface Style {
   color: string;
@@ -1000,6 +1006,34 @@ export const OVERLAYS: OverlayDef[] = [
         : { title: "Fire hotspot", sub: p.src, rows: [["Detected", `${p.date} ${p.time}Z`], ["Radiative power", p.frp ? `${p.frp} MW` : "—"], ["Confidence", p.conf || "—"]] },
     note: "NIFC perimeters and NASA FIRMS VIIRS detections (last 24 h, US).",
   },
+  /* ---------- raspberry shake ---------- */
+  {
+    id: "shake",
+    name: "Raspberry Shake seismographs",
+    group: "Hazards",
+    refresh: 3600,
+    style: { color: "#a78bfa", opacity: 1, size: 1, labels: false },
+    source: { cluster: true, clusterRadius: 34, clusterMaxZoom: 6 },
+    layers: (s, st) => [
+      {
+        id: `${s}-cl`,
+        type: "circle",
+        source: s,
+        filter: ["has", "point_count"],
+        paint: { "circle-color": "rgba(76,29,149,.85)", "circle-radius": ["interpolate", ["linear"], ["get", "point_count"], 2, 9, 50, 13, 500, 19], "circle-stroke-color": st.color, "circle-stroke-width": 1.5, "circle-opacity": st.opacity },
+      } as LayerSpecification,
+      { id: `${s}-count`, type: "symbol", source: s, filter: ["has", "point_count"], layout: { "text-field": ["get", "point_count_abbreviated"], "text-font": ["Noto Sans Bold"], "text-size": 10.5, "text-allow-overlap": true }, paint: { "text-color": "#fff" } } as LayerSpecification,
+      // a ring with a dark core, reads as a sensor
+      { id: `${s}-pt`, type: "circle", source: s, filter: ["!", ["has", "point_count"]], paint: { "circle-color": "#1e1033", "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 3.5 * st.size, 9, 6 * st.size], "circle-stroke-color": st.color, "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 3, 1.5, 9, 2.5], "circle-opacity": st.opacity, "circle-stroke-opacity": st.opacity } } as LayerSpecification,
+      ...(st.labels ? [label(s, ["get", "sta"], 7, [0, 1], { filter: ["!", ["has", "point_count"]], layout: { "text-size": 10 } })] : []),
+    ],
+    click: (p) => {
+      shakeClick(p);
+      return p.cluster ? { title: `${p.point_count} seismographs` } : { title: p.name || `${p.net}.${p.sta}`, sub: "Raspberry Shake" };
+    },
+    note: "Citizen seismographs. Click one for its seismogram (data is 30+ min old). Data: Raspberry Shake, not for redistribution.",
+  },
+  /* ---------- end raspberry shake ---------- */
 
   // ---------------- Chasers & reports ----------------
   {

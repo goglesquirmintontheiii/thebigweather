@@ -187,7 +187,9 @@ function SoundPoints() {
         <input
           type="checkbox"
           checked={on === pts.length}
-          ref={(el) => el && (el.indeterminate = on > 0 && on < pts.length)}
+          ref={(el) => {
+            if (el) el.indeterminate = on > 0 && on < pts.length;
+          }}
           onChange={(e) => setCfg((c) => (c.soundSkip = (e.target as HTMLInputElement).checked ? [] : pts.map((p) => p.id)))}
         />
         <b>All points</b>
