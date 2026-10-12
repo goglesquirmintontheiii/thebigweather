@@ -7,10 +7,13 @@ import { zoomToGeometry } from "./panels/AlertsPanel";
 import { X, Maximize2, ChevronLeft, ChevronRight, ExternalLink } from "lucide-preact";
 import { useEffect } from "preact/hooks";
 import { History } from "lucide-preact"; // history 0.6
-import { replayAlert, beforeAfter } from "../histsearch"; // history 0.6
+import { beforeAfter } from "../histsearch"; // history 0.6
+import { useState } from "preact/hooks"; // p7
+import { ReplayPopover } from "./HistStorms"; // p7: replay window popover
 
 function AlertBody({ id, nav }: { id: string; nav: any }) {
   const a = alerts.value.get(id);
+  const [replay, setReplay] = useState(false); // p7 (before the early return: stable hook order)
   if (!a) return <OvlBody p={{ title: "Alert expired", rows: [] }} nav={nav} />;
   const p = a.properties;
   const fl = p.flags ?? {};
@@ -34,9 +37,10 @@ function AlertBody({ id, nav }: { id: string; nav: any }) {
           {nav}
         </div>
         {/* history 0.6: replay this alert's event ± before/after */}
-        <button class="btn sm ghost ad-replay" title={`Replay this in history mode: from ${beforeAfter().before} min before it began to ${beforeAfter().after} min after it ended, on the nearest radar (change in Historical Storms)`} onClick={() => replayAlert(a)}>
+        <button class="btn sm ghost ad-replay" title={`Replay this in history mode: pick the window (default ${beforeAfter().before} min before it began to ${beforeAfter().after} min after it ended), on the nearest radar`} aria-expanded={replay} onClick={() => setReplay(!replay)}>
           <History size={13} /> Replay this
         </button>
+        {replay && <ReplayPopover a={a} onClose={() => setReplay(false)} />}
         <button class="icon-btn" title="Zoom to" onClick={() => zoomToGeometry(a.geometry)}>
           <Maximize2 size={15} />
         </button>

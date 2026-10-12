@@ -1,10 +1,10 @@
 // data 0.6: space weather window — SDO / SOHO LASCO images (auto-refresh), solar wind and X-ray
 // mini charts, SWPC alerts and the aurora forecast timeline, from the server's /api/ovl/swpc
-// (with public NOAA/NASA image URLs as a fallback). Opened from the Aurora layer's settings.
+// (with public NOAA/NASA image URLs as a fallback). Opened from its sidebar button (sun) or the Aurora layer's settings.
 
 import { signal } from "@preact/signals";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { Orbit, RefreshCw } from "lucide-preact";
+import { Sun, RefreshCw } from "lucide-preact";
 import { api } from "../api";
 import { settings } from "../store";
 import { CenterModal } from "./CenterModal";
@@ -180,7 +180,7 @@ function SpaceBody() {
   return (
     <CenterModal
       cls="d6-space"
-      icon={<Orbit size={20} />}
+      icon={<Sun size={20} />}
       title="Space weather"
       sub="NOAA SWPC · NASA SDO · ESA/NASA SOHO"
       onClose={() => (spaceOpen.value = false)}

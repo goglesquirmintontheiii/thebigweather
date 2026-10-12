@@ -9,7 +9,7 @@ import { api } from "../api";
 import { settings, update } from "../store";
 import { fmtBytes } from "../util";
 import { client, clientHist, sameHost, useClientStats, hasIpc, type ClientStats } from "../clientstats";
-import { Cpu, X, GripVertical, MonitorCog, Server } from "lucide-preact";
+import { Cpu, X, GripVertical, MonitorCog, Server, Minimize2, Maximize2 } from "lucide-preact";
 
 const stats = signal<any>(null);
 const history = signal<number[]>([]);
@@ -75,7 +75,7 @@ const upTxt = (sec: number) => {
 type PanelKey = "stats" | "appstats";
 
 /** draggable glass box whose position lives in settings.panels[key] */
-function Floater({ pk, title, icon, onClose, children, w = 220 }: { pk: PanelKey; title: string; icon: ComponentChildren; onClose: () => void; children: ComponentChildren; w?: number }) {
+function Floater({ pk, title, icon, onClose, children, w = 220, cls = "", extra }: { pk: PanelKey; title: ComponentChildren; icon: ComponentChildren; onClose: () => void; children: ComponentChildren; w?: number; cls?: string; extra?: ComponentChildren }) {
   const p = settings.value.panels[pk] ?? { open: true, x: -1, y: 300 };
   const ref = useRef<HTMLDivElement>(null);
   const setPos = (x: number, y: number) => update((st) => (st.panels[pk] = { ...(st.panels[pk] ?? { open: true }), x, y } as any));
@@ -108,11 +108,12 @@ function Floater({ pk, title, icon, onClose, children, w = 220 }: { pk: PanelKey
     window.addEventListener("pointerup", up);
   };
   return (
-    <div ref={ref} class={`stats glass stats-${pk}`} style={{ left: `${x}px`, top: `${y}px`, width: `${w}px` }}>
+    <div ref={ref} class={`stats glass stats-${pk} ${cls}`} style={{ left: `${x}px`, top: `${y}px`, width: `${w}px` }}>
       <div class="stats-head" onPointerDown={onDown as any}>
         <GripVertical size={12} />
         {icon}
         <span>{title}</span>
+        {extra}
         <button class="icon-btn" onPointerDown={(e) => e.stopPropagation()} onClick={onClose}>
           <X size={12} />
         </button>
@@ -279,17 +280,7 @@ export function StatsPanel() {
     return (
       <>
         <ClientPoll />
-        <Floater pk="stats" title="This computer" icon={<Cpu size={12} />} w={232} onClose={() => update((x) => ((x.panels.stats = { ...x.panels.stats, open: false }), (x.panels.appstats = { ...(x.panels.appstats ?? { x: -1, y: 300 }), open: false })))}>
-          <div class="stats-body">
-            <Sec title="System">{s ? <SystemRows s={s} /> : c ? <ClientSystemRows c={c} /> : <div class="muted small">No data</div>}</Sec>
-            {s && (
-              <Sec title="Server process">
-                <ServerProcRows s={s} />
-              </Sec>
-            )}
-            <Sec title="App">{c ? <AppRows c={c} /> : <div class="muted small">…</div>}</Sec>
-          </div>
-        </Floater>
+        <Merged s={s} c={c} />
       </>
     );
   return (
@@ -334,5 +325,192 @@ export function StatsPanel() {
         </>
       )}
     </>
+  );
+}
+
+/* ---------- p7: dense merged "This computer" panel ---------- */
+const MINI_KEY = "tbw.stats.mini";
+const statsMini = signal<boolean>((() => {
+  try {
+    return localStorage.getItem(MINI_KEY) === "1";
+  } catch {
+    return false;
+  }
+})());
+function setMini(v: boolean) {
+  statsMini.value = v;
+  try {
+    localStorage.setItem(MINI_KEY, v ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+const detail = signal<string | null>(null);
+
+/** short byte counts: 1.9G, 512M, 80K */
+function sb(b: number | null | undefined): string {
+  if (b == null || !isFinite(b)) return "—";
+  const u = ["", "K", "M", "G", "T"];
+  let i = 0;
+  while (b >= 1000 && i < u.length - 1) {
+    b /= 1024;
+    i++;
+  }
+  return `${b.toFixed(b < 10 && i ? 1 : 0)}${u[i]}`;
+}
+const pc = (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(v < 10 ? 1 : 0)}%`);
+
+/** one compact cell: optional tiny bar + value */
+function C({ v, t, tip, pre }: { v?: number | null; t: ComponentChildren; tip?: string; pre?: string }) {
+  return (
+    <span class="sc" title={tip}>
+      {pre && <i class="sc-pre">{pre}</i>}
+      {v != null && <Bar v={v} />}
+      <b>{t}</b>
+    </span>
+  );
+}
+
+function MiniSpark({ h }: { h: number[] }) {
+  if (h.length < 2) return null;
+  const path = h.map((v, i) => `${i === 0 ? "M" : "L"}${(i / Math.max(1, h.length - 1)) * 100},${20 - (Math.min(100, v) / 100) * 19}`).join(" ");
+  return (
+    <svg class="sc-spark" viewBox="0 0 100 20" preserveAspectRatio="none">
+      <path d={path} />
+    </svg>
+  );
+}
+
+function Merged({ s, c }: { s: any; c: ClientStats | null }) {
+  const mini = statsMini.value;
+  const ipc = hasIpc();
+  // system figures: the server's (same machine) or the app's own
+  const sysCpu: number | null = s?.cpu ?? c?.sys_cpu ?? null;
+  const memTot: number = s?.mem_total ?? c?.mem_total ?? 0;
+  const memUsed: number = s ? s.mem_used : c && c.mem_total ? c.mem_total - c.mem_available : 0;
+  const memPct = memTot ? (memUsed / memTot) * 100 : null;
+  const cores = s?.cores ?? c?.cores ?? 1;
+  const appCpu = ipc && c ? c.app_cpu : null;
+  const appMem = ipc && c ? c.app_mem : null;
+  const gpu = ipc ? c?.procs.gpu : undefined;
+  const heapPct = c?.heap_used && c.heap_limit ? (c.heap_used / c.heap_limit) * 100 : null;
+  const diskPct = s?.disk_total ? ((s.disk_total - s.disk_free) / s.disk_total) * 100 : null;
+  const rows: { k: string; label: string; cells: ComponentChildren; det: string; spark?: number[] }[] = [
+    {
+      k: "cpu",
+      label: "CPU",
+      spark: s ? history.value : undefined,
+      cells: (
+        <>
+          <C v={sysCpu} t={pc(sysCpu)} tip="Whole machine" />
+          <C v={s?.proc_cpu} t={pc(s?.proc_cpu)} tip="Server process (share of the whole machine)" />
+          <C v={appCpu} t={pc(appCpu)} tip="App, all processes (share of the whole machine)" />
+        </>
+      ),
+      det: [
+        s?.cpu_name || c?.cpu_name || "",
+        `${cores} threads${s?.cpu_mhz ? ` · ${(s.cpu_mhz / 1000).toFixed(2)} GHz` : ""}`,
+        s?.load1 != null ? `Load ${s.load1.toFixed(2)} / ${s.load5?.toFixed(2)} / ${s.load15?.toFixed(2)}` : c?.load ? `Load ${c.load.map((x) => x.toFixed(2)).join(" / ")}` : "",
+        s?.per_core?.length ? `Per core: ${s.per_core.map((x: number) => Math.round(x)).join(" ")}` : "",
+        c && ipc ? Object.entries(c.procs).map(([k, v]) => `${k === "main" ? "Main" : k === "renderer" ? "Window" : k === "gpu" ? "GPU" : "Other"}${v.n > 1 ? `×${v.n}` : ""} ${(v.cpu / Math.max(1, c.cores)).toFixed(1)}%`).join(" · ") : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    },
+    {
+      k: "ram",
+      label: "RAM",
+      cells: (
+        <>
+          <C v={memPct} t={memTot ? `${sb(memTot - memUsed)} free` : "—"} tip="Whole machine (bar = used)" />
+          <C v={s?.proc_rss && memTot ? (s.proc_rss / memTot) * 100 : null} t={sb(s?.proc_rss)} tip="Server resident memory" />
+          <C v={appMem != null && memTot ? (appMem / memTot) * 100 : null} t={sb(appMem)} tip="App, all processes" />
+        </>
+      ),
+      det: [
+        memTot ? `Used ${fmtBytes(memUsed)} of ${fmtBytes(memTot)}` : "",
+        s?.swap_total ? `Swap ${fmtBytes(s.swap_used)} / ${fmtBytes(s.swap_total)}` : "",
+        s?.proc_threads ? `Server threads ${s.proc_threads}` : "",
+        c && ipc ? Object.entries(c.procs).map(([k, v]) => `${k === "main" ? "Main" : k === "renderer" ? "Window" : k === "gpu" ? "GPU" : "Other"} ${fmtBytes(v.mem)}`).join(" · ") : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    },
+    {
+      k: "gfx",
+      label: "GFX",
+      cells: (
+        <>
+          <C pre="GPU" t={gpu ? sb(gpu.mem) : "—"} tip="GPU process memory" />
+          <C pre="Heap" v={heapPct} t={sb(c?.heap_used)} tip="JavaScript heap" />
+          <C pre="FPS" t={c?.fps == null ? "idle" : String(c.fps)} tip="Map frames per second (idle when nothing changes)" />
+        </>
+      ),
+      det: [gpu ? `GPU process ${fmtBytes(gpu.mem)} · ${(gpu.cpu / Math.max(1, cores)).toFixed(1)}% CPU (driver buffers not included)` : "", c?.heap_used != null ? `JS heap ${fmtBytes(c.heap_used)} of ${fmtBytes(c.heap_limit ?? 0)}` : ""].filter(Boolean).join("\n"),
+    },
+    {
+      k: "io",
+      label: "I/O",
+      cells: (
+        <>
+          <C pre="Disk" v={diskPct} t={s ? `${sb(s.disk_free)}` : "—"} tip="Free space on the data disk (bar = used)" />
+          <C t={s ? `↓${sb(s.net_rx_bps)} ↑${sb(s.net_tx_bps)}` : "—"} tip="Machine network, per second" />
+          <C t={c ? `↓${sb(c.net_rx_bps)}/s` : "—"} tip="App HTTP received per second" />
+        </>
+      ),
+      det: [
+        s ? `${s.disk_mount || "data"}${s.disk_fs ? ` (${s.disk_fs})` : ""}: ${fmtBytes(s.disk_free)} free of ${fmtBytes(s.disk_total)}` : "",
+        s ? `Net since start ↓ ${fmtBytes(s.net_rx_total ?? 0)} ↑ ${fmtBytes(s.net_tx_total ?? 0)}` : "",
+        c ? `App HTTP since start ${fmtBytes(c.net_rx_total)} (WebSocket not counted)` : "",
+        s ? `${s.clients ?? 0} app${s.clients === 1 ? "" : "s"} connected · server up ${upTxt(s.uptime ?? 0)}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    },
+  ];
+  const close = () => update((x) => ((x.panels.stats = { ...x.panels.stats, open: false }), (x.panels.appstats = { ...(x.panels.appstats ?? { x: -1, y: 300 }), open: false })));
+  const toggle = (
+    <button class="icon-btn" title={mini ? "Show details" : "Mini (one line)"} onPointerDown={(e) => e.stopPropagation()} onClick={() => setMini(!mini)}>
+      {mini ? <Maximize2 size={11} /> : <Minimize2 size={11} />}
+    </button>
+  );
+  if (mini)
+    return (
+      <Floater
+        pk="stats"
+        cls="stats-dense stats-mini"
+        w={300}
+        icon={<Cpu size={11} />}
+        extra={toggle}
+        onClose={close}
+        title={
+          <span class="smini">
+            <C pre="CPU" v={sysCpu} t={pc(sysCpu)} tip="Whole machine CPU" />
+            <C pre="RAM" v={memPct} t={memTot ? sb(memTot - memUsed) : "—"} tip="Free memory" />
+            <C pre="App" t={`${pc(appCpu)} ${sb(appMem)}`} tip="App CPU / memory" />
+            <C pre="FPS" t={c?.fps == null ? "–" : String(c.fps)} />
+          </span>
+        }
+      >
+        {null}
+      </Floater>
+    );
+  return (
+    <Floater pk="stats" cls="stats-dense" w={282} title="This computer" icon={<Cpu size={11} />} extra={toggle} onClose={close}>
+      <div class="sd-grid">
+        <span />
+        <i class="sd-col">System</i>
+        <i class="sd-col">Server</i>
+        <i class="sd-col">App</i>
+        {rows.map((r) => (
+          <div key={r.k} class={`sd-row ${detail.value === r.k ? "open" : ""}`} onClick={() => (detail.value = detail.value === r.k ? null : r.k)} title="Click for details">
+            {r.spark && <MiniSpark h={r.spark} />}
+            <span class="sd-l">{r.label}</span>
+            {r.cells}
+            {detail.value === r.k && r.det && <pre class="sd-det">{r.det}</pre>}
+          </div>
+        ))}
+      </div>
+    </Floater>
   );
 }

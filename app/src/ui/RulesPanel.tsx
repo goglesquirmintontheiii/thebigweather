@@ -8,6 +8,7 @@ import { ruleLog, rulesStore, ruleState, testRule, newRule, describe } from "../
 import { Toggle } from "./panels/RadarPanel";
 import { OVERLAYS } from "../overlays/defs";
 import { fmtTime } from "../util";
+import { models as mlModels, ensureModels } from "../ml/client"; // detection models
 
 const KINDS: [RuleCond["kind"], string][] = [
   ["alert", "Weather alert nearby"],
@@ -18,6 +19,7 @@ const KINDS: [RuleCond["kind"], string][] = [
   ["aqi", "Air quality (AQI)"],
   ["metar", "METAR value"],
   ["spc", "SPC outlook risk"],
+  ["mldet", "Detection model hit nearby"], // detection models
 ];
 const EVENTS = ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning", "Warning", "Tornado Watch", "Severe Thunderstorm Watch", "Winter Storm Warning", "Special Marine Warning", "Extreme Wind Warning", "Watch", "Advisory"];
 
@@ -102,6 +104,23 @@ function RuleEditor({ r }: { r: Rule }) {
         <div class="row">
           <span>{c.kind === "aqi" ? "AQI above" : c.kind === "dbz" ? "dBZ at least" : "Within (min)"}</span>
           {num(c.value, (n) => set((x) => (x.cond.value = n)))}
+        </div>
+      )}
+      {/* detection models */}
+      {c.kind === "mldet" && ensureModels() === undefined && (
+        <div class="row">
+          <span>Model</span>
+          <select value={c.model ?? ""} onChange={(e) => set((x) => (x.cond.model = (e.target as HTMLSelectElement).value))}>
+            <option value="">Any model</option>
+            {mlModels.value.map((m) => (
+              <option key={m.ep + m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+          <span>≥</span>
+          {num(c.value, (n) => set((x) => (x.cond.value = n)), 52)}
+          <span>%</span>
         </div>
       )}
       {c.kind === "spc" && (

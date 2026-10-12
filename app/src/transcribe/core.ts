@@ -7,7 +7,93 @@ import { toneRatio, energyOf } from "../same/dsp";
 export const RATE = 16000;
 
 export interface Transcriber {
-  transcribe(pcm: Float32Array): Promise<string>;
+  /** `prompt`: optional context text (Whisper "initial prompt": vocabulary, previous words) */
+  transcribe(pcm: Float32Array, prompt?: string): Promise<string>;
+}
+
+// ---------- audio conditioning (p7) ----------
+
+/** RBJ biquad, in place. */
+function biquad(x: Float32Array, kind: "lp" | "hp", f: number, sr: number, q = Math.SQRT1_2) {
+  const w = (2 * Math.PI * f) / sr;
+  const cs = Math.cos(w);
+  const al = Math.sin(w) / (2 * q);
+  const a0 = 1 + al;
+  const b0 = (kind === "lp" ? (1 - cs) / 2 : (1 + cs) / 2) / a0;
+  const b1 = (kind === "lp" ? 1 - cs : -(1 + cs)) / a0;
+  const b2 = b0;
+  const a1 = (-2 * cs) / a0;
+  const a2 = (1 - al) / a0;
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < x.length; i++) {
+    const v = x[i];
+    const y = b0 * v + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    x2 = x1;
+    x1 = v;
+    y2 = y1;
+    y1 = y;
+    x[i] = y;
+  }
+}
+
+/**
+ * Band-pass 100–4000 Hz (4th-order each side: removes hum/rumble and the hiss above the speech band
+ * that NWR/scanner audio is full of) and an AGC that brings speech to a steady level (gain from the
+ * loud 20 ms frames' RMS, limited to ×0.5…×30, soft-clipped). Returns a new array.
+ */
+export function conditionAudio(pcm: Float32Array, sr = RATE): Float32Array {
+  const x = pcm.slice();
+  biquad(x, "hp", 100, sr, 0.54);
+  biquad(x, "hp", 100, sr, 1.31);
+  if (4000 < sr * 0.45) {
+    biquad(x, "lp", 4000, sr, 0.54);
+    biquad(x, "lp", 4000, sr, 1.31);
+  }
+  const rms: number[] = [];
+  for (let o = 0; o + FRAME <= x.length; o += FRAME) {
+    let e = 0;
+    for (let i = o; i < o + FRAME; i++) e += x[i] * x[i];
+    rms.push(Math.sqrt(e / FRAME));
+  }
+  if (!rms.length) return x;
+  const sorted = rms.slice().sort((a, b) => a - b);
+  const loud = sorted[Math.floor(sorted.length * 0.9)] || 0;
+  if (loud < 1e-5) return x;
+  const g = Math.max(0.5, Math.min(30, 0.12 / loud));
+  for (let i = 0; i < x.length; i++) {
+    const v = x[i] * g;
+    x[i] = Math.abs(v) < 0.8 ? v : Math.sign(v) * (0.8 + 0.2 * Math.tanh((Math.abs(v) - 0.8) / 0.2));
+  }
+  return x;
+}
+
+/** Weather-radio vocabulary for Whisper's prompt: spelling/casing hints, not a script. */
+export const WX_VOCAB =
+  // short comma-separated terms: the worker blocks repeated 6-token n-grams over prompt + output,
+  // so no prompt entry may be long enough to block a real phrase
+  "National Weather Service, NOAA Weather Radio, Tornado Warning, Severe Thunderstorm Warning, Flash Flood Warning, Tornado Watch, Special Weather Statement, Hazardous Weather Outlook, Doppler radar, rotation, quarter size hail, mph, take shelter";
+
+/** Prompt text: vocabulary plus local place names (counties from decoded SAME headers etc.), ≤ ~60 words. */
+export function buildPrompt(places: string[] = []): string {
+  const uniq = [...new Set(places.map((p) => p.trim()).filter(Boolean))].slice(0, 12);
+  return uniq.length ? `${WX_VOCAB}, ${uniq.join(", ")}` : WX_VOCAB;
+}
+
+/** Whisper decoder loops: few distinct words for the length. */
+export function looksLooped(t: string): boolean {
+  const w = t.toLowerCase().split(/\s+/).filter(Boolean);
+  if (w.length < 12) return false;
+  return new Set(w).size / w.length < 0.35;
+}
+
+/** Whisper sometimes echoes its prompt on unclear audio: drop text that is just (part of) the prompt. */
+export function stripPromptEcho(text: string, prompt?: string): string {
+  if (!prompt || !text) return text;
+  const n = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "").replace(/\s+/g, " ").trim();
+  const t = n(text);
+  const p = n(prompt);
+  if (t.length >= 25 && p.includes(t)) return "";
+  return text;
 }
 
 export interface Chunk {
@@ -62,7 +148,8 @@ export class Chunker {
   private vad = new Vad();
   private o: Required<ChunkerOpts>;
   constructor(opts: ChunkerOpts = {}) {
-    this.o = { maxSec: 8, minSec: 3, overlapSec: 1.5, pauseSec: 0.6, minSpeech: 0.12, ...opts };
+    // p7: longer chunks (8–15 s, cut at pauses) give Whisper more context; 2 s overlap at hard cuts
+    this.o = { maxSec: 15, minSec: 8, overlapSec: 2, pauseSec: 0.6, minSpeech: 0.12, ...opts };
   }
 
   push(x: Float32Array): Chunk[] {
@@ -193,12 +280,16 @@ export class TranscriptSession {
     private tr: Transcriber,
     private onLine: (l: Line) => void,
     private onState: (s: { busy: boolean; queued: number; error?: string }) => void = () => {},
-    opts: ChunkerOpts & { maxQueue?: number } = {},
+    opts: ChunkerOpts & { maxQueue?: number; condition?: boolean } = {},
     private clock: () => number = () => Date.now(),
   ) {
     this.chunker = new Chunker(opts);
     this.maxQueue = opts.maxQueue ?? 2;
+    this.condition = opts.condition ?? true;
   }
+  private condition: boolean;
+  /** p7: context text handed to the model with each chunk (see buildPrompt) */
+  prompt: () => string | undefined = () => undefined;
   private maxQueue: number;
 
   push(x: Float32Array) {
@@ -223,8 +314,9 @@ export class TranscriptSession {
     this.busy = true;
     this.onState({ busy: true, queued: this.queue.length });
     try {
-      const raw = await this.tr.transcribe(c.pcm);
-      const text = dedupe(this.last, cleanText(raw));
+      const prompt = this.prompt();
+      const raw = await this.tr.transcribe(this.condition ? conditionAudio(c.pcm) : c.pcm, prompt);
+      const text = dedupe(this.last, stripPromptEcho(cleanText(raw), prompt));
       if (text && !this.stopped) {
         this.last = (this.last + " " + text).split(/\s+/).slice(-30).join(" ");
         this.onLine({ at: this.clock(), text });

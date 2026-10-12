@@ -326,11 +326,20 @@ function Spectro(p: Interact & { x: Float32Array; w: Wave; h: number; marks: Mar
   const cv = useRef<HTMLCanvasElement>(null);
   const W = useWidth(box);
   const L = L_W;
+  // p7: redraw when the panel becomes visible again (a draw while hidden/collapsed can be lost)
+  const [vis, setVis] = useState(0);
   useEffect(() => {
-    const g = setupCanvas(cv.current!, W, h);
+    const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && setVis((v) => v + 1));
+    if (box.current) io.observe(box.current);
+    return () => io.disconnect();
+  }, []);
+  useEffect(() => {
+    if (!cv.current || !x.length || !(w.sr > 0)) return;
+    const g = setupCanvas(cv.current, W, h);
     const top = 4;
     const bot = h - 18;
     const cols = Math.max(1, Math.floor(W - L));
+    try {
     const i0 = ((range[0] - w.start) / 1000) * w.sr;
     const i1 = ((range[1] - w.start) / 1000) * w.sr;
     const nfft = w.sr >= 80 ? 256 : 128;
@@ -355,6 +364,10 @@ function Spectro(p: Interact & { x: Float32Array; w: Wave; h: number; marks: Mar
     tmp.getContext("2d")!.putImageData(img, 0, 0);
     g.imageSmoothingEnabled = true;
     g.drawImage(tmp, L, top, cols, rows);
+    } catch (e) {
+      g.fillStyle = "#f87171";
+      g.fillText(`Spectrogram failed: ${(e as Error).message}`, L + 8, top + 16);
+    }
     g.fillStyle = "#8b97a6";
     g.textAlign = "right";
     const ny = w.sr / 2;
@@ -368,7 +381,7 @@ function Spectro(p: Interact & { x: Float32Array; w: Wave; h: number; marks: Mar
     timeAxis(g, range, L, W, h - 4, bot);
     drawSel(g, p.sel, range, L, W, top, bot);
     drawMarks(g, marks, range, L, W, top, bot);
-  }, [x, range, W, h, marks, p.sel, settings.value.utc]);
+  }, [x, w, range, W, h, marks, p.sel, settings.value.utc, vis]);
   return (
     <div ref={box} class="sk-canvas">
       <canvas ref={cv} style={{ width: `${W}px`, height: `${h}px` }} {...(handlers(p, L, W) as any)} />
@@ -610,10 +623,12 @@ export function ShakeViewer({ st, onClose }: { st: ShakeSta; onClose: () => void
       }
       return n;
     });
+    // p7: results/progress of a superseded load (window or channel change) must not land on the new one —
+    // a stale "100 %" used to stick while the current load's data never replaced it
     for (const d of defs)
-      fetchRange(d.st, d.ch, win[0], win[1], (f) => setData((o) => ({ ...o, [d.key]: { ...o[d.key], prog: f } })), ac.signal)
-        .then((w) => setData((o) => ({ ...o, [d.key]: { w, prog: 1 } })))
-        .catch((e) => e.name !== "AbortError" && setData((o) => ({ ...o, [d.key]: { prog: 1, err: e.message } })));
+      fetchRange(d.st, d.ch, win[0], win[1], (f) => !ac.signal.aborted && setData((o) => ({ ...o, [d.key]: { ...o[d.key], prog: Math.min(f, 0.99) } })), ac.signal)
+        .then((w) => !ac.signal.aborted && setData((o) => ({ ...o, [d.key]: { w, prog: 1 } })))
+        .catch((e) => e.name !== "AbortError" && !ac.signal.aborted && setData((o) => ({ ...o, [d.key]: { prog: 1, err: e.message } })));
     setLoadedAt(Date.now());
     return () => ac.abort();
   }, [defKey, win[0], win[1]]);

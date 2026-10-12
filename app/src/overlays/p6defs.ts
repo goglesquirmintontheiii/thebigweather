@@ -95,49 +95,7 @@ const severe: OverlayDef[] = [
     },
     note: "NWS Damage Assessment Toolkit: surveyed tornado tracks, damage points and swaths, colored by EF rating (grey EFU, blue EF0 … magenta EF5).",
   },
-  {
-    id: "tornadohist",
-    name: "Tornado history (SPC 1950–2024)",
-    group: "Severe",
-    refresh: 0,
-    view: "bbox",
-    minzoom: 4,
-    options: [
-      { key: "from", label: "From", choices: ["1950", "1960", "1970", "1980", "1990", "2000", "2010", "2015", "2020", "2022", "2023", "2024"].map((y) => [y, y]), def: "2000" },
-      { key: "to", label: "To", choices: ["2024", "2023", "2022", "2020", "2015", "2010", "2000", "1990", "1980", "1970"].map((y) => [y, y]), def: "2024" },
-      { key: "minmag", label: "Rating", choices: [["0", "All (F/EF0+)"], ["1", "EF1+"], ["2", "EF2+"], ["3", "EF3+ (strong)"], ["4", "EF4+ (violent)"]], def: "1" },
-    ],
-    style: { opacity: 0.7, size: 1, labels: false },
-    prepare: (fc) => {
-      const o = efPrep(fc, "mag");
-      for (const f of o.features) f.properties._d = day(f.properties.date); // date is epoch ms
-      return o;
-    },
-    layers: (s, st) => [
-      { id: `${s}-case`, type: "line", source: s, filter: LINE, layout: { "line-cap": "round", "line-sort-key": ["get", "_ef"] }, paint: { "line-color": "#000", "line-width": ["interpolate", ["linear"], ["zoom"], 4, ["+", 1.5, ["*", 0.5, ["get", "_ef"]]], 10, ["+", 4, ["get", "_ef"]]], "line-opacity": 0.5 * st.opacity } } as LayerSpecification,
-      { id: `${s}-track`, type: "line", source: s, filter: LINE, layout: { "line-cap": "round", "line-sort-key": ["get", "_ef"] }, paint: { "line-color": EF, "line-width": ["interpolate", ["linear"], ["zoom"], 4, ["*", st.size, ["+", 0.8, ["*", 0.4, ["get", "_ef"]]]], 10, ["*", st.size, ["+", 2, ["*", 0.8, ["get", "_ef"]]]]], "line-opacity": st.opacity } } as LayerSpecification,
-      // touchdown points for tracks without a length
-      { id: `${s}-pt`, type: "circle", source: s, filter: POINT, paint: { "circle-color": EF, "circle-radius": 3 * st.size, "circle-opacity": st.opacity, "circle-stroke-color": "#000", "circle-stroke-width": 0.6 } } as LayerSpecification,
-      ...(st.labels ? [{ id: `${s}-label`, type: "symbol", source: s, filter: LINE, minzoom: 8, layout: { "symbol-placement": "line-center", "text-field": ["get", "_d"], "text-font": font, "text-size": 10 }, paint: halo } as LayerSpecification] : []),
-    ],
-    click: (p) => {
-      const n = efNum(p.mag);
-      const yr = p.date != null && p.date !== "" ? new Date(typeof p.date === "number" || /^-?\d+$/.test(String(p.date)) ? +p.date : Date.parse(p.date)).getUTCFullYear() : NaN;
-      return {
-        title: `${yr < 2007 ? "F" : "EF"}${n < 0 ? "U" : n} tornado · ${day(p.date)}`,
-        sub: `SPC tornado database${p.st ? ` · ${p.st}` : ""}`,
-        color: EF_COLORS[n + 1],
-        rows: [
-          ["Length", p.len_mi != null ? `${(+p.len_mi).toFixed(1)} mi` : "—"],
-          ["Width", p.wid_yd != null ? `${Math.round(+p.wid_yd)} yd` : "—"],
-          ["Injuries", String(p.inj ?? 0)],
-          ["Fatalities", String(p.fat ?? 0)],
-        ],
-        link: ["SPC severe weather database", "https://www.spc.noaa.gov/wcm/"],
-      };
-    },
-    note: "SPC tornado tracks (start to end point), colored by (E)F rating. Zoom 4+. The years pick the range.",
-  },
+  // p7: "Tornado history (SPC 1950–2024)" moved to Historical Storms → Tornadoes (search + replay)
 ];
 
 // ---------- Tropical ----------
@@ -398,7 +356,7 @@ function place(defs: OverlayDef[], afterId?: string, anchorGroup?: string) {
   OVERLAYS.splice(i + 1, 0, ...defs);
 }
 
-place([severe[1], severe[0]], "lsr"); // history under the surveys (drawn in list order)
+place([severe[0]], "lsr"); // p7: SPC tornado history moved to Historical Storms → Tornadoes
 place(tropical, "nhc");
 place(flooding, "riverflood");
 place(roads, undefined, "Traffic");

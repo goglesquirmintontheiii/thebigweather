@@ -16,6 +16,7 @@ mod api;
 mod config;
 mod health;
 mod hist;
+mod ml;
 mod hub;
 mod intlradar;
 mod radar;
@@ -78,6 +79,17 @@ enum Cmd {
     Camdb,
     /// Run as a Windows service (started by the service manager; see start.ps1 -InstallService)
     Service,
+    /// Local detection-model worker for the desktop app ("train / run on this computer"):
+    /// the full server bound to 127.0.0.1:<port> with <data> as the data folder, no token for
+    /// this machine and no NWS alert polling. Same /api/ml/* API as the main server.
+    MlWorker {
+        /// Data folder (config.toml, models, caches); created when missing
+        #[arg(long)]
+        data: PathBuf,
+        /// Port on 127.0.0.1
+        #[arg(long, default_value_t = 8790)]
+        port: u16,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -91,6 +103,12 @@ fn main() -> anyhow::Result<()> {
             .init();
     }
     let mut cli = Cli::parse();
+    if let Some(Cmd::MlWorker { data, .. }) = &cli.cmd {
+        if cli.config.is_none() {
+            std::fs::create_dir_all(data).ok();
+            cli.config = Some(data.join("config.toml"));
+        }
+    }
     let config = cli.config.clone().unwrap_or_else(platform::default_config);
     cli.config = Some(config);
     if matches!(cli.cmd, Some(Cmd::Service)) {
@@ -166,6 +184,18 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
             return Ok(false);
         }
         Cmd::Inspect { files } => return inspect(files).map(|_| false),
+        Cmd::MlWorker { data, port } => {
+            // in-memory overrides only (the worker's config file keeps its own values)
+            let data = if data.is_absolute() { data.clone() } else { std::env::current_dir()?.join(data) };
+            cfg.server.data_dir = data;
+            cfg.server.bind = format!("127.0.0.1:{port}");
+            cfg.server.local_no_auth = true;
+            cfg.alerts.enabled = false;
+            cfg.ml.enabled = true;
+            if cfg.server.name == "TheBigWeather" {
+                cfg.server.name = "TheBigWeather ML worker".into();
+            }
+        }
         Cmd::Run | Cmd::Camdb | Cmd::Service => {}
     }
 
@@ -279,6 +309,15 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
         stats::spawn(hub.clone(), data_dir.clone(), profile.stats_interval_ms, stats_latest.clone());
     }
 
+    // detection models: data access shares the radar / grid services; sites come from AppState
+    let ml_state: Arc<std::sync::OnceLock<std::sync::Weak<api::AppState>>> = Arc::new(std::sync::OnceLock::new());
+    let ml = {
+        let s = ml_state.clone();
+        let sites_fn: Box<dyn Fn() -> Vec<sites::Site> + Send + Sync> = Box::new(move || s.get().and_then(|w| w.upgrade()).map(|st| st.sites.read().clone()).unwrap_or_else(sites::embedded));
+        let net = ml::source::NetSource::new(http.clone(), radar.clone(), grids.clone(), cfg.radar.chunk_buckets.clone(), &data_dir, profile.budget.other_mb / 4, profile.threads.div_ceil(2).max(1), sites_fn);
+        ml::Ml::new(&cfg.ml, &data_dir, Arc::new(net), Some(hub.clone()), profile.name == "full", profile.budget.radar_mb)
+    };
+
     let bind = cfg.server.bind.clone();
     let other_mb = profile.budget.other_mb;
     let profile_full = profile.name == "full";
@@ -309,7 +348,10 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
             *o.fixtures.write() = cli.overlay_fixtures.clone();
             o
         },
+        ml: ml.clone(),
     });
+    ml_state.set(Arc::downgrade(&state)).ok();
+    ml.spawn();
 
     recorder::spawn(state.clone());
     collab::spawn_janitor(state.collab.clone());

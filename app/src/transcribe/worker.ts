@@ -12,7 +12,7 @@ import ortMjs from "../../node_modules/onnxruntime-web/dist/ort-wasm-simd-thread
 
 declare const self: DedicatedWorkerGlobalScope;
 
-type Asr = (pcm: Float32Array, opts?: Record<string, unknown>) => Promise<{ text: string } | { text: string }[]>;
+type Asr = ((pcm: Float32Array, opts?: Record<string, unknown>) => Promise<{ text: string } | { text: string }[]>) & { model?: any; tokenizer?: any; processor?: any };
 let asr: Asr | null = null;
 let loading: Promise<void> | null = null;
 
@@ -63,6 +63,42 @@ async function load(model: string, device: string) {
   self.postMessage({ type: "ready", device: dev, model });
 }
 
+// ---------- p7: decoding with a prompt, repeat blocking and a sampled fallback ----------
+
+const looped = (t: string) => {
+  const w = t.toLowerCase().split(/\s+/).filter(Boolean);
+  return w.length >= 12 && new Set(w).size / w.length < 0.35;
+};
+
+/** Whisper with an "initial prompt": <|startofprev|> prompt tokens, then the usual start tokens;
+ * only the newly generated tokens are decoded. Falls back to the plain pipeline when the
+ * model/tokenizer don't expose what's needed. */
+async function decode(pcm: Float32Array, prompt: string | undefined, gen: Record<string, unknown>): Promise<string> {
+  const a = asr!;
+  const tok = a.tokenizer;
+  const model = a.model;
+  const gc = model?.generation_config;
+  if (prompt && tok && model && a.processor && gc?.decoder_start_token_id != null) {
+    try {
+      const prev = tok.encode("<|startofprev|>", { add_special_tokens: false }) as number[];
+      if (prev.length === 1) {
+        const ids = (tok.encode(" " + prompt.trim(), { add_special_tokens: false }) as number[]).slice(-120);
+        const start = [gc.decoder_start_token_id, ...(gc.no_timestamps_token_id != null ? [gc.no_timestamps_token_id] : [])];
+        const dec = [prev[0], ...ids, ...start];
+        const feats = await a.processor(pcm);
+        const out = await model.generate({ inputs: feats.input_features, decoder_input_ids: dec, max_new_tokens: 200, ...gen });
+        const seq: number[] = (out[0] ?? out).tolist().map(Number);
+        const body = seq.slice(0, dec.length).every((v, i) => v === dec[i]) ? seq.slice(dec.length) : seq.slice(seq.lastIndexOf(start[start.length - 1]) + 1);
+        return String(tok.decode(body, { skip_special_tokens: true })).trim();
+      }
+    } catch (err) {
+      console.warn("whisper prompt decode failed, using the plain pipeline", err);
+    }
+  }
+  const r = await a(pcm, gen);
+  return (Array.isArray(r) ? r.map((x) => x.text).join(" ") : r.text).trim();
+}
+
 self.onmessage = async (e: MessageEvent) => {
   const m = e.data;
   if (m.type === "load") {
@@ -77,8 +113,10 @@ self.onmessage = async (e: MessageEvent) => {
       await loading;
       if (!asr) throw new Error("model not loaded");
       const t0 = performance.now();
-      const r = await asr(m.pcm);
-      const text = (Array.isArray(r) ? r.map((x) => x.text).join(" ") : r.text).trim();
+      // greedy with 6-token repeat blocking (the prompt counts too, its terms are shorter); a looping result is retried once, sampled at T=0.4 and
+      // without the prompt (Whisper's temperature fallback, single step to keep CPU use bounded)
+      let text = await decode(m.pcm, m.prompt, { no_repeat_ngram_size: 6 });
+      if (looped(text)) text = await decode(m.pcm, undefined, { no_repeat_ngram_size: 4, do_sample: true, temperature: 0.4, top_k: 0 });
       self.postMessage({ type: "result", id: m.id, text, ms: performance.now() - t0 });
     } catch (err: any) {
       self.postMessage({ type: "error", id: m.id, message: String(err?.message ?? err) });

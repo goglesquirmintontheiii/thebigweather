@@ -1,8 +1,9 @@
 // Floating media-player windows for radio streams: DVR seek bar, jump back, go live, record.
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { players, closePlayer, type PlayerWin } from "../radio";
-import { X, Play, Pause, RotateCcw, Radio, Circle, Square, Download, Volume2, VolumeX } from "lucide-preact";
+import { players, closePlayer, setPlayerCompact, nowPlaying, type PlayerWin } from "../radio";
+import { X, Play, Pause, RotateCcw, Radio, Circle, Square, Download, Volume2, VolumeX, Minimize2, Maximize2, Siren, Captions } from "lucide-preact";
+import { openPanel } from "../store";
 import { fmtBytes } from "../util";
 import { ToolButtons, SamePanel, TranscriptPanel } from "./RadioTools";
 
@@ -59,6 +60,9 @@ function Player({ w }: { w: PlayerWin }) {
         <span class={`rp-live ${live && !paused ? "on" : ""}`} title={live ? "At the live edge" : "Behind live"}>
           {live ? "LIVE" : `−${mmss(behind)}`}
         </span>
+        <button class="icon-btn rp-compact" title="Compact: shrink to the small player (playback, SAME and transcript keep running)" onClick={() => setPlayerCompact(w.id, true)}>
+          <Minimize2 size={14} />
+        </button>
         <button class="icon-btn" title="Close" onClick={() => closePlayer(w.id)}>
           <X size={14} />
         </button>
@@ -116,12 +120,68 @@ function Player({ w }: { w: PlayerWin }) {
   );
 }
 
+/** p7: the big player shrunk to a small bar, like the simple player; decoders keep running. */
+function MiniPlayer({ w }: { w: PlayerWin }) {
+  const p = w.p;
+  const s = p.snap.value;
+  const [vol, setVol] = useState(p.audio.volume || 1);
+  const seekable = s.mode !== "plain" && s.end > s.start;
+  const behind = Math.max(0, s.end - s.cur);
+  const live = seekable ? behind < 4 : s.status === "playing";
+  const paused = s.status === "paused";
+  const dot = s.status === "playing" ? "playing" : s.status === "error" ? "error" : "loading";
+  const sOn = p.same.on.value;
+  const tOn = p.tx.on.value;
+  const tone = sOn ? p.same.tone.value : null;
+  const st = s.status === "playing" ? (live ? "Live" : `−${mmss(behind)} behind live`) : s.status === "error" ? s.note ?? "Error" : s.status === "paused" ? "Paused" : "Connecting…";
+  return (
+    <div class="now-playing rp-mini glass">
+      <span class={`np-dot ${dot}`} />
+      <div class="np-name">
+        <b>{p.stream.call ?? p.stream.name}</b>
+        <small class="muted">
+          {st}
+          {s.rec && <span class="rp-mini-rec"> · ● REC</span>}
+        </small>
+      </div>
+      {sOn && (
+        <span class={`rp-ind ${tone ? "tone" : ""}`} title={tone ? "Alert tone on air" : "SAME decoder running"}>
+          <Siren size={10} />
+        </span>
+      )}
+      {tOn && (
+        <span class="rp-ind" title="Transcribing">
+          <Captions size={10} />
+        </span>
+      )}
+      <button class="icon-btn" title={paused ? "Play" : "Pause"} onClick={() => p.toggle()}>
+        {paused ? <Play size={13} /> : <Pause size={13} />}
+      </button>
+      <input type="range" min={0} max={1} step={0.05} value={vol} title="Volume" onInput={(e) => (setVol(+(e.target as HTMLInputElement).value), p.setVolume(+(e.target as HTMLInputElement).value))} />
+      <button class="icon-btn rp-expand" title="Expand to the full player (seek, record, SAME, transcript)" onClick={() => setPlayerCompact(w.id, false)}>
+        <Maximize2 size={13} />
+      </button>
+      <button class="icon-btn" title="Close" onClick={() => closePlayer(w.id)}>
+        <X size={13} />
+      </button>
+    </div>
+  );
+}
+
 export function RadioPlayers() {
+  const minis = players.value.filter((w) => w.compact);
+  // sits under the simple player bar when that one is showing too
+  const top = 12 + (nowPlaying.value && openPanel.value !== "radio" ? 62 : 0);
   return (
     <>
-      {players.value.map((w) => (
-        <Player key={w.id} w={w} />
-      ))}
+      {players.value.map((w) => (w.compact ? null : <Player key={w.id} w={w} />))}
+      {minis.length > 0 && (
+        <div class="rp-minis" style={{ top: `${top}px` }}>
+          {minis.map((w) => (
+            <MiniPlayer key={w.id} w={w} />
+          ))}
+        </div>
+      )}
     </>
   );
 }

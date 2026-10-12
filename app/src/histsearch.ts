@@ -125,12 +125,19 @@ export function addRecent(r: { label: string; kind: "range" | "warning" | "tropi
   });
 }
 
-/** "Replay this" on an alert (live or replayed): its whole event ± before/after. */
-export function replayAlert(a: any) {
+/** "Replay this" on an alert (live or replayed): its whole event ± before/after, or (p7) an
+ * explicit window picked in the Replay popover. */
+export function replayAlert(a: any, win?: [number, number]) {
   const p = a.properties;
   const span = alertSpan(p);
   const b = bboxOf(a.geometry);
-  openHistory({ label: `${p.event}${p.senderName ? ` · ${String(p.senderName).replace(/^NWS /, "")}` : ""}`, kind: "warning", start: span.start, end: span.end, center: b ? bboxCenter(b) : undefined, bbox: b ?? undefined, ref: p.vtec_id ?? p.id });
+  const [start, end] = win ?? [span.start, span.end];
+  openHistory({ label: `${p.event}${p.senderName ? ` · ${String(p.senderName).replace(/^NWS /, "")}` : ""}`, kind: "warning", start, end, padded: !!win, center: b ? bboxCenter(b) : undefined, bbox: b ?? undefined, ref: p.vtec_id ?? p.id });
+}
+
+/** p7: the event span of an alert (for the Replay popover's slider). */
+export function alertEventSpan(a: any): { start: number; end: number } {
+  return alertSpan(a.properties);
 }
 
 // ---------- map preview (warning polygons, tropical tracks) ----------
@@ -153,7 +160,7 @@ export function catOf(p: { cat?: any; vmax?: number; status?: string }): string 
   return v < 34 ? "TD" : v < 64 ? "TS" : v < 83 ? "C1" : v < 96 ? "C2" : v < 113 ? "C3" : v < 137 ? "C4" : "C5";
 }
 
-type Preview = { kind: "warning" | "tropical"; fc: any; id: string; pinned: boolean; title: string };
+type Preview = { kind: "warning" | "tropical" | "tornado"; fc: any; id: string; pinned: boolean; title: string };
 export const preview = signal<Preview | null>(null);
 const EMPTY = { type: "FeatureCollection", features: [] };
 
@@ -163,6 +170,8 @@ function trackPoints(fc: any) {
 
 /** Map-ready features: polygons; track segments and points with a colour and label. */
 function styled(p: Preview): any {
+  // p7: SPC tornado tracks, coloured by rating (properties._c, _sel set by the Tornadoes tab)
+  if (p.kind === "tornado") return { type: "FeatureCollection", features: p.fc.features.filter((f: any) => f.geometry).map((f: any) => ({ ...f, properties: { ...f.properties, _k: f.geometry.type === "Point" ? "torpt" : "tor" } })) };
   if (p.kind === "warning") return { type: "FeatureCollection", features: p.fc.features.filter((f: any) => f.geometry).map((f: any) => ({ ...f, properties: { ...f.properties, _k: "poly" } })) };
   const pts = trackPoints(p.fc);
   const out: any[] = [];
@@ -196,6 +205,9 @@ function ensureLayers(m: MLMap) {
   add({ id: "hs-seg", type: "line", source: "hs", filter: k("seg"), layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": ["coalesce", ["get", "_c"], "#fff"], "line-width": 3.5 } });
   add({ id: "hs-pt", type: "circle", source: "hs", filter: k("pt"), paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 3, 3, 8, 6], "circle-color": ["coalesce", ["get", "_c"], "#fff"], "circle-stroke-color": "#000", "circle-stroke-width": 1 } });
   add({ id: "hs-lbl", type: "symbol", source: "hs", filter: ["all", k("pt"), ["any", ["==", ["get", "_syn"], 1], [">=", ["zoom"], 5.5]]], layout: { "text-field": ["get", "_l"], "text-font": ["Noto Sans Regular"], "text-size": 10.5, "text-offset": [0.8, 0], "text-anchor": "left", "text-optional": true }, paint: { "text-color": "#e5e7eb", "text-halo-color": "#000", "text-halo-width": 1.3 } });
+  add({ id: "hs-tor-case", type: "line", source: "hs", filter: k("tor"), layout: { "line-cap": "round", "line-sort-key": ["get", "_sel"] }, paint: { "line-color": "#000", "line-width": ["case", ["==", ["get", "_sel"], 1], 9, 4], "line-opacity": 0.6 } });
+  add({ id: "hs-tor", type: "line", source: "hs", filter: k("tor"), layout: { "line-cap": "round", "line-sort-key": ["get", "_sel"] }, paint: { "line-color": ["coalesce", ["get", "_c"], "#fff"], "line-width": ["case", ["==", ["get", "_sel"], 1], 5.5, 2.2], "line-opacity": ["case", ["==", ["get", "_sel"], 1], 1, 0.75] } });
+  add({ id: "hs-torpt", type: "circle", source: "hs", filter: k("torpt"), paint: { "circle-radius": ["case", ["==", ["get", "_sel"], 1], 7, 3.5], "circle-color": ["coalesce", ["get", "_c"], "#fff"], "circle-stroke-color": "#000", "circle-stroke-width": 1 } });
   add({ id: "hs-pos-ring", type: "circle", source: "hs-pos", paint: { "circle-radius": 15, "circle-color": "rgba(0,0,0,0)", "circle-stroke-color": "#fff", "circle-stroke-width": 2.5 } });
   add({ id: "hs-pos", type: "circle", source: "hs-pos", paint: { "circle-radius": 7, "circle-color": ["coalesce", ["get", "_c"], "#fff"], "circle-stroke-color": "#000", "circle-stroke-width": 1.5 } });
   add({ id: "hs-pos-lbl", type: "symbol", source: "hs-pos", layout: { "text-field": ["get", "_l"], "text-font": ["Noto Sans Bold"], "text-size": 12, "text-offset": [0, -1.9], "text-anchor": "bottom", "text-allow-overlap": true }, paint: { "text-color": "#fff", "text-halo-color": "#000", "text-halo-width": 1.6 } });

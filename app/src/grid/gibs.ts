@@ -83,18 +83,38 @@ async function resolve(g: (typeof GIBS)[number]): Promise<{ newest?: number; for
   const stepMs = g.step * 60_000;
   const when = newest ?? Math.floor((Date.now() - (g.step >= 1440 ? 86400_000 : g.layer.startsWith("Himawari") ? 2 * LATENCY : LATENCY)) / stepMs) * stepMs;
   let format = g.format;
-  for (const f of [g.format, g.format === "png" ? "jpg" : "png"]) {
+  // p7: the newest advertised time is sometimes not populated yet (GIBS then serves an empty tile or an
+  // error), which left the initial (newest) frame blank until playback reached an older one: step back
+  // to the newest time whose probe tile has real content.
+  let real = when;
+  const probe = async (t: number, f: string): Promise<"ok" | "empty" | "fail"> => {
     try {
-      const r = await fetch(`${BASE}/${g.layer}/default/${gtime(when, g.step)}/GoogleMapsCompatible_Level${g.level}/1/0/1.${f}`);
-      if (r.ok && (r.headers.get("content-type") ?? "").startsWith("image/")) {
-        format = f as "png" | "jpg";
-        break;
-      }
+      const r = await fetch(`${BASE}/${g.layer}/default/${gtime(t, g.step)}/GoogleMapsCompatible_Level${g.level}/1/0/1.${f}`);
+      if (!r.ok || !(r.headers.get("content-type") ?? "").startsWith("image/")) return "fail";
+      const b = await r.blob();
+      return b.size < (f === "png" ? 900 : 2500) ? "empty" : "ok";
     } catch {
-      /* offline */
+      return "fail";
+    }
+  };
+  let found = false;
+  for (const f of [g.format, g.format === "png" ? "jpg" : "png"]) {
+    const r = await probe(when, f);
+    if (r !== "fail") {
+      format = f as "png" | "jpg";
+      found = r === "ok";
+      break;
     }
   }
-  const out = { at: Date.now(), newest: when, format };
+  if (!found && g.step < 1440)
+    for (let k = 1; k <= 6; k++) {
+      const t = when - k * stepMs;
+      if ((await probe(t, format)) === "ok") {
+        real = t;
+        break;
+      }
+    }
+  const out = { at: Date.now(), newest: real, format };
   resolved.set(g.id, out);
   return out;
 }
@@ -138,6 +158,11 @@ const ready = new Set<number>();
 let renders = 0;
 const opened = new Map<number, number>();
 
+/** p7: per-frame tile outcomes for the current view; a frame whose tiles all failed is empty. */
+const tileOk = new Map<number, number>();
+const tileErr = new Map<number, number>();
+const emptyFrame = (i: number) => !tileOk.get(i) && (tileErr.get(i) ?? 0) > 0;
+
 function frameLoaded(m: MLMap, i: number): boolean {
   if ((opened.get(i) ?? Infinity) >= renders) return false;
   try {
@@ -172,6 +197,8 @@ async function build() {
   clear(m);
   ready.clear();
   opened.clear();
+  tileOk.clear();
+  tileErr.clear();
   held = -1;
   const end = historyEnd.value;
   const stepMs = g.step * 60_000;
@@ -201,7 +228,7 @@ async function build() {
   });
   gibsTimes.value = ts;
   frameCount.value = ts.length;
-  setFrameReady((i) => ready.has(i) || (frameLoaded(m, i) && (ready.add(i), true)));
+  setFrameReady((i) => !emptyFrame(i) && (ready.has(i) || (frameLoaded(m, i) && (ready.add(i), true))));
   frameIndex.value = ts.length - 1;
   shownSig = "";
   show();
@@ -218,6 +245,7 @@ function show() {
   const cur = Math.min(frameIndex.value, n - 1);
   const ahead = playing.value ? 3 : 1;
   const want = new Set<number>([cur]);
+  let changed = false;
   for (let k = 1; k <= ahead && k < n; k++) want.add((cur + k) % n);
   // open the preload window first so the current frame's loaded state is meaningful
   for (let i = 0; i < n; i++)
@@ -225,6 +253,7 @@ function show() {
       const vis = want.has(i) || i === held ? "visible" : "none";
       if (m.getLayoutProperty(lid(i, p), "visibility") !== vis) {
         m.setLayoutProperty(lid(i, p), "visibility", vis);
+        changed = true;
         if (vis === "visible") opened.set(i, renders);
       }
       if (vis === "none") ready.delete(i); // its tiles go back to the cache; re-check when it's reopened
@@ -238,13 +267,22 @@ function show() {
   if (loaded) {
     ready.add(cur);
     held = cur;
+    // p7: paused on a frame whose every tile failed (newest time not published yet): fall back to
+    // the newest older frame instead of leaving the map blank until play is pressed
+    if (!playing.value && emptyFrame(cur) && cur > 0) {
+      queueMicrotask(() => {
+        if (frameIndex.peek() === cur) frameIndex.value = cur - 1;
+      });
+    }
   }
   const visible = loaded ? cur : held >= 0 ? held : cur; // first load: only the current time ever draws
   const sig = `${cur}|${visible}|${op}`;
   if (sig !== shownSig) {
     shownSig = sig;
+    changed = true;
     for (let i = 0; i < n; i++) for (let p = 0; p < parts; p++) m.setPaintProperty(lid(i, p), "raster-opacity", i === visible ? op : 0);
   }
+  if (changed) m.triggerRepaint(); // p7: newly opened/shown sources render (and fetch) without user interaction
 }
 
 /** Tiles arriving or the view moving re-evaluate which frame can be shown. */
@@ -253,9 +291,15 @@ function hook(m: MLMap) {
   if (hooked === m) return;
   hooked = m;
   m.on("render", () => void renders++);
-  m.on("sourcedata", (e: { sourceId?: string; isSourceLoaded?: boolean }) => {
+  m.on("error", (e: { sourceId?: string; tile?: unknown } & object) => {
+    if (!e.sourceId?.startsWith("gibs-") || !e.tile) return;
+    const i = Number(e.sourceId.split("-")[1]);
+    tileErr.set(i, (tileErr.get(i) ?? 0) + 1);
+  });
+  m.on("sourcedata", (e: { sourceId?: string; isSourceLoaded?: boolean; tile?: unknown }) => {
     if (!e.sourceId?.startsWith("gibs-") || settings.value.weather.kind !== "gibs") return;
     const i = Number(e.sourceId.split("-")[1]);
+    if (e.tile) tileOk.set(i, (tileOk.get(i) ?? 0) + 1);
     if (frameLoaded(m, i)) ready.add(i);
     if (i === Math.min(frameIndex.value, gibsTimes.value.length - 1)) show();
   });
@@ -266,6 +310,8 @@ function hook(m: MLMap) {
   m.on("moveend", () => {
     if (settings.value.weather.kind !== "gibs") return;
     ready.clear();
+    tileOk.clear();
+    tileErr.clear();
     if (held >= 0) ready.add(held); // keep showing what is on screen while the rest catches up
     show();
   });

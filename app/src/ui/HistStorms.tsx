@@ -3,7 +3,8 @@
 
 import { signal } from "@preact/signals";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { History, Search, Play, ExternalLink, Trash2, RotateCcw, Wind, TriangleAlert, Clock } from "lucide-preact";
+import { History, Search, Play, ExternalLink, Trash2, RotateCcw, Wind, TriangleAlert, Clock, Tornado, X } from "lucide-preact";
+import { mapRef } from "../map/mapview";
 import { api } from "../api";
 import { settings, update } from "../store";
 import { CenterModal } from "./CenterModal";
@@ -26,11 +27,13 @@ import {
   SS_COLORS,
   SS_NAMES,
   addRecent,
+  replayAlert,
+  alertEventSpan,
   type BBox,
 } from "../histsearch";
 
 export { histStormsOpen };
-const tab = signal<"warnings" | "tropical" | "recent">("warnings");
+const tab = signal<"warnings" | "tropical" | "tornado" | "recent">("warnings");
 
 // ---------- formatting ----------
 const tz = () => (settings.value.utc ? "UTC" : undefined);
@@ -754,6 +757,396 @@ function TropicalTab() {
   );
 }
 
+// ---------- p7: generic replay-window slider (tornadoes, "Replay this" on alerts) ----------
+
+/** Two-handle window slider over [min, max] with an optional event span marked on the strip. */
+export function WindowSlider({ min, max, win, onWin, step = 5 * 60_000, event }: { min: number; max: number; win: [number, number]; onWin: (w: [number, number]) => void; step?: number; event?: [number, number] }) {
+  const steps = Math.max(1, Math.round((max - min) / step));
+  const toI = (t: number) => Math.round((t - min) / step);
+  const toT = (i: number) => Math.min(max, min + i * step);
+  const pct = (t: number) => `${((t - min) / (max - min || 1)) * 100}%`;
+  return (
+    <div class="hs-life hs-wslider">
+      <div class="hs-strip">
+        {event && <i class="hs-ev-span" style={{ left: pct(event[0]), width: `${((Math.max(event[1], event[0] + step) - event[0]) / (max - min || 1)) * 100}%`, height: "100%" }} title={`Event: ${fmtDate(event[0])} → ${fmtDate(event[1])}`} />}
+        <span class="hs-win" style={{ left: pct(win[0]), width: `${((win[1] - win[0]) / (max - min || 1)) * 100}%` }} />
+      </div>
+      <div class="hs-dual">
+        <input type="range" aria-label="Window start" min={0} max={steps} value={toI(win[0])} onInput={(e) => onWin([Math.min(toT(+(e.target as HTMLInputElement).value), win[1] - step), win[1]])} />
+        <input type="range" aria-label="Window end" min={0} max={steps} value={toI(win[1])} onInput={(e) => onWin([win[0], Math.max(toT(+(e.target as HTMLInputElement).value), win[0] + step)])} />
+      </div>
+      <div class="hs-life-lbl small">
+        <span>{fmtDate(win[0])}</span>
+        <b>{dur(win[1] - win[0])}</b>
+        <span>{fmtDate(win[1])}</span>
+      </div>
+    </div>
+  );
+}
+
+// ---------- p7: tornadoes (SPC database 1950–2024) ----------
+interface TorItem {
+  om: number;
+  date: number;
+  mag: number | null;
+  inj: number;
+  fat: number;
+  len_mi: number;
+  wid_yd: number;
+  st: string;
+  geom: any;
+  key: string;
+}
+/** EFU, EF0…EF5 (same as the damage-survey overlays; not imported to keep p6defs out of this module's import order) */
+const EF_COLORS = ["#9ca3af", "#60a5fa", "#22c55e", "#facc15", "#f97316", "#ef4444", "#d946ef"];
+const TOR_FIRST = 1950;
+const TOR_LAST = 2024;
+/** NEXRAD Level II archive (NCEI / AWS) starts in 1991 for the first sites. */
+const L2_FIRST = Date.UTC(1991, 5, 1);
+const torForm = signal({ mode: "years" as "years" | "dates", y0: 2011, y1: TOR_LAST, d0: "2013-05-20", d1: "2013-05-20", states: "", minmag: 2, minInj: 0, minFat: 0, area: "view" as "view" | "all", sort: "date" as "date" | "mag" | "fat" | "len" });
+const torRes = signal<{ items: TorItem[]; total: number; capped: boolean; loading: boolean; error?: string; searched: boolean }>({ items: [], total: 0, capped: false, loading: false, searched: false });
+const torSel = signal<{ item: TorItem; win: [number, number] } | null>(null);
+const torShowAll = signal(true);
+const TOR_LIMIT = 500;
+
+const efOf = (t: TorItem) => (t.mag == null || t.mag < 0 ? -1 : t.mag);
+const efLabel = (t: TorItem) => `${new Date(t.date).getUTCFullYear() < 2007 ? "F" : "EF"}${efOf(t) < 0 ? "U" : efOf(t)}`;
+const efColor = (t: TorItem) => EF_COLORS[efOf(t) + 1] ?? EF_COLORS[0];
+/** rough on-ground time: SPC has no end time; ~30 mph forward speed, at least 10 min */
+const torSpan = (t: TorItem): [number, number] => [t.date, t.date + Math.max(10 * 60_000, ((t.len_mi || 0) / 30) * 3600_000)];
+
+async function searchTornadoes() {
+  const f = torForm.value;
+  const q = new URLSearchParams({ minmag: String(Math.max(0, f.minmag)) });
+  if (f.mode === "years") {
+    q.set("from", String(Math.min(f.y0, f.y1)));
+    q.set("to", String(Math.max(f.y0, f.y1)));
+  } else {
+    if (f.d0) q.set("from", f.d0);
+    if (f.d1) q.set("to", f.d1);
+  }
+  const m = mapRef.value;
+  if (f.area === "view" && m) {
+    const b = m.getBounds();
+    q.set("bbox", [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((v) => v.toFixed(3)).join(","));
+  }
+  torRes.value = { ...torRes.value, loading: true, error: undefined };
+  try {
+    const r = await api.get(`/api/ovl/tornadohist?${q}`);
+    const sts = f.states
+      .toUpperCase()
+      .split(/[\s,;]+/)
+      .filter(Boolean);
+    let items: TorItem[] = (r.features ?? []).map((ft: any) => ({ ...ft.properties, date: +ft.properties.date, geom: ft.geometry, key: `${ft.properties.om}-${ft.properties.date}` }));
+    items = items.filter((t) => (!sts.length || sts.includes(t.st)) && (t.inj ?? 0) >= f.minInj && (t.fat ?? 0) >= f.minFat);
+    const total = items.length;
+    sortTor(items, f.sort);
+    torRes.value = { items: items.slice(0, TOR_LIMIT), total, capped: !!r.capped, loading: false, searched: true };
+    torSel.value = null;
+    drawTor();
+  } catch (e: any) {
+    torRes.value = { items: [], total: 0, capped: false, loading: false, error: e.message, searched: true };
+  }
+}
+function sortTor(items: TorItem[], by: string) {
+  const cmp: Record<string, (a: TorItem, b: TorItem) => number> = {
+    date: (a, b) => b.date - a.date,
+    mag: (a, b) => efOf(b) - efOf(a) || b.date - a.date,
+    fat: (a, b) => b.fat - a.fat || b.inj - a.inj,
+    len: (a, b) => (b.len_mi || 0) - (a.len_mi || 0),
+  };
+  items.sort(cmp[by] ?? cmp.date);
+}
+
+/** Selected track (bold) plus, optionally, every result (thin), coloured by rating. */
+function drawTor() {
+  const sel = torSel.value?.item;
+  const list = torShowAll.value ? torRes.value.items : sel ? [sel] : [];
+  if (!list.length) return clearPreview();
+  const feats = list.map((t) => ({ type: "Feature", geometry: t.geom, properties: { _c: efColor(t), _sel: sel && t.key === sel.key ? 1 : 0 } }));
+  showPreview({ kind: "tornado", fc: { type: "FeatureCollection", features: feats }, id: sel?.key ?? "tor-all", pinned: false, title: "Tornadoes" });
+}
+
+function pickTornado(t: TorItem) {
+  const { before, after } = beforeAfter();
+  const [a, b] = torSpan(t);
+  torSel.value = { item: t, win: [a - before * 60_000, b + after * 60_000] };
+  drawTor();
+  const bb = bboxOf(t.geom);
+  if (bb) fitBox([bb[0] - 0.15, bb[1] - 0.15, bb[2] + 0.15, bb[3] + 0.15], 10);
+}
+
+function openTornado(t: TorItem, win: [number, number]) {
+  const bb = bboxOf(t.geom)!;
+  const box: BBox = [bb[0] - 0.2, bb[1] - 0.2, bb[2] + 0.2, bb[3] + 0.2];
+  // keep the track drawn (pinned) during the replay
+  showPreview({ kind: "tornado", fc: { type: "FeatureCollection", features: [{ type: "Feature", geometry: t.geom, properties: { _c: efColor(t), _sel: 1 } }] }, id: t.key, pinned: true, title: `${efLabel(t)} tornado` });
+  histStormsOpen.value = false;
+  openHistory({ label: `${efLabel(t)} tornado · ${t.st} ${fmtDate(t.date, false)}`, kind: "warning", start: win[0], end: win[1], padded: true, center: bboxCenter(box), bbox: box, ref: `tor:${t.om}:${t.date}` });
+}
+
+function TornadoTab() {
+  const f = torForm.value;
+  const r = torRes.value;
+  const sel = torSel.value;
+  void torShowAll.value;
+  const set = (fn: (x: typeof f) => void) => {
+    const n = { ...torForm.peek() };
+    fn(n);
+    torForm.value = n;
+  };
+  const yrs = useMemo(() => Array.from({ length: TOR_LAST - TOR_FIRST + 1 }, (_, i) => TOR_LAST - i), []);
+  const num = (k: "minInj" | "minFat") => (e: Event) => set((x) => (x[k] = Math.max(0, +(e.target as HTMLInputElement).value || 0)));
+  const canReplay = sel && sel.item.date >= L2_FIRST;
+  return (
+    <div class="hs-tab">
+      <form
+        class="hs-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          searchTornadoes();
+        }}
+      >
+        <div class="hs-frow">
+          <div class="seg sm">
+            <button type="button" class={f.mode === "years" ? "on" : ""} onClick={() => set((x) => (x.mode = "years"))}>
+              Years
+            </button>
+            <button type="button" class={f.mode === "dates" ? "on" : ""} onClick={() => set((x) => (x.mode = "dates"))}>
+              Dates
+            </button>
+          </div>
+          {f.mode === "years" ? (
+            <>
+              <select value={f.y0} onChange={(e) => set((x) => (x.y0 = +(e.target as HTMLSelectElement).value))}>
+                {yrs.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+              <span class="muted">to</span>
+              <select value={f.y1} onChange={(e) => set((x) => (x.y1 = +(e.target as HTMLSelectElement).value))}>
+                {yrs.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <>
+              <input type="date" min="1950-01-01" max="2024-12-31" value={f.d0} onChange={(e) => set((x) => (x.d0 = (e.target as HTMLInputElement).value))} />
+              <span class="muted">to</span>
+              <input type="date" min="1950-01-01" max="2024-12-31" value={f.d1} onChange={(e) => set((x) => (x.d1 = (e.target as HTMLInputElement).value))} />
+            </>
+          )}
+          <label class="hs-field">
+            <span>Rating</span>
+            <select value={f.minmag} onChange={(e) => set((x) => (x.minmag = +(e.target as HTMLSelectElement).value))}>
+              <option value={0}>All (F/EF0+)</option>
+              <option value={1}>EF1+</option>
+              <option value={2}>EF2+</option>
+              <option value={3}>EF3+ (strong)</option>
+              <option value={4}>EF4+ (violent)</option>
+              <option value={5}>EF5</option>
+            </select>
+          </label>
+        </div>
+        <div class="hs-frow">
+          <label class="hs-field">
+            <span>State(s)</span>
+            <input type="text" placeholder="OK, KS" size={8} value={f.states} onInput={(e) => set((x) => (x.states = (e.target as HTMLInputElement).value))} />
+          </label>
+          <label class="hs-field">
+            <span>Min injuries</span>
+            <input type="number" min={0} step={1} value={f.minInj} onChange={num("minInj")} />
+          </label>
+          <label class="hs-field">
+            <span>Min deaths</span>
+            <input type="number" min={0} step={1} value={f.minFat} onChange={num("minFat")} />
+          </label>
+          <label class="hs-field">
+            <span>Area</span>
+            <select value={f.area} onChange={(e) => set((x) => (x.area = (e.target as HTMLSelectElement).value as any))}>
+              <option value="view">Current map view</option>
+              <option value="all">Anywhere (US)</option>
+            </select>
+          </label>
+          <button class="btn sm" type="submit" disabled={r.loading}>
+            <Search size={13} /> {r.loading ? "Searching…" : "Search"}
+          </button>
+        </div>
+      </form>
+      <div class="hs-split">
+        <div class="hs-results">
+          {r.error ? (
+            <div class="hs-empty err">Search failed: {r.error}</div>
+          ) : !r.items.length ? (
+            <div class="hs-empty muted">{r.loading ? "Searching…" : r.searched ? "No matching tornadoes" : "Search the SPC tornado database (1950–2024): pick years or dates, rating, states and casualties; the current map view limits the area."}</div>
+          ) : (
+            <>
+              <div class="hs-torbar small">
+                <span class="muted">
+                  {r.total.toLocaleString()} tornadoes{r.total > r.items.length ? ` · showing ${r.items.length}` : ""}
+                  {r.capped ? " · server cap reached, narrow the search" : ""}
+                </span>
+                <span class="rp-fill" />
+                <label class="hs-check">
+                  <input type="checkbox" checked={torShowAll.value} onChange={(e) => ((torShowAll.value = (e.target as HTMLInputElement).checked), drawTor())} /> Show all results on map
+                </label>
+                <select
+                  title="Sort"
+                  value={f.sort}
+                  onChange={(e) => {
+                    set((x) => (x.sort = (e.target as HTMLSelectElement).value as any));
+                    const it = [...r.items];
+                    sortTor(it, (e.target as HTMLSelectElement).value);
+                    torRes.value = { ...r, items: it };
+                  }}
+                >
+                  <option value="date">Newest first</option>
+                  <option value="mag">Strongest first</option>
+                  <option value="fat">Most casualties</option>
+                  <option value="len">Longest track</option>
+                </select>
+              </div>
+              <table class="hs-table hs-tor">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Rating</th>
+                    <th>State</th>
+                    <th>Length</th>
+                    <th>Width</th>
+                    <th>Inj / deaths</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.items.map((t) => (
+                    <tr key={t.key} class={sel?.item.key === t.key ? "on" : ""} onClick={() => pickTornado(t)} onDblClick={() => t.date >= L2_FIRST && openTornado(t, torSel.value?.win ?? torSpan(t))}>
+                      <td class="nowrap">{fmtDate(t.date)}</td>
+                      <td>
+                        <span class="hs-ef" style={{ background: efColor(t) }}>
+                          {efLabel(t)}
+                        </span>
+                      </td>
+                      <td>{t.st}</td>
+                      <td class="nowrap">{t.len_mi ? `${(+t.len_mi).toFixed(1)} mi` : "—"}</td>
+                      <td class="nowrap">{t.wid_yd ? `${Math.round(+t.wid_yd)} yd` : "—"}</td>
+                      <td class={t.fat ? "hs-fat" : ""}>
+                        {t.inj} / {t.fat}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+        <aside class="hs-detail">
+          {!sel ? (
+            <div class="hs-empty muted">Pick a tornado to draw its track on the map, then open it in history mode (1991 and later).</div>
+          ) : (
+            <>
+              <h3>
+                <span class="hs-ef" style={{ background: efColor(sel.item) }}>
+                  {efLabel(sel.item)}
+                </span>{" "}
+                tornado · {sel.item.st}
+              </h3>
+              <dl class="hs-dl">
+                <dt>Touchdown</dt>
+                <dd>{fmtDate(sel.item.date)}</dd>
+                <dt>Path</dt>
+                <dd>
+                  {sel.item.len_mi ? `${(+sel.item.len_mi).toFixed(1)} mi` : "—"} long · {sel.item.wid_yd ? `${Math.round(+sel.item.wid_yd)} yd` : "—"} wide
+                </dd>
+                <dt>Injuries</dt>
+                <dd>{sel.item.inj}</dd>
+                <dt>Deaths</dt>
+                <dd>{sel.item.fat}</dd>
+                <dt>Radar</dt>
+                <dd>{(() => {
+                  const bb = bboxOf(sel.item.geom);
+                  const n = bb ? nearestRadar(...bboxCenter(bb)) : null;
+                  return n ? `${n.id} (${Math.round(n.km)} km)` : "—";
+                })()}</dd>
+              </dl>
+              {canReplay ? (
+                <>
+                  <div class="hs-sub">Replay window</div>
+                  <WindowSlider min={torSpan(sel.item)[0] - 6 * 3600_000} max={torSpan(sel.item)[1] + 6 * 3600_000} win={sel.win} event={torSpan(sel.item)} onWin={(w) => (torSel.value = { ...sel, win: w })} />
+                </>
+              ) : (
+                <p class="muted small hs-note">Radar replay needs the NEXRAD Level II archive, which starts in 1991 (most sites 1995+): this tornado is shown on the map only.</p>
+              )}
+              <p class="muted small hs-note">SPC times are the touchdown (no end time): the window covers about {dur(torSpan(sel.item)[1] - torSpan(sel.item)[0])} on the ground (track length at ~30 mph) plus the before/after margins.</p>
+              <div class="hs-actions">
+                <button class="btn sm" disabled={!canReplay} title={canReplay ? "" : "No Level II radar archive before 1991"} onClick={() => openTornado(sel.item, sel.win)}>
+                  <Play size={13} /> Open in history
+                </button>
+                <button class="btn sm ghost" onClick={() => ((torSel.value = null), drawTor())}>
+                  Deselect
+                </button>
+              </div>
+            </>
+          )}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+
+// ---------- p7: "Replay this" popover on alerts ----------
+
+/** Replay window for an alert: issue −6 h … expire +6 h (never past now), defaulting to the
+ * before/after margins; Open enters history mode for exactly that window. */
+export function ReplayPopover({ a, onClose }: { a: any; onClose: () => void }) {
+  const span = alertEventSpan(a);
+  const now = Date.now();
+  const min = span.start - 6 * 3600_000;
+  const max = Math.max(min + 3600_000, Math.min(span.end + 6 * 3600_000, now));
+  const { before, after } = beforeAfter();
+  const [win, setWin] = useState<[number, number]>(() => [Math.max(min, span.start - before * 60_000), Math.min(max, span.end + after * 60_000)]);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => e.key === "Escape" && (e.stopPropagation(), onClose());
+    window.addEventListener("keydown", k, true);
+    return () => window.removeEventListener("keydown", k, true);
+  }, []);
+  const tooLong = win[1] - win[0] > 7 * 86400_000;
+  return (
+    <div class="ad-replay-pop" role="dialog" aria-label="Replay window">
+      <div class="ad-rp-head">
+        <b>Replay window</b>
+        <span class="rp-fill" />
+        <button class="icon-btn" title="Close" onClick={onClose}>
+          <X size={13} />
+        </button>
+      </div>
+      <WindowSlider min={min} max={max} win={win} onWin={setWin} event={[span.start, Math.min(span.end, max)]} />
+      <div class="ad-rp-foot">
+        <span class="muted small">Shaded: the alert ({dur(span.end - span.start)}). Radar: nearest archive site.</span>
+        <span class="rp-fill" />
+        <button class="btn sm ghost" onClick={() => setWin([Math.max(min, span.start - before * 60_000), Math.min(max, span.end + after * 60_000)])} title={`Reset to −${before} / +${after} min`}>
+          Reset
+        </button>
+        <button
+          class="btn sm"
+          onClick={() => {
+            onClose();
+            replayAlert(a, win);
+          }}
+        >
+          <Play size={13} /> Open
+        </button>
+      </div>
+      {tooLong && <p class="hist-err small">History windows are 7 days at most: the last 7 days will load.</p>}
+    </div>
+  );
+}
+
 // ---------- recent ----------
 async function reopen(r: Settings["histRecent"][number]) {
   histStormsOpen.value = false;
@@ -823,13 +1216,14 @@ function RecentTab() {
 }
 
 // ---------- window ----------
-function switchTab(id: "warnings" | "tropical" | "recent") {
+function switchTab(id: "warnings" | "tropical" | "tornado" | "recent") {
   tab.value = id;
   clearPreview(true);
   const w = wSel.value;
   const t = tSel.value;
   if (id === "warnings" && w?.fc) showPreview({ kind: "warning", fc: w.fc, id: w.item.id, pinned: false, title: w.item.event });
   if (id === "tropical" && t?.fc && !preview.value) showPreview({ kind: "tropical", fc: t.fc, id: t.item.id, pinned: false, title: t.item.name });
+  if (id === "tornado" && !preview.value) drawTor();
 }
 
 export function HistStorms() {
@@ -844,7 +1238,7 @@ export function HistStorms() {
     <CenterModal
       cls="hstorm"
       title="Historical Storms"
-      sub="Past warnings, watches and tropical cyclones: open history mode around them"
+      sub="Past warnings, watches, tropical cyclones and tornadoes: open history mode around them"
       icon={<History size={18} />}
       onClose={close}
       actions={
@@ -859,6 +1253,7 @@ export function HistStorms() {
           [
             ["warnings", "Warnings", TriangleAlert],
             ["tropical", "Tropical", Wind],
+            ["tornado", "Tornadoes", Tornado],
             ["recent", "Recent", Clock],
           ] as const
         ).map(([id, l, Icon]) => (
@@ -870,6 +1265,7 @@ export function HistStorms() {
       </div>
       {t === "warnings" && <WarningsTab />}
       {t === "tropical" && <TropicalTab />}
+      {t === "tornado" && <TornadoTab />}
       {t === "recent" && <RecentTab />}
     </CenterModal>
   );

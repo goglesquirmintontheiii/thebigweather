@@ -41,10 +41,11 @@ pub const RESTART_FIELDS: &[&str] = &[
     "alerts.poll_secs",
     "alerts.url",
     "alerts.user_agent",
+    "ml.enabled",
 ];
 
 /// Sections of `Config` editable through PUT (keys and recorder are handled separately).
-const SECTIONS: &[&str] = &["server", "profile", "radar", "grid", "alerts"];
+const SECTIONS: &[&str] = &["server", "profile", "radar", "grid", "alerts", "ml"];
 
 static RESTART: AtomicBool = AtomicBool::new(false);
 static PENDING: AtomicBool = AtomicBool::new(false);
@@ -410,6 +411,10 @@ fn apply_live(st: &AppState, c: &Config, changed: &[String]) -> Vec<String> {
         st.grids.set_threads(eff.threads);
         applied.push("profile.decode_threads".into());
     }
+    if has("ml.") || has("profile.memory_mb") || has("profile.mode") {
+        st.ml.configure(&c.ml, eff.budget.radar_mb);
+        applied.extend(changed.iter().filter(|f| f.starts_with("ml.") && f.as_str() != "ml.enabled").cloned());
+    }
     for f in ["server.name", "server.public_url", "server.local_no_auth"] {
         if has(f) {
             applied.push(f.into());
@@ -500,6 +505,10 @@ fn disk_caches(st: &AppState) -> Vec<(String, String, std::path::PathBuf, u64)> 
             (if c > 0 { c } else { 512 }) << 20
         }),
         ("disk:overlays".into(), "Disk: overlay lists".into(), p.data.join("overlays"), 0),
+        ("disk:ml".into(), "Disk: detection-model samples & label databases".into(), p.cache.join("ml"), {
+            let c = st.cfg.read().ml.cache_disk_mb;
+            (if c > 0 { c } else { 2048 }) << 20
+        }),
     ];
     if let Ok(rd) = std::fs::read_dir(&p.cache) {
         for e in rd.flatten() {
@@ -518,6 +527,7 @@ fn mem_caches(st: &AppState) -> Vec<crate::caches::CacheInfo> {
     v.push(st.intl.cache_stats());
     v.push(st.overlays.cache_stats());
     v.extend(st.overlays.extra_cache_stats());
+    v.extend(st.ml.cache_stats());
     v
 }
 
@@ -556,7 +566,7 @@ async fn caches_clear(State(st): St, Query(q): Query<HashMap<String, String>>) -
                     st.overlays.clear_cache();
                     true
                 }
-                x => st.radar.clear_cache(x) || st.grids.clear_cache(x) || st.overlays.clear_extra(x),
+                x => st.radar.clear_cache(x) || st.grids.clear_cache(x) || st.overlays.clear_extra(x) || st.ml.clear_cache(x),
             };
             if ok {
                 cleared.push(c.id);

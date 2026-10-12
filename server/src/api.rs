@@ -45,6 +45,7 @@ pub struct AppState {
     pub shares: Arc<crate::share::Shares>,
     pub collab: Arc<crate::collab::Collab>,
     pub rules: Arc<crate::rules::Rules>,
+    pub ml: Arc<crate::ml::Ml>,
 }
 
 /// Marks a request made with a share link's read-only token.
@@ -231,6 +232,8 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/collab/ws", get(crate::collab::ws))
         .route("/rules", get(crate::rules::get).put(crate::rules::put))
         .route("/rules/webhook-test", post(crate::rules::webhook_test))
+        // detection models (training jobs, model store, live runs)
+        .merge(crate::ml::api::router())
         // local admin API (Server settings): loopback only, see admin.rs
         .merge(crate::admin::router(st.clone()))
         .layer(DefaultBodyLimit::max(400 * 1024 * 1024))

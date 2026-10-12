@@ -5,7 +5,8 @@
 
 import { signal, effect, computed } from "@preact/signals";
 import type { Map as MLMap, MapMouseEvent } from "maplibre-gl";
-import { RotateCcw, Loader2 } from "lucide-preact";
+import { RotateCcw, Loader2, ChevronUp, ChevronDown, RotateCw, Plus, Minus, Move3D, RefreshCw, X } from "lucide-preact";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { api, ApiError } from "../api";
 import { settings, update } from "../store";
 import { mapRef } from "../map/mapview";
@@ -34,6 +35,10 @@ const ISO_PRESET: Record<string, [number, number][]> = {
 
 // ---------- 3D-only preferences (kept beside settings.view3d) ----------
 interface V3X {
+  /** p7: plain left-drag orbits instead of panning (laptops) */
+  orbit?: boolean;
+  /** p7: slow auto-rotate */
+  spin?: boolean;
   mode: V3Mode;
   iso: Record<string, IsoShell[]>;
   heightColor: boolean;
@@ -232,7 +237,7 @@ function updateViewBox(map: MLMap) {
 
 // ---------- map mode ----------
 let layer: Volume3DLayer | null = null;
-let saved: { pitch: number; bearing: number; maxPitch: number; rotate: boolean } | null = null;
+let saved: { pitch: number; bearing: number; maxPitch: number; rotate: boolean; box?: boolean } | null = null;
 let modeToken = 0;
 /** aim the camera at the storms once the first volume arrives */
 let aimPending = false;
@@ -249,7 +254,12 @@ function addLayer(map: MLMap) {
   if (!map.getLayer(layer.id)) map.addLayer(layer);
   hide2D(map);
 }
-const onStyle = () => mapRef.value && addLayer(mapRef.value);
+const onStyle = () => {
+  const m = mapRef.value;
+  if (!m) return;
+  addLayer(m);
+  navReassert(m); // p7
+};
 const onMoveEnd = () => mapRef.value && updateViewBox(mapRef.value);
 
 function showLabels(ls: Label[]) {
@@ -318,6 +328,7 @@ function enter(map: MLMap) {
   map.on("moveend", onMoveEnd);
   map.on("mousemove", onHover);
   map.on("mouseout", onLeave);
+  navAttach(map); // p7: laptop navigation
   updateViewBox(map);
   probeMrms();
   aimPending = true;
@@ -332,6 +343,7 @@ function exit(map: MLMap) {
   map.off("moveend", onMoveEnd);
   map.off("mousemove", onHover);
   map.off("mouseout", onLeave);
+  navDetach(map); // p7
   if (layer && map.getLayer(layer.id)) map.removeLayer(layer.id); // frees GPU textures (onRemove)
   layer = null;
   overlay?.remove();
@@ -459,6 +471,378 @@ function resetView() {
   },
 };
 
+// ---------- p7: laptop / touchpad navigation ----------
+// Without a right button, MapLibre's tilt/rotate (right-drag, Ctrl+drag) is hard to reach, so 3D adds:
+// Shift/Alt+left-drag (or plain drag in Orbit mode) to orbit, Alt+two-finger scroll to orbit,
+// Shift+arrows / W A S D to tilt and rotate, PageUp/PageDown or +/- to zoom, an on-screen pad,
+// and a slow auto-rotate. Everything is attached only while 3D is on.
+const MAXP = 80;
+const clampP = (p: number) => Math.max(0, Math.min(MAXP, p));
+/** last user input (auto-rotate pauses for a moment after it) */
+let lastInput = 0;
+const HINT_KEY = "tbw.3d.navhint";
+export const navHint = signal<boolean>((() => {
+  try {
+    return !localStorage.getItem(HINT_KEY);
+  } catch {
+    return false;
+  }
+})());
+function hintSeen() {
+  if (!navHint.value) return;
+  navHint.value = false;
+  try {
+    localStorage.setItem(HINT_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Orbit by a screen delta (px): right = turn the view clockwise around the centre, up = tilt toward the horizon. */
+function orbitBy(map: MLMap, dx: number, dy: number) {
+  map.jumpTo({ bearing: map.getBearing() + dx * 0.45, pitch: clampP(map.getPitch() - dy * 0.35) });
+}
+/** a small step; animated unless repeated quickly */
+export function nav3d(dPitch: number, dBearing: number, dZoom: number, duration = 160) {
+  const map = mapRef.value;
+  if (!map || !layer) return;
+  const now = performance.now();
+  lastInput = now;
+  // quick repeats (key auto-repeat, clicks) add up instead of restarting from mid-animation
+  const g = navGoal && now < navGoal.until && map.isMoving() ? navGoal : { pitch: map.getPitch(), bearing: map.getBearing(), zoom: map.getZoom(), until: 0 };
+  navGoal = { pitch: clampP(g.pitch + dPitch), bearing: g.bearing + dBearing, zoom: Math.max(0, Math.min(22, g.zoom + dZoom)), until: now + duration * 3 + 100 };
+  map.easeTo({ pitch: navGoal.pitch, bearing: navGoal.bearing, zoom: navGoal.zoom, duration, easing: (t) => t });
+}
+let navGoal: { pitch: number; bearing: number; zoom: number; until: number } | null = null;
+
+function capture(e: PointerEvent) {
+  try {
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  } catch {
+    /* synthetic / already released */
+  }
+}
+
+/** The terrain code (basemaps.applyTerrain, run from wf6map on every style load and on every settings
+ *  change) eases the camera flat, sets maxPitch to 0 and turns rotation off. In 3D that froze the view
+ *  ("can't change the viewing angle"). While 3D is on, those resets are ignored (guardPitch). */
+function navReassert(map: MLMap) {
+  if (!layer) return;
+  if (map.getMaxPitch() < MAXP) map.setMaxPitch(MAXP);
+  if (!map.dragRotate.isEnabled()) map.dragRotate.enable();
+  map.touchZoomRotate.enableRotation();
+  map.boxZoom.disable();
+}
+let guarded: MLMap | null = null;
+/** While 3D is on, ignore the terrain code's camera resets (they arrive on every settings change). */
+function guardPitch(map: MLMap) {
+  if (guarded) return;
+  guarded = map;
+  const m = map as any;
+  const setMax = map.setMaxPitch, ease = map.easeTo, rotOff = map.dragRotate.disable, touchOff = map.touchZoomRotate.disableRotation;
+  m.setMaxPitch = (v?: number | null) => setMax.call(map, layer && (v == null || v < MAXP) ? MAXP : v);
+  // applyTerrain's flatten: easeTo({ pitch: 0, bearing: 0, duration: 300 }) and nothing else
+  m.easeTo = (o: any, ev?: any) => {
+    if (layer && o && o.pitch === 0 && o.bearing === 0 && o.center === undefined && o.zoom === undefined && o.padding === undefined) return map;
+    return ease.call(map, o, ev);
+  };
+  m.dragRotate.disable = () => (layer ? undefined : rotOff.call(map.dragRotate));
+  m.touchZoomRotate.disableRotation = () => (layer ? undefined : touchOff.call(map.touchZoomRotate));
+}
+function unguardPitch(map: MLMap) {
+  if (guarded !== map) return;
+  guarded = null;
+  const m = map as any;
+  delete m.setMaxPitch;
+  delete m.easeTo;
+  delete m.dragRotate.disable;
+  delete m.touchZoomRotate.disableRotation;
+}
+
+let drag: { x: number; y: number; moved: boolean } | null = null;
+let swallowClick = false;
+const onDown = (e: MouseEvent) => {
+  const map = mapRef.value;
+  if (!map || !layer || e.button !== 0 || e.ctrlKey || e.metaKey) return;
+  if (!(e.target as HTMLElement).classList?.contains("maplibregl-canvas")) return;
+  // Orbit mode swaps the roles: plain drag orbits, Shift+drag pans
+  if (!(v3x.value.orbit ? !e.shiftKey : e.shiftKey || e.altKey)) return;
+  // keep MapLibre (pan, Shift box-zoom) out of it
+  e.stopPropagation();
+  e.preventDefault();
+  drag = { x: e.clientX, y: e.clientY, moved: false };
+  lastInput = performance.now();
+  map.getCanvas().style.cursor = "grabbing";
+  window.addEventListener("mousemove", onDragMove, true);
+  window.addEventListener("mouseup", onDragUp, true);
+};
+const onDragMove = (e: MouseEvent) => {
+  const map = mapRef.value;
+  if (!drag || !map) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+  drag.moved = true;
+  drag.x = e.clientX;
+  drag.y = e.clientY;
+  lastInput = performance.now();
+  orbitBy(map, dx, dy);
+  hintSeen();
+};
+const onDragUp = () => {
+  window.removeEventListener("mousemove", onDragMove, true);
+  window.removeEventListener("mouseup", onDragUp, true);
+  if (drag?.moved) swallowClick = true;
+  drag = null;
+  const map = mapRef.value;
+  if (map) map.getCanvas().style.cursor = "";
+  setTimeout(() => (swallowClick = false), 0);
+};
+const onClickCap = (e: MouseEvent) => {
+  if (swallowClick) {
+    e.stopPropagation();
+    swallowClick = false;
+  }
+};
+/** Alt + two-finger scroll (touchpad) or Alt + wheel orbits; Ctrl+wheel stays pinch-zoom */
+const onWheel = (e: WheelEvent) => {
+  const map = mapRef.value;
+  if (!map || !layer || !e.altKey || e.ctrlKey) return;
+  e.stopPropagation();
+  e.preventDefault();
+  const k = e.deltaMode === 1 ? 16 : 1;
+  lastInput = performance.now();
+  orbitBy(map, -e.deltaX * k * 0.6, -e.deltaY * k * 0.6);
+  hintSeen();
+};
+const onKey = (e: KeyboardEvent) => {
+  if (!layer) return;
+  const t = e.target as HTMLElement;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const fast = e.repeat ? 90 : 160;
+  let d: [number, number, number] | null = null;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (e.shiftKey && k === "ArrowUp") d = [4, 0, 0];
+  else if (e.shiftKey && k === "ArrowDown") d = [-4, 0, 0];
+  else if (e.shiftKey && k === "ArrowLeft") d = [0, -7, 0];
+  else if (e.shiftKey && k === "ArrowRight") d = [0, 7, 0];
+  else if (!e.shiftKey && k === "w") d = [4, 0, 0];
+  else if (!e.shiftKey && k === "s") d = [-4, 0, 0];
+  else if (!e.shiftKey && k === "a") d = [0, -7, 0];
+  else if (!e.shiftKey && k === "d") d = [0, 7, 0];
+  else if (k === "PageUp" || k === "+" || k === "=") d = [0, 0, 0.25];
+  else if (k === "PageDown" || k === "-" || k === "_") d = [0, 0, -0.25];
+  if (!d) return;
+  // ahead of the app's hotkeys (frame step, screenshot, draw…) while 3D is on
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  nav3d(d[0], d[1], d[2], fast);
+  hintSeen();
+};
+let spinRaf = 0;
+let spinT = 0;
+function spinLoop(t: number) {
+  spinRaf = 0;
+  const map = mapRef.value;
+  if (!map || !layer || !v3x.peek().spin) return;
+  const dt = spinT ? Math.min(0.1, (t - spinT) / 1000) : 0;
+  spinT = t;
+  // pause while the user is moving the view
+  if (!drag && performance.now() - lastInput > 2500 && !map.isMoving()) map.setBearing(map.getBearing() + dt * 5);
+  spinRaf = requestAnimationFrame(spinLoop);
+}
+effect(() => {
+  const on = !!v3x.value.spin && settings.value.view3d.on && !!mapRef.value;
+  if (on && !spinRaf) {
+    spinT = 0;
+    spinRaf = requestAnimationFrame(spinLoop);
+  } else if (!on && spinRaf) {
+    cancelAnimationFrame(spinRaf);
+    spinRaf = 0;
+  }
+});
+
+function navAttach(map: MLMap) {
+  const el = map.getContainer();
+  el.addEventListener("mousedown", onDown, true);
+  el.addEventListener("click", onClickCap, true);
+  el.addEventListener("wheel", onWheel, { capture: true, passive: false });
+  window.addEventListener("keydown", onKey, true);
+  // Shift+drag orbits in 3D instead of box-zooming; Ctrl+left-drag / right-drag stay MapLibre's rotate
+  if (saved) saved.box = map.boxZoom.isEnabled();
+  map.boxZoom.disable();
+  map.dragRotate.enable();
+  guardPitch(map);
+}
+function navDetach(map: MLMap) {
+  const el = map.getContainer();
+  el.removeEventListener("mousedown", onDown, true);
+  el.removeEventListener("click", onClickCap, true);
+  el.removeEventListener("wheel", onWheel, true);
+  window.removeEventListener("keydown", onKey, true);
+  onDragUp();
+  unguardPitch(map);
+  if (saved?.box !== false) map.boxZoom.enable();
+}
+
+/** press-and-hold button: one step on press, then continuous while held */
+function HoldBtn({ title, step, rate, children, cls = "" }: { title: string; step: [number, number, number]; rate: [number, number, number]; children: any; cls?: string }) {
+  const st = useRef<{ raf: number; t: number; timer: number } | null>(null);
+  const stop = () => {
+    if (!st.current) return;
+    cancelAnimationFrame(st.current.raf);
+    clearTimeout(st.current.timer);
+    st.current = null;
+  };
+  useEffect(() => stop, []);
+  const down = (e: PointerEvent) => {
+    e.preventDefault();
+    capture(e);
+    stop();
+    nav3d(step[0], step[1], step[2]);
+    hintSeen();
+    const s = { raf: 0, t: 0, timer: 0 };
+    st.current = s;
+    s.timer = window.setTimeout(() => {
+      const loop = (t: number) => {
+        const map = mapRef.value;
+        if (!map || st.current !== s) return;
+        const dt = s.t ? Math.min(0.1, (t - s.t) / 1000) : 0;
+        s.t = t;
+        lastInput = performance.now();
+        map.jumpTo({ pitch: clampP(map.getPitch() + rate[0] * dt), bearing: map.getBearing() + rate[1] * dt, zoom: map.getZoom() + rate[2] * dt });
+        s.raf = requestAnimationFrame(loop);
+      };
+      s.raf = requestAnimationFrame(loop);
+    }, 280);
+  };
+  return (
+    <button class={`v3n-btn ${cls}`} title={title} onPointerDown={down as any} onPointerUp={stop} onPointerCancel={stop} onLostPointerCapture={stop} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && nav3d(step[0], step[1], step[2])}>
+      {children}
+    </button>
+  );
+}
+
+/** drag on the pad: left/right rotates, up/down tilts */
+function OrbitPad() {
+  const [knob, setKnob] = useState<[number, number]>([0, 0]);
+  const last = useRef<[number, number] | null>(null);
+  const start = useRef<[number, number]>([0, 0]);
+  const down = (e: PointerEvent) => {
+    e.preventDefault();
+    capture(e);
+    last.current = [e.clientX, e.clientY];
+    start.current = [e.clientX, e.clientY];
+    lastInput = performance.now();
+  };
+  const move = (e: PointerEvent) => {
+    const map = mapRef.value;
+    if (!last.current || !map) return;
+    const dx = e.clientX - last.current[0], dy = e.clientY - last.current[1];
+    last.current = [e.clientX, e.clientY];
+    lastInput = performance.now();
+    orbitBy(map, dx * 1.3, dy * 1.3);
+    const kx = e.clientX - start.current[0], ky = e.clientY - start.current[1];
+    const r = Math.hypot(kx, ky), m = 20;
+    setKnob(r > m ? [(kx / r) * m, (ky / r) * m] : [kx, ky]);
+    hintSeen();
+  };
+  const up = () => {
+    last.current = null;
+    setKnob([0, 0]);
+  };
+  return (
+    <div class="v3n-pad" title="Orbit: drag here to rotate (left/right) and tilt (up/down)" onPointerDown={down as any} onPointerMove={move as any} onPointerUp={up} onPointerCancel={up}>
+      <span class="v3n-ring" />
+      <span class="v3n-knob" style={{ transform: `translate(${knob[0]}px, ${knob[1]}px)` }}>
+        <Move3D size={13} />
+      </span>
+    </div>
+  );
+}
+
+function Nav3D() {
+  const x = v3x.value;
+  const map = mapRef.value;
+  const [, setT] = useState(0);
+  // keep the pitch / bearing readout fresh
+  useEffect(() => {
+    if (!map) return;
+    let raf = 0;
+    const f = () => {
+      if (!raf) raf = requestAnimationFrame(() => ((raf = 0), setT((t) => t + 1)));
+    };
+    map.on("move", f);
+    return () => {
+      map.off("move", f);
+      cancelAnimationFrame(raf);
+    };
+  }, [map]);
+  useEffect(() => {
+    if (!navHint.value) return;
+    const t = setTimeout(hintSeen, 15000);
+    return () => clearTimeout(t);
+  }, []);
+  const pitch = map ? Math.round(map.getPitch()) : 0;
+  const brg = map ? Math.round(((map.getBearing() % 360) + 360) % 360) : 0;
+  return (
+    <div class="v3n glass" onPointerDown={(e) => e.stopPropagation()}>
+      {navHint.value && (
+        <div class="v3n-hint">
+          <span>
+            <b>Tilt / rotate:</b> Shift+drag or Alt+drag on the map, the pad below, or W A S D / Shift+arrows. Zoom: +/− or PageUp/PageDown.
+          </span>
+          <button class="icon-btn" title="Got it" onClick={hintSeen}>
+            <X size={12} />
+          </button>
+        </div>
+      )}
+      <div class="v3n-main">
+        <div class="v3n-cross">
+          <HoldBtn cls="up" title="Tilt toward the horizon (W, Shift+↑)" step={[5, 0, 0]} rate={[30, 0, 0]}>
+            <ChevronUp size={15} />
+          </HoldBtn>
+          <HoldBtn cls="left" title="Rotate left (A, Shift+←)" step={[0, -10, 0]} rate={[0, -45, 0]}>
+            <RotateCcw size={14} />
+          </HoldBtn>
+          <OrbitPad />
+          <HoldBtn cls="right" title="Rotate right (D, Shift+→)" step={[0, 10, 0]} rate={[0, 45, 0]}>
+            <RotateCw size={14} />
+          </HoldBtn>
+          <HoldBtn cls="down" title="Tilt toward top-down (S, Shift+↓)" step={[-5, 0, 0]} rate={[-30, 0, 0]}>
+            <ChevronDown size={15} />
+          </HoldBtn>
+        </div>
+        <div class="v3n-zoom">
+          <HoldBtn title="Zoom in (+, PageUp)" step={[0, 0, 0.3]} rate={[0, 0, 1.2]}>
+            <Plus size={14} />
+          </HoldBtn>
+          <HoldBtn title="Zoom out (−, PageDown)" step={[0, 0, -0.3]} rate={[0, 0, -1.2]}>
+            <Minus size={14} />
+          </HoldBtn>
+          <button class="v3n-btn" title="Reset: aim at the storms" onClick={resetView}>
+            <RefreshCw size={13} />
+          </button>
+        </div>
+      </div>
+      <div class="v3n-foot">
+        <button class={`v3n-tog ${x.orbit ? "on" : ""}`} aria-pressed={!!x.orbit} title="Plain drag orbits around the view centre instead of panning (good for touchpads); Shift+drag pans then." onClick={() => setX((y) => (y.orbit = !y.orbit))}>
+          Orbit drag
+        </button>
+        <button class={`v3n-tog ${x.spin ? "on" : ""}`} aria-pressed={!!x.spin} title="Slowly rotate the view" onClick={() => setX((y) => (y.spin = !y.spin))}>
+          Auto-rotate
+        </button>
+        <span class="v3n-read muted" title="Tilt · heading">
+          {pitch}° · {brg}°
+        </span>
+      </div>
+    </div>
+  );
+}
+// test handle
+(window as any).__tbw3dNav = { nav3d, orbitBy: (dx: number, dy: number) => mapRef.value && orbitBy(mapRef.value, dx, dy), hint: navHint };
+// ---------- end p7 ----------
+
 // ---------- header button ----------
 export function Btn3D() {
   const on = settings.value.view3d.on;
@@ -520,6 +904,8 @@ export function View3D() {
   const shells = shellsFor(w.thrKey);
   const sup = support3D.value;
   return (
+    <>
+    <Nav3D /> {/* p7 */}
     <div class="v3d glass">
       <div class="v3d-head">
         <b>3D</b>
@@ -602,5 +988,6 @@ export function View3D() {
         </label>
       </div>
     </div>
+    </>
   );
 }

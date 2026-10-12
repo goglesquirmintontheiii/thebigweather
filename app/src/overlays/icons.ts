@@ -1,6 +1,7 @@
 // Map icons drawn on canvas (no image assets): camera types, aircraft, ships, wind barbs, front pips…
 
 import type { Map as MLMap } from "maplibre-gl";
+import { registerMlIcons } from "../ml/targets"; // detection models
 
 type Draw = (c: CanvasRenderingContext2D, s: number) => void;
 
@@ -767,4 +768,5 @@ export function registerIcons(map: MLMap) {
   make(map, "lsr-rain", 26, lsr("#0891b2", gRain));
   make(map, "lsr-lightning", 26, lsr("#ca8a04", gBolt));
   make(map, "lsr-other", 26, lsr("#6b7280", gDot));
+  registerMlIcons(map); // detection models
 }

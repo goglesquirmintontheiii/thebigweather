@@ -8,6 +8,7 @@ import { SameDecoder, type SameEvent } from "./decoder";
 import { encodeSame } from "./encoder";
 import { buildHeader, locationName, type SameHeader } from "./parse";
 import { loadFips, countyName } from "./fips";
+import { hideCounties, sameKey, sameShown } from "./mapshow";
 
 export const SAME_RATE = 24000;
 
@@ -17,6 +18,8 @@ export type SameEntry =
   | { id: number; kind: "tone"; at: Date; tone: "nwr" | "eas"; duration: number };
 
 let nextId = 1;
+/** p7: county/area names from recently decoded headers (newest first; transcription prompt context) */
+export const sameRecentPlaces = signal<string[]>([]);
 /** Shared "play a sound on warnings" preference (per viewer). */
 export const sameSound = signal(readPref());
 function readPref() {
@@ -84,6 +87,8 @@ export class SameMonitor {
   }
 
   clear() {
+    // p7: cleared entries take their map outlines with them
+    for (const e of this.log.value) if (e.kind === "header" && sameShown.value[sameKey(e.id)]) hideCounties(sameKey(e.id));
     this.log.value = [];
   }
 
@@ -129,6 +134,8 @@ export class SameMonitor {
       this.add({ id: nextId++, kind: "header", at, header: e.header, raw: e.raw, copies: e.copies, test });
       const h = e.header;
       if (h) {
+        const names = h.locations.map((l) => countyName(l.fips)).filter((n): n is string => !!n);
+        sameRecentPlaces.value = [...new Set([...names, ...sameRecentPlaces.value])].slice(0, 12);
         const loud = h.level === "warning" || h.level === "emergency";
         toast(`${test ? "[TEST] " : ""}${this.label()} SAME: ${h.eventName} for ${areaList(h, 4)}`, loud ? "alert" : "info", loud ? 12000 : 6000);
         if (loud && sameSound.value) playAlertSound(h.eventName);

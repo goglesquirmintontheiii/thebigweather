@@ -195,6 +195,10 @@ export interface Settings {
   radar6: { dealias: boolean; inspector: boolean; ltgWatch: boolean; ltgMi: number };
   /** GRLevelX placefiles (local files keep their text in localStorage "tbw.pf.<id>") */
   placefiles: PlacefileCfg[];
+  /* ---------- detection models ---------- */
+  /** where training / the runner go by default ("local" = the server bundled with the app) */
+  ml?: { trainWhere?: "main" | "local"; runWhere?: "main" | "local" };
+  /* ---------- end detection models ---------- */
   /* ---------- end radar 0.6 ---------- */
 }
 
@@ -246,7 +250,7 @@ export interface WidgetCfg {
   zoom?: number;
 }
 export interface RuleCond {
-  kind: "alert" | "rotation" | "lightning" | "eta" | "aqi" | "metar" | "spc" | "dbz";
+  kind: "alert" | "rotation" | "lightning" | "eta" | "aqi" | "metar" | "spc" | "dbz" | "mldet" /* detection models */;
   /** where: saved point id, "gps" or "route" */
   where: string;
   /** distance (mi) */
@@ -261,6 +265,8 @@ export interface RuleCond {
   minutes?: number;
   /** metar: field */
   field?: "temp_hi" | "temp_lo" | "gust";
+  /** detection models: model id ("" = any model); value = min probability (%) */
+  model?: string;
 }
 export interface RuleAction {
   sound?: "off" | "chime" | "beep" | "alarm" | "siren";

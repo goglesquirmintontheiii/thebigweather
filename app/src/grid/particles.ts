@@ -26,7 +26,7 @@ const def: OverlayDef = {
     { key: "model", label: "Model", choices: [["gfs", "GFS"], ["hrrr", "HRRR"]], def: "gfs" },
     { key: "level", label: "Level", choices: [["10m", "10 m"], ["850", "850 hPa"], ["500", "500 hPa"], ["250", "250 hPa"]], def: "10m" },
     { key: "color", label: "Colours", choices: [["outline", "Black outline"], ["speed", "Speed (bright)"], ["dark", "Speed (dark map)"], ["white", "White"]], def: "outline" },
-    { key: "width", label: "Line width", choices: [["1", "1 px"], ["1.5", "1.5 px"], ["2", "2 px"], ["3", "3 px"], ["4", "4 px"]], def: "2" },
+    { key: "width", label: "Line width", choices: [["0.5", "0.5 px"], ["0.75", "0.75 px"], ["1", "1 px"], ["1.5", "1.5 px"], ["2", "2 px"], ["3", "3 px"], ["4", "4 px"]], def: "2" },
     { key: "trail", label: "Trails", choices: [["short", "Short"], ["normal", "Normal"], ["long", "Long"]], def: "normal" },
     { key: "density", label: "Density", choices: [["lo", "Low"], ["md", "Medium"], ["hi", "High"], ["max", "Very high"]], def: "md" },
     { key: "speed", label: "Speed", choices: [["0.5", "Slow"], ["1", "Normal"], ["2", "Fast"]], def: "1" },
@@ -136,7 +136,8 @@ vec3 classic(float s) {
 }
 void main() {
   vec3 c = u_ramp == 0 ? vec3(1.0) : u_ramp == 1 ? bright(v_speed) : classic(v_speed);
-  float a = clamp(u_hw - abs(v_d) + 0.5, 0.0, 1.0);
+  // sub-pixel lines (p7): a 1 px wide tent whose alpha is scaled to the line's real coverage (2·hw)
+  float a = u_hw < 0.5 ? 2.0 * u_hw * clamp(1.0 - abs(v_d), 0.0, 1.0) : clamp(u_hw - abs(v_d) + 0.5, 0.0, 1.0);
   frag = vec4(c * a, a);
 }`;
 const QUAD_VS = `#version 300 es
@@ -477,7 +478,7 @@ export class ParticleLayer implements CustomLayerInterface {
     for (let r = 0; r < 4; r++) mm[12 + r] = m[r] * cx + m[4 + r] * cy + m[12 + r];
     gl.uniformMatrix4fv(this.uSeg.u_matrix, false, mm);
     gl.uniform2f(this.uSeg.u_vp, this.tw, this.th);
-    gl.uniform1f(this.uSeg.u_hw, Math.max(0.5, (this.width * dpr) / 2));
+    gl.uniform1f(this.uSeg.u_hw, Math.max(0.2, (this.width * dpr) / 2));
     gl.uniform1i(this.uSeg.u_ramp, this.colors === "white" ? 0 : this.colors === "dark" ? 2 : 1);
     if (ni > 0) gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, ni);
     // back to the map's framebuffer: draw the trails (with a dark halo for light/satellite maps)
@@ -589,7 +590,7 @@ effect(() => {
   layer.density = o.density === "lo" ? 0.5 : o.density === "hi" ? 2 : o.density === "max" ? 3.5 : 1;
   layer.speed = +o.speed || 1;
   layer.colors = (["outline", "speed", "dark", "white"].includes(o.color) ? o.color : "speed") as ParticleColors;
-  layer.width = Math.max(1, Math.min(4, +o.width || 2));
+  layer.width = Math.max(0.5, Math.min(4, +o.width || 2));
   layer.fade = o.trail === "short" ? 0.86 : o.trail === "long" ? 0.965 : 0.93;
   layer.setOn(c.on);
   const sig = c.on ? `${o.model}|${o.level}|${api.base}` : "";

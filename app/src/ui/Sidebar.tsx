@@ -22,6 +22,10 @@ import { Bookmark } from "lucide-preact"; // workflow
 import { WorkspacePanel } from "./panels/WorkspacePanel"; // workflow
 import { History } from "lucide-preact"; // history 0.6
 import { histStormsOpen } from "../histsearch"; // history 0.6
+/* detection models */
+import { BrainCircuit } from "lucide-preact";
+import { mlOpen, activeJobs } from "../ml/client";
+/* end detection models */
 /* shake/stats/server 0.6 */
 import { AudioWaveform } from "lucide-preact";
 import { shakeOpen } from "../shake";
@@ -31,6 +35,8 @@ import { RulesPanel } from "./RulesPanel";
 import { WidgetsPanel } from "./WidgetHost";
 /* end workflow 0.6 */
 /* end shake/stats/server 0.6 */
+import { Sun } from "lucide-preact"; // p7
+import { spaceOpen } from "./SpacePanel"; // p7
 
 const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "radar", icon: Radar, label: "Radar" },
@@ -76,6 +82,17 @@ export function Rail() {
       <button class={`rail-btn ${histStormsOpen.value ? "on" : ""}`} title="Historical Storms" onClick={() => (histStormsOpen.value = !histStormsOpen.value)}>
         <History size={20} />
       </button>
+      {/* detection models */}
+      <button class={`rail-btn ${mlOpen.value ? "on" : ""}`} title="Detection models" onClick={() => (mlOpen.value = !mlOpen.value)}>
+        <BrainCircuit size={20} />
+        {activeJobs.value.length > 0 && <span class="dot online" title="Training in progress" />}
+      </button>
+      {/* end detection models */}
+      {/* p7: Space weather window */}
+      <button class={`rail-btn ${spaceOpen.value ? "on" : ""}`} title="Space weather" onClick={() => (spaceOpen.value = !spaceOpen.value)}>
+        <Sun size={20} />
+      </button>
+      {/* end p7 */}
       <div class="rail-fill" />
       <button class={`rail-btn ${openPanel.value === "settings" ? "on" : ""}`} title="Settings" onClick={() => (openPanel.value = openPanel.value === "settings" ? null : "settings")}>
         <Settings size={20} />

@@ -3,11 +3,13 @@
 
 import { signal } from "@preact/signals";
 import type { AudioTap } from "../audio/tap";
-import { TranscriptSession, RATE, type Transcriber, type Line } from "./core";
+import { TranscriptSession, RATE, buildPrompt, type Transcriber, type Line } from "./core";
+import { sameRecentPlaces } from "../same/monitor";
 
-export type Quality = "fast" | "better";
-export const MODELS: Record<Quality, string> = { fast: "onnx-community/whisper-tiny.en", better: "onnx-community/whisper-base.en" };
-export const QUALITY_LABEL: Record<Quality, string> = { fast: "Fast (tiny.en)", better: "Better (base.en)" };
+export type Quality = "fast" | "better" | "best";
+// p7: "best" = whisper-small.en (≈250 MB quantized; slower, clearly more accurate on radio audio)
+export const MODELS: Record<Quality, string> = { fast: "onnx-community/whisper-tiny.en", better: "onnx-community/whisper-base.en", best: "onnx-community/whisper-small.en" };
+export const QUALITY_LABEL: Record<Quality, string> = { fast: "Fast (tiny.en)", better: "Better (base.en)", best: "Best (small.en, ~250 MB)" };
 
 export interface ModelStatus {
   phase: "idle" | "loading" | "ready" | "error";
@@ -24,7 +26,7 @@ export const modelStatus = signal<ModelStatus>({ phase: "idle", pct: 0 });
 function readQuality(): Quality | null {
   try {
     const q = localStorage.getItem("tbw.tx.quality");
-    return q === "fast" || q === "better" ? q : null;
+    return q === "fast" || q === "better" || q === "best" ? q : null;
   } catch {
     return null;
   }
@@ -88,7 +90,7 @@ function ensureWorker(model: string): Worker {
 
 class WorkerTranscriber implements Transcriber {
   constructor(private model: string) {}
-  transcribe(pcm: Float32Array): Promise<string> {
+  transcribe(pcm: Float32Array, prompt?: string): Promise<string> {
     // after a failed load, wait for the user to retry rather than re-downloading per chunk
     if (!worker && modelStatus.value.phase === "error") return Promise.reject(new Error(modelStatus.value.error));
     const w = ensureWorker(this.model);
@@ -96,7 +98,7 @@ class WorkerTranscriber implements Transcriber {
     return new Promise((res, rej) => {
       pending.set(id, { res, rej });
       const copy = pcm.slice();
-      w.postMessage({ type: "run", id, pcm: copy }, [copy.buffer]);
+      w.postMessage({ type: "run", id, pcm: copy, prompt }, [copy.buffer]);
     });
   }
 }
@@ -154,6 +156,8 @@ export class TranscriptCtl {
       (l) => (this.lines.value = [...this.lines.value, l].slice(-2000)),
       (s) => (this.state.value = { ...s, dropped: this.sess?.dropped }),
     );
+    // p7: weather vocabulary + county names from SAME headers heard recently as Whisper's prompt
+    this.sess.prompt = () => buildPrompt(sameRecentPlaces.value);
     const tap = await this.getTap().catch(() => null);
     // a newer start (or a stop) happened while waiting for the tap
     if (!this.on.value || g !== this.gen) return;

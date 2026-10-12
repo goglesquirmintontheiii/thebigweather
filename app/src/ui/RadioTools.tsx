@@ -8,9 +8,9 @@ import { fmtBytes } from "../util";
 import { areaList, sameSound, setSameSound, type SameEntry } from "../same/monitor";
 import { fipsNames } from "../same/fips";
 import { ORIGINATORS } from "../same/codes";
-import { showCounties } from "../same/mapshow";
+import { showCounties, hideCounties, sameKey, sameShown } from "../same/mapshow"; // p7
 import { modelStatus, quality, QUALITY_LABEL, MODELS, type Quality } from "../transcribe/client";
-import { Siren, Captions, Copy, Download, Bell, BellOff, MapPin, FlaskConical, Trash2, RotateCw } from "lucide-preact";
+import { Siren, Captions, Copy, Download, Bell, BellOff, MapPin, FlaskConical, Trash2, RotateCw, X } from "lucide-preact";
 
 const hm = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const LVL_COLOR: Record<string, string> = { emergency: "#ff00ff", warning: "#ff3b30", watch: "#ffb020", advisory: "#4aa3ff", statement: "#4aa3ff", test: "#8a96a6", admin: "#8a96a6" };
@@ -109,9 +109,17 @@ function Entry({ e, p }: { e: SameEntry; p: LivePlayer }) {
         <code class="same-raw" title="Raw header">
           {e.raw}
         </code>
-        <button class="btn sm ghost" title="Outline these areas on the map" onClick={() => showCounties(h.locations.map((l) => l.fips), `${h.eventName} (${p.stream.call ?? p.stream.name})`, color)}>
-          <MapPin size={11} /> Map
-        </button>
+        {/* p7: SAME map outline toggle (auto-clears at expiry; tests after 60 s) */}
+        {sameShown.value[sameKey(e.id)] ? (
+          <button class="btn sm ghost same-hide on" title="Remove these outlines from the map" onClick={() => hideCounties(sameKey(e.id))}>
+            <X size={11} /> Hide on map
+          </button>
+        ) : (
+          <button class="btn sm ghost" title={`Outline these areas on the map (until the message expires${e.test ? "; tests: 60 s" : ""})`} onClick={() => showCounties(h.locations.map((l) => l.fips), `${h.eventName} (${p.stream.call ?? p.stream.name})`, color, { key: sameKey(e.id), expires: h.expires.getTime(), test: e.test })}>
+            <MapPin size={11} /> Map
+          </button>
+        )}
+        {/* /p7 */}
         <button class="icon-btn" title="Copy the raw header" onClick={() => navigator.clipboard?.writeText(e.raw).then(() => toast("Copied"))}>
           <Copy size={12} />
         </button>

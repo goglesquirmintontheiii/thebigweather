@@ -90,7 +90,7 @@ export function LayerExtra({ id }: { id: string }) {
         <label class="lbl">Geomagnetic activity</label>
         <KpBox />
         {/* data 0.6 */}
-        <button class="btn sm" style={{ marginTop: "8px" }} onClick={() => ((spaceOpen.value = true), (configModal.value = null))}>
+        <button class="btn sm" style={{ marginTop: "8px" }} title="Shortcut: the Space weather window also has its own sidebar button (sun)" onClick={() => ((spaceOpen.value = true), (configModal.value = null))}>
           Space weather: sun, solar wind, alerts
         </button>
       </section>

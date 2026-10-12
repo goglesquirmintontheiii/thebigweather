@@ -14,6 +14,8 @@ import { stormCellsNow, cellEtaTo, nearestStrike, nearestAqi, nearestMetar, spcL
 import { mesoRank, hasTvs } from "../overlays/stormcells";
 import { route } from "../route/route";
 import { applyWorkspace } from "../workspaces";
+import { freshDetections, startDetections } from "../ml/client"; // detection models
+import { tmeta } from "../ml/targets"; // detection models
 
 export interface FireLog {
   t: number;
@@ -189,6 +191,23 @@ export async function check(r: Rule): Promise<Hit | null> {
       if (s.level >= (c.value ?? 2)) return { key: s.label, msg: `SPC day 1: ${SPC_NAME[s.level]} risk (${s.label}) for ${l.label}`, vars: { event: `${SPC_NAME[s.level]} risk`, value: s.label, place: l.label } };
       return null;
     }
+    /* detection models: a model detection within X mi */
+    case "mldet": {
+      const dets = await freshDetections(25);
+      const minp = (c.value ?? 50) / 100;
+      const cut = Date.now() - 20 * 60_000;
+      for (const d of dets) {
+        if (d.t < cut || d.prob < minp || (c.model && d.model_id !== c.model)) continue;
+        for (const l of locs) {
+          const dist = distance(l.lat, l.lon, d.lat, d.lon);
+          if (dist <= R) {
+            const what = `${tmeta(d.target).name} detection (${Math.round(d.prob * 100)}%, ${d.model_name})`;
+            return { key: `${d.model_id}|${d.cell_id ?? d.site}`, msg: `${what} ${fmtMi(dist)} from ${l.label}`, vars: { event: what, dist: fmtMi(dist), place: l.label, value: String(Math.round(d.prob * 100)) } };
+          }
+        }
+      }
+      return null;
+    }
     case "dbz": {
       const sample = locs.slice(0, 60);
       const { values } = await dbzAt(sample);
@@ -218,6 +237,8 @@ export function describe(c: RuleCond): string {
       return `SPC day-1 risk ≥ ${SPC_NAME[c.value ?? 2]} at ${where}`;
     case "dbz":
       return `Radar ≥ ${c.value ?? 50} dBZ at ${where}`;
+    case "mldet":
+      return `Model detection ≥ ${c.value ?? 50}% within ${c.mi} mi of ${where}`; // detection models
   }
 }
 
@@ -351,6 +372,13 @@ export function startRules() {
     kick();
   });
   setInterval(kick, 30_000);
+  /* detection models: keep detections polling while an enabled rule needs them */
+  let stopDet: (() => void) | null = null;
+  effect(() => {
+    const need = settings.value.wf6.rules.some((r) => r.on && r.cond.kind === "mldet");
+    if (need && !stopDet) stopDet = startDetections();
+    if (!need && stopDet) (stopDet(), (stopDet = null));
+  });
 }
 
 export function newRule(kind: RuleCond["kind"] = "alert"): Rule {
@@ -364,6 +392,7 @@ export function newRule(kind: RuleCond["kind"] = "alert"): Rule {
     metar: { field: "gust", value: 50, mi: 15 },
     spc: { value: 3, mi: 0 },
     dbz: { value: 50, mi: 0 },
+    mldet: { value: 60, mi: 15, model: "" }, // detection models
   };
   return { id: uid(), name: describe({ kind, where, mi: 10, ...presets[kind] } as RuleCond), on: true, cond: { kind, where, mi: 10, ...presets[kind] } as RuleCond, act: { sound: "alarm", desktop: true, tts: "{msg}" }, cooldown: 30 };
 }

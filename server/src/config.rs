@@ -12,6 +12,7 @@ pub struct Config {
     pub grid: GridCfg,
     pub alerts: AlertsCfg,
     pub keys: Keys,
+    pub ml: MlCfg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +94,28 @@ pub struct AlertsCfg {
     pub url: String,
     /// NWS asks for a contact in the User-Agent.
     pub user_agent: String,
+}
+
+/// Detection models (training jobs and live runs, `/api/ml/*`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MlCfg {
+    /// Allow training and running detection models
+    pub enabled: bool,
+    /// Training jobs run at the same time (more are queued)
+    pub max_jobs: usize,
+    /// Radar volumes downloaded / processed at once while building a dataset; 0 = auto (full 4, lite 2)
+    pub download_concurrency: usize,
+    /// Radars processed at once when running models live; 0 = auto (full 3, lite 1)
+    pub run_concurrency: usize,
+    /// Disk cap for cached extracted samples (MB); 0 = auto (2048)
+    pub cache_disk_mb: u64,
+}
+
+impl Default for MlCfg {
+    fn default() -> Self {
+        Self { enabled: true, max_jobs: 1, download_concurrency: 0, run_concurrency: 0, cache_disk_mb: 0 }
+    }
 }
 
 /// Optional API keys. Missing keys just disable that source.
@@ -220,6 +243,7 @@ impl Default for Config {
             grid: GridCfg::default(),
             alerts: AlertsCfg::default(),
             keys: Keys::default(),
+            ml: MlCfg::default(),
         }
     }
 }
@@ -290,6 +314,18 @@ poll_secs = 0
 url = "https://api.weather.gov/alerts/active?status=actual"
 # NWS asks for a contact in the User-Agent.
 user_agent = "TheBigWeather/0.1 (self-hosted weather app)"
+
+[ml]
+# Detection models: train on historical radar / gridded data and run them live
+enabled = true
+# Training jobs at the same time (more are queued)
+max_jobs = 1
+# Radar volumes processed at once while building a training set; 0 = auto (full 4, lite 2)
+download_concurrency = 0
+# Radars processed at once when running models live; 0 = auto (full 3, lite 1)
+run_concurrency = 0
+# Disk cap for cached extracted samples in MB; 0 = auto (2048)
+cache_disk_mb = 0
 
 # Optional API keys. Missing keys just disable that source.
 [keys]
@@ -540,6 +576,7 @@ mod tests {
         assert_eq!(serde_json::to_value(&c.profile).unwrap(), serde_json::to_value(&d.profile).unwrap());
         assert_eq!(serde_json::to_value(&c.radar).unwrap(), serde_json::to_value(&d.radar).unwrap());
         assert_eq!(serde_json::to_value(&c.grid).unwrap(), serde_json::to_value(&d.grid).unwrap());
+        assert_eq!(serde_json::to_value(&c.ml).unwrap(), serde_json::to_value(&d.ml).unwrap());
         let out = d.merge_into(TEMPLATE).unwrap();
         assert!(out.contains("# Share of CPU cores"));
     }

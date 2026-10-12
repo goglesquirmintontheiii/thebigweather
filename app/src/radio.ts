@@ -6,6 +6,7 @@ import Hls from "hls.js";
 import { AudioTap } from "./audio/tap";
 import { SameMonitor } from "./same/monitor";
 import { TranscriptCtl } from "./transcribe/client";
+import { popoutSpec } from "./popout"; // p7
 
 export interface Stream {
   id: string;
@@ -21,6 +22,8 @@ export const radioState = signal<"idle" | "loading" | "playing" | "error">("idle
 let audio: HTMLAudioElement | null = null;
 
 export function playStream(s: Stream) {
+  // p7: stations last used in the big player open there again
+  if (sizePref(s.url) === "big" && popoutSpec?.kind !== "radio") return openPlayer(s);
   stopStream();
   audio = new Audio();
   audio.preload = "none";
@@ -146,8 +149,27 @@ export class LivePlayer {
   readonly same: SameMonitor;
   readonly tx: TranscriptCtl;
 
-  constructor(public stream: Stream) {
+  /** p7: taking over from the simple player: stay silent until our audio plays, then stop it */
+  private handing = false;
+  private userMuted = false;
+
+  constructor(public stream: Stream, opts: { handoff?: () => void } = {}) {
     this.url = stream.url;
+    if (opts.handoff) {
+      this.handing = true;
+      this.audio.muted = true;
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        this.handing = false;
+        this.applyMute();
+        opts.handoff!();
+      };
+      this.audio.addEventListener("playing", () => setTimeout(finish, 250), { once: true });
+      // the stream may refuse a second connection or stall: never keep both silent/playing for long
+      setTimeout(finish, 10000);
+    }
     const label = () => this.stream.call ?? this.stream.name;
     this.same = new SameMonitor(label, () => this.ensureTap());
     this.tx = new TranscriptCtl(label, () => this.ensureTap());
@@ -396,6 +418,11 @@ export class LivePlayer {
     else this.audio.volume = v;
   }
   setMuted(m: boolean) {
+    this.userMuted = m;
+    this.applyMute();
+  }
+  private applyMute() {
+    const m = this.userMuted || this.handing;
     if (this.tap) this.tap.setMuted(m);
     else this.audio.muted = m;
   }
@@ -508,22 +535,62 @@ export interface PlayerWin {
   p: LivePlayer;
   x: number;
   y: number;
+  /** p7: shown as the small player bar (decoders keep running) */
+  compact?: boolean;
 }
 export const players = signal<PlayerWin[]>([]);
 // debugging / automated UI checks
 (window as any).__tbwRadio = { players };
 
-export function openPlayer(s: Stream) {
+export function openPlayer(s: Stream, compact = false) {
   const have = players.value.find((w) => w.id === s.url);
   if (have) {
-    players.value = [...players.value.filter((w) => w !== have), have];
+    players.value = [...players.value.filter((w) => w !== have), { ...have, compact }];
     return;
   }
-  if (nowPlaying.value?.url === s.url) stopStream();
+  // p7: the simple player keeps going until the new one is audible (no gap when expanding)
+  const handoff = nowPlaying.value?.url === s.url ? () => nowPlaying.peek()?.url === s.url && stopStream() : undefined;
   const n = players.value.length;
   const x = Math.max(10, window.innerWidth - 420 - ((n * 24) % 120));
   const y = 80 + ((n * 175) % Math.max(175, window.innerHeight - 300));
-  players.value = [...players.value, { id: s.url, p: new LivePlayer(s), x, y }];
+  players.value = [...players.value, { id: s.url, p: new LivePlayer(s, { handoff }), x, y, compact }];
+}
+
+// ---------- p7: small <-> big player ----------
+const SIZE_KEY = "tbw.radio.size";
+function sizes(): Record<string, "small" | "big"> {
+  try {
+    return JSON.parse(localStorage.getItem(SIZE_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+/** preferred player size per station URL ("small" when never chosen) */
+export function sizePref(url: string): "small" | "big" {
+  return sizes()[url] ?? "small";
+}
+function setSizePref(url: string, v: "small" | "big") {
+  try {
+    const m = sizes();
+    m[url] = v;
+    localStorage.setItem(SIZE_KEY, JSON.stringify(m));
+  } catch {
+    /* ignore */
+  }
+}
+/** Small player -> big media player for the same station, without a gap. */
+export function expandSimple() {
+  const s = nowPlaying.value;
+  if (!s) return;
+  setSizePref(s.url, "big");
+  openPlayer(s);
+}
+/** Big player <-> its small bar; SAME / transcription keep running either way. */
+export function setPlayerCompact(id: string, compact: boolean) {
+  const w = players.value.find((x) => x.id === id);
+  if (!w) return;
+  setSizePref(id, compact ? "small" : "big");
+  players.value = players.value.map((x) => (x === w ? { ...x, compact } : x));
 }
 
 export function closePlayer(id: string) {

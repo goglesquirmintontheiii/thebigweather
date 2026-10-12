@@ -80,10 +80,12 @@ export function nhcNowLayers(s: string, st: Style): LayerSpecification[] {
 /** spin the current-position symbols: counter-clockwise north of the equator, clockwise south.
  * The two bands repeat every half turn, so FRAMES rotations over 180° are pre-rendered once per
  * symbol and the ticker only swaps images (no canvas work per tick). */
-const FRAMES = 24;
+const FRAMES = 36; // p7: 5° steps; one frame per ~33 ms tick at the 30 fps clock
 const R = 2;
 const PERIOD = 2400; // ms per full turn
 const frameCache = new Map<string, Uint8Array[]>();
+/** p7 diagnostics: image swaps so far (the ticker repaints after each step) */
+export const tcSpin = { updates: 0 };
 const lastFrame = new Map<string, number>();
 function framesFor(name: string): Uint8Array[] {
   let f = frameCache.get(name);
@@ -113,6 +115,7 @@ addAnim({
       lastFrame.set(name, i);
       const w = TC_NOW_SIZE * R;
       m.updateImage(name, { width: w, height: w, data: framesFor(name)[i] });
+      tcSpin.updates++;
     }
   },
 });

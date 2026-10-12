@@ -74,6 +74,10 @@ import { shareParam } from "../share/share";
 import { SharePanel } from "./SharePanel";
 import { CollabPanel } from "./CollabPanel";
 import "../share/desktop";
+/* detection models */
+import { ModelsCenter } from "./ModelsCenter";
+import "../overlays/mldefs";
+/* end detection models */
 
 export function App() {
   const mapEl = useRef<HTMLDivElement>(null);
@@ -142,6 +146,7 @@ export function App() {
       <SoundingCenter /> {/* intl & forecast tools */}
       <RadioCenter />
       <HistStorms /> {/* history 0.6 */}
+      <ModelsCenter /> {/* detection models */}
       <ShakeMenu /> {/* shake/stats/server 0.6 */}
       <ServerSettings /> {/* shake/stats/server 0.6 */}
       <RadioPlayers />

@@ -181,6 +181,7 @@ export async function fetchRange(s: ShakeSta, c: ShakeChan, start: number, end: 
   let next = 0;
   const worker = async () => {
     while (next < keyed.length) {
+      if (sig?.aborted) throw new DOMException("Aborted", "AbortError"); // p7: a superseded load stops (cache hits never throw)
       const i = next++;
       const [a, b] = keyed[i];
       try {
@@ -190,11 +191,13 @@ export async function fetchRange(s: ShakeSta, c: ShakeChan, start: number, end: 
         got[i] = null;
       }
       done++;
-      onProg?.(done / keyed.length);
+      if (!sig?.aborted) onProg?.(done / keyed.length);
     }
   };
   await Promise.all([worker(), worker(), worker()]);
-  const ok = got.filter(Boolean) as Wave[];
+  if (sig?.aborted) throw new DOMException("Aborted", "AbortError");
+  // p7: an empty piece can come back without a sample rate; take it from one that has samples
+  const ok = (got.filter(Boolean) as Wave[]).filter((w) => w.samples.length > 0 && w.sr > 0);
   if (!ok.length) throw new Error("No data in this window");
   const sr = ok[0].sr;
   const n = Math.max(0, Math.round(((end - start) / 1000) * sr));
@@ -216,7 +219,8 @@ export async function fetchRange(s: ShakeSta, c: ShakeChan, start: number, end: 
   let lastIdx = n - 1;
   while (lastIdx >= 0 && Number.isNaN(out[lastIdx])) lastIdx--;
   if (lastIdx < n - 1 && lastIdx >= 0) gaps.push([start + ((lastIdx + 1) / sr) * 1000, end]);
-  return { sr, start, samples: lastIdx >= 0 ? out.subarray(0, lastIdx + 1) : out, gaps };
+  if (lastIdx < 0) throw new Error("No data in this window");
+  return { sr, start, samples: out.subarray(0, lastIdx + 1), gaps };
 }
 
 // ---------- DSP ----------
@@ -369,11 +373,16 @@ export function spectrogram(x: Float32Array, i0: number, i1: number, cols: numbe
     fft(re, im);
     for (let b = 0; b < bins; b++) db[c * bins + b] = 10 * Math.log10(re[b] * re[b] + im[b] * im[b] + 1e-30);
   }
+  // p7: levels from real signal only: gaps/padding are exact zeros (-300 dB) and would squash the
+  // colour range (a window with a gap rendered as one flat colour, looking like it never loaded)
   const sample: number[] = [];
   const step = Math.max(1, Math.floor(db.length / 4000));
-  for (let i = 0; i < db.length; i += step) sample.push(db[i]);
+  for (let i = 0; i < db.length; i += step) if (db[i] > -250 && Number.isFinite(db[i])) sample.push(db[i]);
   sample.sort((a, b) => a - b);
-  return { db, bins, lo: sample[Math.floor(sample.length * 0.08)] ?? 0, hi: sample[Math.floor(sample.length * 0.995)] ?? 1 };
+  const lo = sample[Math.floor(sample.length * 0.08)] ?? 0;
+  let hi = sample[Math.floor(sample.length * 0.995)] ?? lo + 1;
+  if (!(hi > lo)) hi = lo + 1;
+  return { db, bins, lo, hi };
 }
 
 /** Welch PSD (Hann, 50 % overlap): frequencies and power in dB (re unit²/Hz). */

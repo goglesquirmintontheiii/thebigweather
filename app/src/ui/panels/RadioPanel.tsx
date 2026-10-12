@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../../api";
 import { settings, update, toast, uid } from "../../store";
-import { playStream, stopStream, nowPlaying, radioState, openPlayer, type Stream } from "../../radio";
+import { playStream, stopStream, nowPlaying, radioState, openPlayer, expandSimple, type Stream } from "../../radio";
 import { radioOpen } from "../RadioCenter";
-import { popout, canPopout } from "../../popout";
+import { popout, canPopout, popoutSpec } from "../../popout";
 import { Search, Play, Square, Star, Plus, Trash2, ExternalLink, Loader, AudioLines, Maximize2 } from "lucide-preact";
 import { Toggle } from "./RadarPanel";
 
@@ -19,6 +19,12 @@ export function NowPlaying({ compact = false }: { compact?: boolean }) {
         <small class="muted">{st === "loading" ? "Connecting…" : st === "error" ? "Stream unavailable" : s.call ? s.name : "Playing"}</small>
       </div>
       <input type="range" min={0} max={1} step={0.05} value={settings.value.radio.volume} title="Volume" onInput={(e) => update((x) => (x.radio.volume = +(e.target as HTMLInputElement).value))} />
+      {/* p7: same station in the full media player (no gap in the audio) */}
+      {popoutSpec?.kind !== "radio" && (
+        <button class="icon-btn np-expand" title="Expand to the full player (seek, record, SAME, transcript)" onClick={expandSimple}>
+          <Maximize2 size={13} />
+        </button>
+      )}
       {canPopout() && (
         <button class="icon-btn" title="Pop out" onClick={() => (popout({ kind: "radio", title: s.name, width: 380, height: 160, data: s }), stopStream())}>
           <ExternalLink size={13} />
