@@ -2,11 +2,13 @@
 
 Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted server that does the heavy lifting.
 
-**Status:** Phase 5 of 6 (see [PLAN.md](PLAN.md)). Test lists: [docs/PHASE5_CHECKLIST.md](docs/PHASE5_CHECKLIST.md), then [docs/PHASE5_FIXES.md](docs/PHASE5_FIXES.md) (0.5.1). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+**Status:** Phase 6 of 7 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE6_CHECKLIST.md](docs/PHASE6_CHECKLIST.md) (covers 0.5.1 and 0.6.0). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ## Quick start
 
 ### 1. Server (your VPS or PC)
+
+On Windows, run `start.cmd` (or `start.ps1 -Help` for options) instead of `start.sh`. Or skip the separate server: the app can run its own (first-run dialog → "Run the server in this app").
 
 ```bash
 ./start.sh                          # LAN mode: http://<machine>:8787
@@ -23,17 +25,44 @@ Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted
 ### 2. Desktop app
 
 ```bash
-chmod +x TheBigWeather-0.5.1-x86_64.AppImage
-./TheBigWeather-0.5.1-x86_64.AppImage
+chmod +x TheBigWeather-0.6.0-x86_64.AppImage
+./TheBigWeather-0.6.0-x86_64.AppImage
 ```
 
 On first launch, paste the server URL and token. If the server runs on the same computer, click **Use the server on this computer** — no token needed (turn this off with `local_no_auth = false` under `[server]` in the config).
 
 The UI also works in a browser at the server URL (phones too, until the Android app exists).
 
+## Phase 6 features (0.6.0)
+
+- **Windows:**
+  - App installer and portable .exe.
+  - Server: `start.cmd` / `start.ps1`, with a Windows service option.
+  - The app can also run its own built-in server on one computer (Linux too).
+- **Radar:**
+  - GRLevelX placefiles.
+  - Debris signature (TDS) detection, dual-pol hail and hail swaths.
+  - Rotation tracks, velocity dealiasing, and an all-products Inspector (`I`).
+- **Data:**
+  - NWS damage surveys and SPC tornado history.
+  - NHC wind probabilities, surge and arrival times.
+  - MRMS FLASH and National Water Model flooding.
+  - GFS-Wave, and road conditions.
+  - Personal weather stations (CWOP) and space weather.
+  - Climate normals and records; health and stargazing tabs.
+  - Radar nowcast; contours and wind barbs on any model.
+  - Model comparison and swipe compare.
+- **Workflow:**
+  - Desktop widgets and a tray icon.
+  - Route weather with storm intercept.
+  - Notification rules, spoken briefings and kiosk mode.
+  - Light theme and terrain.
+  - Offline maps and plugins.
+  - Share links (read-only live view) and Team rooms.
+
 ## 0.5.1
 
-Phase 5 follow-ups: 3D surfaces, Seismographs menu, SAME decoding and live transcription in the radio player, Historical Storms (past warnings and hurricanes), METARs in history, Canada per-radar views, keyless road work and traffic speeds, Server settings and App stats, reorganised layers menu, and fixes. Details in `docs/PHASE5_FIXES.md`. The roadmap now has Phase 6 (new features + Windows) and Phase 7 (Android + VR) in `PLAN.md`.
+Phase 5 follow-ups: 3D surfaces, Seismographs menu, SAME decoding and live transcription in the radio player, Historical Storms (past warnings and hurricanes), METARs in history, Canada per-radar views, keyless road work and traffic speeds, Server settings and App stats, reorganised layers menu, and fixes. Details in `docs/PHASE6_CHECKLIST.md` (part 1). The roadmap now has Phase 6 (new features + Windows) and Phase 7 (Android + VR) in `PLAN.md`.
 
 ## Phase 5 features
 

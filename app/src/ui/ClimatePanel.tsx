@@ -77,8 +77,11 @@ export function parseClimate(j: any): Climate {
   const distUnit = typeof st === "object" && (pick(st, "dist_mi", "distance_mi") != null || pick(j, "dist_mi") != null) ? "mi" : "km";
   const units = String(pick(j, "units", "unit") ?? "").toLowerCase();
   const metric = /metric|°c|^c$|si/.test(units);
-  const today0 = pick(j, "today", "normals", "normal", "daily_normal") ?? {};
-  const rec = pick(j, "records", "record", "extremes") ?? {};
+  const todayRaw = pick(j, "today", "normals", "normal", "daily_normal") ?? {};
+  // server: today = { date, normal: { maxt, mint, pcpn }, records: { maxt|lomax|mint|himin|pcpn|snow: { value, year } } }
+  const tn = pick(todayRaw, "normal", "normals");
+  const today0 = tn && typeof tn === "object" ? tn : todayRaw;
+  const rec = pick(j, "records", "record", "extremes") ?? pick(todayRaw, "records") ?? {};
   const rhiRaw = pick(rec, "hi", "high", "maxt", "max", "record_hi", "record_high") ?? pick(today0, "record_hi", "record_high", "rhi", "record_max");
   const rloRaw = pick(rec, "lo", "low", "mint", "min", "record_lo", "record_low") ?? pick(today0, "record_lo", "record_low", "rlo", "record_min");
   const rpRaw = pick(rec, "pcpn", "precip", "pcp", "record_pcpn", "record_precip") ?? pick(today0, "record_pcpn", "record_precip");
@@ -128,12 +131,12 @@ export function parseClimate(j: any): Climate {
   const dH = avg("hi") != null && avg("nhi") != null ? avg("hi")! - avg("nhi")! : null;
   const dL = avg("lo") != null && avg("nlo") != null ? avg("lo")! - avg("nlo")! : null;
   const mtd: Climate["mtd"] = {
-    hiDep: num(pick(mt, "hi_dep", "high_dep", "maxt_dep", "hidep", "max_departure")) ?? dH,
-    loDep: num(pick(mt, "lo_dep", "low_dep", "mint_dep", "lodep", "min_departure")) ?? dL,
+    hiDep: num(pick(mt, "dep_maxt", "hi_dep", "high_dep", "maxt_dep", "hidep", "max_departure")) ?? dH,
+    loDep: num(pick(mt, "dep_mint", "lo_dep", "low_dep", "mint_dep", "lodep", "min_departure")) ?? dL,
     avgDep: num(pick(mt, "avg_dep", "avgt_dep", "mean_dep", "temp_dep", "departure")) ?? (dH != null && dL != null ? (dH + dL) / 2 : null),
     pcp: num(pick(mt, "pcpn", "precip", "pcp")) ?? sum("pcp"),
     npcp: num(pick(mt, "normal_pcpn", "normal_precip", "npcp", "pcpn_normal", "precip_normal")) ?? sum("npcp"),
-    pcpDep: num(pick(mt, "pcpn_dep", "precip_dep", "pcpdep")),
+    pcpDep: num(pick(mt, "dep_pcpn", "pcpn_dep", "precip_dep", "pcpdep")),
     snow: num(pick(mt, "snow", "snowfall")),
     nsnow: num(pick(mt, "normal_snow", "snow_normal")),
   };
@@ -143,7 +146,7 @@ export function parseClimate(j: any): Climate {
   today.hi = last?.hi;
   today.lo = last?.lo;
   return {
-    station: { name: String(name), id: Array.isArray(sid) ? String(sid[0]) : sid != null ? String(sid) : undefined, dist: dist != null ? `${Math.round(+dist)} ${distUnit}` : undefined, years: pick(j, "por", "period", "years") ?? (typeof st === "object" ? pick(st, "por", "period", "valid_daterange") : undefined) },
+    station: { name: String(name), id: Array.isArray(sid) ? String(sid[0]) : sid != null ? String(sid) : undefined, dist: dist != null ? `${Math.round(+dist)} ${distUnit}` : undefined, years: pick(j, "por", "period") ?? (typeof st === "object" ? (pick(st, "por_start") ? `since ${String(pick(st, "por_start")).slice(0, 4)}` : pick(st, "por", "period", "valid_daterange")) : undefined) },
     today,
     days,
     mtd,

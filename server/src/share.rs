@@ -234,6 +234,8 @@ pub fn spawn_janitor(s: Arc<Shares>) {
 /// Endpoints (below /api) a share token may GET.
 const ALLOWED: &[&str] = &[
     "/info", "/sites", "/l3/", "/radar/", "/live/", "/alerts", "/sources", "/grid/", "/ovl/", "/metars", "/intlradar", "/arcgis/", "/camimg", "/sounding", "/ws",
+    // phase 6 data: climate (ACIS), placefiles (SSRF-guarded proxy)
+    "/climate", "/placefile",
 ];
 /// Never allowed even below an allowed prefix.
 const DENIED: &[&str] = &["/radar/upload"];
@@ -395,6 +397,8 @@ mod tests {
         assert!(allowed(&g, "/grid/catalog"));
         assert!(allowed(&g, "/ovl/spc_outlook"));
         assert!(allowed(&g, "/ws"));
+        assert!(allowed(&g, "/climate"));
+        assert!(allowed(&g, "/placefile/asset"));
         assert!(!allowed(&g, "/keys"));
         assert!(!allowed(&g, "/rec"));
         assert!(!allowed(&g, "/shares"));

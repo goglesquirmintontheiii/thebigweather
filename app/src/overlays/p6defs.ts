@@ -79,7 +79,7 @@ const severe: OverlayDef[] = [
       const kind = p.kind === "point" ? "Damage point" : p.kind === "swath" ? "Damage swath" : "Tornado track";
       return {
         title: `${kind} · ${efName(n)}`,
-        sub: `NWS ${p.wfo ?? ""} survey`,
+        sub: `NWS ${p.wfo ? `${p.wfo} ` : ""}survey`,
         color: EF_COLORS[n + 1],
         rows: [
           ["Event", day(p.event_date)],
@@ -108,19 +108,23 @@ const severe: OverlayDef[] = [
       { key: "minmag", label: "Rating", choices: [["0", "All (F/EF0+)"], ["1", "EF1+"], ["2", "EF2+"], ["3", "EF3+ (strong)"], ["4", "EF4+ (violent)"]], def: "1" },
     ],
     style: { opacity: 0.7, size: 1, labels: false },
-    prepare: (fc) => efPrep(fc, "mag"),
+    prepare: (fc) => {
+      const o = efPrep(fc, "mag");
+      for (const f of o.features) f.properties._d = day(f.properties.date); // date is epoch ms
+      return o;
+    },
     layers: (s, st) => [
       { id: `${s}-case`, type: "line", source: s, filter: LINE, layout: { "line-cap": "round", "line-sort-key": ["get", "_ef"] }, paint: { "line-color": "#000", "line-width": ["interpolate", ["linear"], ["zoom"], 4, ["+", 1.5, ["*", 0.5, ["get", "_ef"]]], 10, ["+", 4, ["get", "_ef"]]], "line-opacity": 0.5 * st.opacity } } as LayerSpecification,
       { id: `${s}-track`, type: "line", source: s, filter: LINE, layout: { "line-cap": "round", "line-sort-key": ["get", "_ef"] }, paint: { "line-color": EF, "line-width": ["interpolate", ["linear"], ["zoom"], 4, ["*", st.size, ["+", 0.8, ["*", 0.4, ["get", "_ef"]]]], 10, ["*", st.size, ["+", 2, ["*", 0.8, ["get", "_ef"]]]]], "line-opacity": st.opacity } } as LayerSpecification,
       // touchdown points for tracks without a length
       { id: `${s}-pt`, type: "circle", source: s, filter: POINT, paint: { "circle-color": EF, "circle-radius": 3 * st.size, "circle-opacity": st.opacity, "circle-stroke-color": "#000", "circle-stroke-width": 0.6 } } as LayerSpecification,
-      ...(st.labels ? [{ id: `${s}-label`, type: "symbol", source: s, filter: LINE, minzoom: 8, layout: { "symbol-placement": "line-center", "text-field": ["to-string", ["get", "date"]], "text-font": font, "text-size": 10 }, paint: halo } as LayerSpecification] : []),
+      ...(st.labels ? [{ id: `${s}-label`, type: "symbol", source: s, filter: LINE, minzoom: 8, layout: { "symbol-placement": "line-center", "text-field": ["get", "_d"], "text-font": font, "text-size": 10 }, paint: halo } as LayerSpecification] : []),
     ],
     click: (p) => {
       const n = efNum(p.mag);
-      const yr = String(p.date ?? "").slice(0, 4);
+      const yr = p.date != null && p.date !== "" ? new Date(typeof p.date === "number" || /^-?\d+$/.test(String(p.date)) ? +p.date : Date.parse(p.date)).getUTCFullYear() : NaN;
       return {
-        title: `${+yr && +yr < 2007 ? "F" : "EF"}${n < 0 ? "U" : n} tornado · ${day(p.date)}`,
+        title: `${yr < 2007 ? "F" : "EF"}${n < 0 ? "U" : n} tornado · ${day(p.date)}`,
         sub: `SPC tornado database${p.st ? ` · ${p.st}` : ""}`,
         color: EF_COLORS[n + 1],
         rows: [
@@ -159,14 +163,15 @@ const tropical: OverlayDef[] = [
   },
   {
     id: "surge",
-    name: "Peak storm surge (NHC)",
+    name: "Storm surge (NHC)",
     group: "Tropical",
     feed: "client",
     refresh: 0,
+    options: [{ key: "kind", label: "Show", choices: [["peak", "Peak storm surge"], ["inund", "Potential surge flooding"]], def: "peak" }],
     style: { opacity: 0.75 },
-    raster: () => arcgis("surge", ""),
+    raster: (o) => (o.kind === "inund" ? arcgis("inundation", "") : arcgis("surge", "")),
     layers: (s, st) => rasterLayer(s, st),
-    note: "Potential storm surge flooding (feet above ground) when a surge watch or warning is in effect. Blue < 3 ft, yellow > 3 ft, orange > 6 ft, red > 9 ft.",
+    note: "Storm surge when a surge watch or warning is in effect. Peak surge: blue < 3 ft, yellow > 3 ft, orange > 6 ft, red > 9 ft above ground. Potential flooding: NHC inundation map for each active storm.",
   },
   {
     id: "arrival",
@@ -176,7 +181,7 @@ const tropical: OverlayDef[] = [
     refresh: 0,
     options: [{ key: "kind", label: "Show", choices: [["likely", "Most likely arrival"], ["earliest", "Earliest reasonable"]], def: "likely" }],
     style: { opacity: 0.7 },
-    raster: (o) => arcgis("arrival", `kind=${o.kind || "likely"}`),
+    raster: (o) => arcgis("arrival", `layer=${o.kind === "earliest" ? "earliest" : "likely"}`),
     layers: (s, st) => rasterLayer(s, st),
     note: "When 39 mph winds may first arrive (NHC), in 6–12 h bands.",
   },
@@ -187,13 +192,37 @@ const tropical: OverlayDef[] = [
 const flooding: OverlayDef[] = [
   {
     id: "nwm",
-    name: "High flow (National Water Model)",
+    name: "Stream flooding (National Water Model)",
     group: "Precipitation & winter",
     feed: "client",
     refresh: 0,
-    options: [{ key: "range", label: "Forecast", choices: [["short", "Short range (18 h)"], ["medium", "Medium range (10 days)"]], def: "short" }],
+    options: [
+      {
+        key: "range",
+        label: "Show",
+        choices: [
+          ["now", "High flow now"],
+          ["short", "Max high flow, next 18 h"],
+          ["medium", "Max high flow, next 10 days"],
+          ["hwp", "High water chance, next 12 h"],
+          ["rof", "Rapid-onset flooding (18 h)"],
+          ["rofarr", "Rapid-onset: arrival"],
+          ["rofdur", "Rapid-onset: duration"],
+          ["inund", "Inundation extent now"],
+        ],
+        def: "short",
+      },
+    ],
     style: { opacity: 0.9 },
-    raster: (o) => arcgis("nwm", `range=${o.range || "short"}`),
+    raster: (o) => {
+      const r = o.range || "short";
+      if (r === "now") return arcgis("nwm_hiflow", "");
+      if (r === "medium") return arcgis("nwm_mrf_hiflow", "");
+      if (r === "hwp") return arcgis("nwm_hwp", "");
+      if (r === "inund") return arcgis("nwm_inund", "");
+      if (r.startsWith("rof")) return arcgis("nwm_rof", `layer=${r === "rofarr" ? "arrival" : r === "rofdur" ? "duration" : "length"}`);
+      return arcgis("nwm_srf_hiflow", "");
+    },
     layers: (s, st) => rasterLayer(s, st),
     note: "Streams forecast to run high (NOAA National Water Model). Yellow/orange/red/purple = higher flow percentiles. MRMS FLASH layers are in the weather layer picker → Water.",
   },
@@ -201,10 +230,14 @@ const flooding: OverlayDef[] = [
 
 // ---------- Roads ----------
 
-const ROAD_COLORS: Record<string, string> = { dry: "#22c55e", wet: "#3b82f6", snow: "#e5e7eb", ice: "#d946ef", closed: "#ef4444", other: "#f59e0b", unknown: "#6b7280" };
-const ROAD_NAMES: Record<string, string> = { dry: "Dry / clear", wet: "Wet", snow: "Snow covered", ice: "Icy", closed: "Closed", other: "Partly covered / slushy", unknown: "Unknown" };
+const ROAD_COLORS: Record<string, string> = { dry: "#22c55e", wet: "#3b82f6", snow: "#e5e7eb", ice: "#d946ef", notravel: "#b91c1c", closed: "#ef4444", other: "#f59e0b", unknown: "#6b7280" };
+const ROAD_NAMES: Record<string, string> = { dry: "Dry / clear", wet: "Wet", snow: "Snow covered", ice: "Icy", notravel: "Travel not advised", closed: "Closed", other: "Partly covered / slushy", unknown: "Unknown" };
 /** state 511 wording → a small set of classes */
 export function roadClass(cond: any, desc?: any): string {
+  // server classes: closed notravel ice slush snow frost wet dry unknown
+  const k = String(cond ?? "").toLowerCase();
+  if (k in ROAD_COLORS && k !== "unknown" && k !== "other") return k;
+  if (k === "slush" || k === "frost") return "other";
   const s = `${cond ?? ""} ${desc ?? ""}`.toLowerCase();
   if (/clos|impass|no travel/.test(s)) return "closed";
   if (/ice|icy|glaze|freezing|black/.test(s)) return "ice";
@@ -228,7 +261,7 @@ const roads: OverlayDef[] = [
     prepare: (fc, o) => {
       const feats = (fc?.features ?? [])
         .map((f: any) => ({ ...f, properties: { ...f.properties, _c: roadClass(f.properties?.cond, f.properties?.desc) } }))
-        .filter((f: any) => o.hide !== "bad" || ["snow", "ice", "closed", "other"].includes(f.properties._c));
+        .filter((f: any) => o.hide !== "bad" || ["snow", "ice", "notravel", "closed", "other"].includes(f.properties._c));
       return { ...fc, features: feats };
     },
     layers: (s, st) => [
@@ -238,7 +271,7 @@ const roads: OverlayDef[] = [
         type: "line",
         source: s,
         filter: LINE,
-        layout: { "line-cap": "butt", "line-join": "round", "line-sort-key": ["match", ["get", "_c"], "closed", 5, "ice", 4, "snow", 3, "other", 2, "wet", 1, 0] },
+        layout: { "line-cap": "butt", "line-join": "round", "line-sort-key": ["match", ["get", "_c"], "closed", 6, "notravel", 5, "ice", 4, "snow", 3, "other", 2, "wet", 1, 0] },
         paint: { "line-color": RC, "line-width": ["interpolate", ["linear"], ["zoom"], 5, 1.8 * st.size, 12, 5 * st.size], "line-opacity": st.opacity, "line-dasharray": ["case", ["==", ["get", "_c"], "closed"], ["literal", [1.5, 1]], ["literal", [1, 0]]] },
       } as LayerSpecification,
       { id: `${s}-pt`, type: "circle", source: s, filter: POINT, paint: { "circle-color": RC, "circle-radius": 4 * st.size, "circle-stroke-color": "#000", "circle-stroke-width": 1, "circle-opacity": st.opacity } } as LayerSpecification,
@@ -248,10 +281,10 @@ const roads: OverlayDef[] = [
       title: `${p.road || "Road"} · ${ROAD_NAMES[p._c] ?? p.cond ?? "—"}`,
       sub: p.source ? `${p.source} 511` : "State 511",
       color: ROAD_COLORS[p._c] ?? "#6b7280",
-      rows: [["Condition", p.cond || ROAD_NAMES[p._c] || "—"], ["Reported", when(p.t)]],
+      rows: [["Condition", ROAD_NAMES[p._c] || p.cond || "—"], ["Reported", when(p.t)]],
       text: p.desc && p.desc !== p.cond ? p.desc : undefined,
     }),
-    note: "Winter road reports from state 511 feeds: green dry, blue wet, amber partly covered, white snow, magenta ice, red dashed closed. Zoom 5+.",
+    note: "Winter road reports from state 511 feeds: green dry, blue wet, amber partly covered, white snow, magenta ice, dark red travel not advised, red dashed closed. Zoom 5+.",
   },
 ];
 
@@ -289,7 +322,7 @@ const obs: OverlayDef[] = [
           id: `${s}-barb`,
           type: "symbol",
           source: s,
-          filter: ["has", "wind_kt"],
+          filter: ["!=", ["get", "wind_kt"], null], // server sends null for missing
           minzoom: mode === "wind" ? 5 : 7,
           layout: { "icon-image": barbIcon(["get", "wind_kt"]), "icon-rotate": ["to-number", ["get", "dir"], 0], "icon-rotation-alignment": "map", "icon-size": 0.8 * st.size, "icon-allow-overlap": true, "icon-ignore-placement": true },
           paint: { "icon-color": "#e5e7eb", "icon-opacity": st.opacity },
@@ -299,7 +332,7 @@ const obs: OverlayDef[] = [
           id: `${s}-text`,
           type: "symbol",
           source: s,
-          filter: ["has", "temp_c"],
+          filter: ["!=", ["get", "temp_c"], null], // server sends null for missing
           layout: { "text-field": tempTxt("temp_c"), "text-font": bold, "text-size": ["interpolate", ["linear"], ["zoom"], 5, 9.5, 10, 12], "text-offset": mode === "plot" ? [-0.7, -0.75] : [0, -0.9], "text-anchor": mode === "plot" ? "right" : "bottom", "text-padding": 1 },
           paint: { "text-color": "#fca5a5", "text-halo-color": "#000", "text-halo-width": 1.2, "text-opacity": st.opacity },
         } as LayerSpecification);
@@ -308,7 +341,7 @@ const obs: OverlayDef[] = [
             id: `${s}-dew`,
             type: "symbol",
             source: s,
-            filter: ["has", "dew_c"],
+            filter: ["!=", ["get", "dew_c"], null], // server sends null for missing
             minzoom: 8,
             layout: { "text-field": tempTxt("dew_c"), "text-font": bold, "text-size": 10.5, "text-offset": [-0.7, 0.75], "text-anchor": "right", "text-padding": 1 },
             paint: { "text-color": "#86efac", "text-halo-color": "#000", "text-halo-width": 1.2, "text-opacity": st.opacity },
@@ -325,11 +358,32 @@ const obs: OverlayDef[] = [
         ["Dewpoint", fT(p.dew_c)],
         ["Wind", p.wind_kt != null ? `${p.dir != null ? `${Math.round(+p.dir)}° ` : ""}${fW(p.wind_kt)}${p.gust_kt ? ` G${fW(p.gust_kt)}` : ""}` : "—"],
         ["Pressure", p.pres_mb != null ? `${(+p.pres_mb).toFixed(1)} mb` : "—"],
-        ["Rain (24 h)", p.rain_in != null ? (settings.value.units.precip === "in" ? `${(+p.rain_in).toFixed(2)} in` : `${(+p.rain_in * 25.4).toFixed(1)} mm`) : "—"],
+        ["Rain today", p.rain_in != null ? (settings.value.units.precip === "in" ? `${(+p.rain_in).toFixed(2)} in` : `${(+p.rain_in * 25.4).toFixed(1)} mm`) : "—"],
       ],
       link: p.id ? ["findU / CWOP", `http://www.findu.com/cgi-bin/wxpage.cgi?call=${encodeURIComponent(p.id)}`] : undefined,
     }),
     note: "CWOP/APRS citizen weather stations (unofficial; siting varies). Temperature red, dewpoint green, wind barbs in knots. Zoom 5+.",
+  },
+  {
+    id: "climaterec",
+    name: "Daily records set (ACIS)",
+    group: "Surface",
+    refresh: 3600,
+    path: "/api/climate/records",
+    view: "bbox",
+    minzoom: 4,
+    maxKm2: 4_000_000,
+    style: { opacity: 1, size: 1 },
+    layers: (s, st) => [
+      { id: `${s}-c`, type: "circle", source: s, paint: { "circle-radius": 6 * st.size, "circle-opacity": st.opacity, "circle-stroke-color": "#000", "circle-stroke-width": 1, "circle-color": ["match", ["get", "elem"], "maxt", "#ef4444", "himin", "#f97316", "mint", "#3b82f6", "lomax", "#22d3ee", "pcpn", "#22c55e", "snow", "#e5e7eb", "#a3a3a3"] } } as LayerSpecification,
+      { id: `${s}-t`, type: "symbol", source: s, minzoom: 6, layout: { "text-field": ["to-string", ["get", "value"]], "text-font": font, "text-size": 11, "text-offset": [0, 1.1], "text-anchor": "top" }, paint: halo } as LayerSpecification,
+    ],
+    click: (p) => ({
+      title: `${({ maxt: "Record high", mint: "Record low", himin: "Record warm low", lomax: "Record cool high", pcpn: "Record rain", snow: "Record snow" } as Record<string, string>)[p.elem] ?? "Record"}${p.tie ? " (tied)" : ""}`,
+      sub: p.name,
+      rows: [["Value", `${p.value}${p.elem === "pcpn" || p.elem === "snow" ? " in" : " °F"}`], ["Previous", p.prev != null ? `${p.prev} (${p.prev_year ?? "—"})` : "—"], ["Date", String(p.date ?? "")]],
+    }),
+    note: "Daily records set or tied yesterday (NOAA ACIS).",
   },
 ];
 

@@ -389,6 +389,7 @@ ipcMain.handle("wf6-widget-open", (_e, cfg) => {
     win.on("closed", () => {
       wf6Quitting = true;
       for (const x of wf6Widgets.values()) if (!x.isDestroyed()) x.destroy();
+      if (mini && !mini.isDestroyed()) mini.destroy();
     });
   }
   return true;
@@ -515,6 +516,8 @@ app.whenReady().then(() => {
     if (!file.startsWith(DIST)) return new Response("forbidden", { status: 403 });
     return net.fetch(pathToFileURL(fs.existsSync(file) ? file : path.join(DIST, "index.html")).toString());
   });
+  // Phase 6: start the bundled server first so the window finds it on its first connect
+  if (desktop.localServer) startLocalServer();
   createWindow();
   phase6Ready();
 });
@@ -862,6 +865,8 @@ process.on("exit", () => {
 let stopped = false;
 app.on("before-quit", (e) => {
   quitting = true;
+  // quitting (tray, Cmd+Q): widget windows close without telling the renderer, so they reopen next start
+  wf6Quitting = true;
   if (stopped || !srv || !srv.child || srv.child.exitCode !== null) return;
   e.preventDefault();
   stopLocalServer().finally(() => {
@@ -872,7 +877,6 @@ app.on("before-quit", (e) => {
 
 function phase6Ready() {
   setupTray();
-  if (desktop.localServer) startLocalServer();
   openFilesFromArgv(process.argv);
   // keep the OS login item in sync with the saved setting (e.g. after reinstall)
   if (desktop.autoStart && process.platform !== "linux") applyAutoStart(true);

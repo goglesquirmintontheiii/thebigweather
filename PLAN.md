@@ -213,8 +213,9 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
   - Live chaser video aggregators have no public APIs. Spotter Network's public streamer feed is used instead.
   - mPING needs a free key; its general license allows the last 4 hours.
 - Phase 5 notes: European single-site volumes come from the EUMETNET OPERA open data (24 h) and FMI. Composites cover Canada, Mexico, Japan, Taiwan and the Philippines. Hong Kong, Singapore, Malaysia, India and KMA were left out (licence, no georeferencing, or key). Niche US radars publish no open data.
-- Phase 5 follow-ups (checklist round): see `docs/PHASE5_FIXES.md`.
-- Next: Phase 6 (new features + Windows), when asked. Phase 7 (Android + VR) only when asked.
+- Phase 5: user-tested; fixes and requested changes shipped as 0.5.1.
+- Phase 6: done (0.6.0). Test with `docs/PHASE6_CHECKLIST.md` (also covers 0.5.1). Not done from the Phase 6 list: "Glow" radar style, RTOFS ocean currents (only huge archives on AWS), surf/rip-current forecasts (no keyless source).
+- Next: Phase 7 (Android + VR) only when asked.
 
 ---
 

@@ -79,6 +79,8 @@ export interface Swpc {
   xray: { t: number[]; flux: (number | null)[] };
   xclass: string;
   kp?: number | null;
+  /** NOAA G scale now (0–5) */
+  g?: number | null;
   alerts: { t: number; title: string; text: string }[];
   images: { name: string; url: string }[];
   aurora: { t: number; kp?: number | null; label?: string; url?: string }[];
@@ -86,6 +88,16 @@ export interface Swpc {
 export function parseSwpc(j: any): Swpc {
   const w = pick(j, "solar_wind", "wind", "plasma") ?? {};
   const ws = Array.isArray(w) ? series(w, "speed", "bz", "density") : series(pick(w, "series", "data", "points") ?? [], "speed", "bz", "density");
+  // server: solar_wind.bz_series [{t, bz, bt}] (separate cadence from plasma) → align by time
+  const bzs = !Array.isArray(w) ? pick(w, "bz_series") : null;
+  if (Array.isArray(bzs) && bzs.length && !ws.v.bz.some((x) => x != null)) {
+    const m = series(bzs, "bz");
+    ws.v.bz = ws.t.map((t) => {
+      let best: number | null = null, bd = 6 * 60_000;
+      m.t.forEach((u, i) => Math.abs(u - t) <= bd && ((bd = Math.abs(u - t)), (best = m.v.bz[i])));
+      return best;
+    });
+  }
   const mag = pick(j, "mag", "magnetic");
   if (mag && !ws.v.bz.some((x) => x != null)) {
     const ms = series(Array.isArray(mag) ? mag : pick(mag, "series", "data") ?? [], "bz");
@@ -104,8 +116,20 @@ export function parseSwpc(j: any): Swpc {
   const im = pick(j, "images", "imagery") ?? [];
   let images: { name: string; url: string }[] = [];
   if (Array.isArray(im)) images = im.map((x: any, i: number) => (typeof x === "string" ? { name: `Image ${i + 1}`, url: x } : { name: String(pick(x, "name", "title", "id") ?? `Image ${i + 1}`), url: String(pick(x, "url", "src", "href") ?? "") })).filter((x) => x.url);
-  else if (im && typeof im === "object") images = Object.entries(im).filter(([, v]) => typeof v === "string").map(([k, v]) => ({ name: k.replace(/_/g, " ").toUpperCase(), url: v as string }));
-  const au = pick(j, "aurora", "aurora_timeline", "kp_forecast", "forecast") ?? [];
+  else if (im && typeof im === "object")
+    // server: { sdo: [{name, url}], lasco: [{name, url}], suvi: {name, url} }
+    for (const [k, v] of Object.entries(im)) {
+      for (const x of Array.isArray(v) ? v : [v])
+        if (typeof x === "string") images.push({ name: k.replace(/_/g, " ").toUpperCase(), url: x });
+        else if (x && typeof x === "object" && pick(x, "url")) images.push({ name: String(pick(x, "name", "id") ?? k), url: String(pick(x, "url")) });
+    }
+  let au = pick(j, "aurora", "aurora_timeline", "kp_forecast", "forecast") ?? [];
+  const anim = pick(pick(j, "animations") ?? {}, "ovation_north");
+  if ((!Array.isArray(au) || !au.length) && Array.isArray(anim) && anim.length) {
+    // server: OVATION frames [{url, time}] (no Kp) → at most 24 evenly spaced frames
+    const step = Math.max(1, Math.ceil(anim.length / 24));
+    au = anim.filter((_: any, i: number) => (anim.length - 1 - i) % step === 0);
+  }
   const auList = Array.isArray(au) ? au : pick(au, "timeline", "series", "frames") ?? [];
   const aurora = (Array.isArray(auList) ? auList : []).map((x: any) => (Array.isArray(x) ? { t: tOf(x[0]), kp: num(x[1]), label: x[2] != null ? String(x[2]) : undefined } : { t: tOf(pick(x, "t", "time", "time_tag")), kp: num(pick(x, "kp", "value", "kp_index")), label: pick(x, "label", "observed", "scale"), url: pick(x, "url", "image") }));
   return {
@@ -113,6 +137,7 @@ export function parseSwpc(j: any): Swpc {
     xray: { t: xs.t, flux: xs.v.flux },
     xclass,
     kp: num(pick(j, "kp", "kp_now")),
+    g: num(pick(pick(pick(pick(j, "scales") ?? {}, "0") ?? {}, "G") ?? {}, "Scale")),
     alerts: alerts.filter((a) => a.text || a.title).sort((a, b) => b.t - a.t),
     images: images.length ? images : FALLBACK_IMAGES,
     aurora: aurora.filter((a) => Number.isFinite(a.t)),
@@ -150,7 +175,8 @@ function SpaceBody() {
   const bust = (u: string) => (u.startsWith("data:") ? u : `${abs(u)}${abs(u).includes("?") ? "&" : "?"}r=${tick}`);
   const kpCol = (k: number | null | undefined) => (k == null ? "#6b7280" : k >= 7 ? "#ef4444" : k >= 5 ? "#f97316" : k >= 4 ? "#facc15" : "#22c55e");
   const aur = s?.aurora ?? [];
-  const ai = aIdx ?? aur.findIndex((a) => a.t >= Date.now());
+  const ai0 = aur.findIndex((a) => a.t >= Date.now());
+  const ai = aIdx ?? (ai0 < 0 ? aur.length - 1 : ai0);
   return (
     <CenterModal
       cls="d6-space"
@@ -183,6 +209,13 @@ function SpaceBody() {
               <b>{s.xclass}</b>
               <span>{/^X/.test(s.xclass) ? "Major flare" : /^M/.test(s.xclass) ? "Moderate flare" : "Quiet"}</span>
             </div>
+            {s.kp == null && s.g != null && (
+              <div class="d6-card" style={{ borderColor: s.g >= 1 ? kpCol(s.g + 4) : undefined }}>
+                <small class="muted">Geomagnetic</small>
+                <b style={{ color: kpCol(s.g >= 1 ? s.g + 4 : 0) }}>G{s.g}</b>
+                <span>{s.g >= 1 ? "Storm" : "No storm"}</span>
+              </div>
+            )}
             {s.kp != null && (
               <div class="d6-card" style={{ borderColor: kpCol(s.kp) }}>
                 <small class="muted">Kp now</small>
@@ -222,11 +255,11 @@ function SpaceBody() {
           </div>
           {aur.length > 0 && (
             <section class="fcc-sec">
-              <label class="lbl">Aurora / Kp forecast</label>
+              <label class="lbl">{aur.some((a) => a.kp != null) ? "Aurora / Kp forecast" : "Aurora (OVATION, north)"}</label>
               <div class="d6-aur">
                 {aur.slice(0, 40).map((a, i) => (
                   <button key={i} class={`d6-aur-cell ${i === ai ? "on" : ""} ${a.t < Date.now() ? "past" : ""}`} style={{ background: kpCol(a.kp) }} title={`${new Date(a.t).toLocaleString(undefined, { timeZone: tz() })} · Kp ${a.kp ?? "—"}${a.label ? ` · ${a.label}` : ""}`} onClick={() => setAIdx(i)}>
-                    <b>{a.kp != null ? a.kp.toFixed(0) : "?"}</b>
+                    {a.kp != null && <b>{a.kp.toFixed(0)}</b>}
                     <small>{new Date(a.t).toLocaleString(undefined, { weekday: "short", hour: "numeric", timeZone: tz() })}</small>
                   </button>
                 ))}

@@ -18,7 +18,7 @@ import { SrvControl } from "./SrvControl";
 import { WorkspaceMenu } from "./panels/WorkspacePanel";
 import { startXSection, xsLine } from "./XSection";
 import { trackPanel, recording } from "../gps";
-import { ScanSearch, Zap } from "lucide-preact"; // radar 0.6
+import { ScanSearch, Zap, Shapes } from "lucide-preact"; // radar 0.6
 import { LightningChip, toggleInspector } from "./Inspector"; // radar 0.6
 /* workflow 0.6 */
 import { Megaphone, Tv, Navigation, ListChecks, AppWindow } from "lucide-preact";
@@ -125,23 +125,28 @@ export function Toolbar() {
         <>
           <div class="ws-scrim" onPointerDown={() => setMore(false)} />
           <div class="tb-more glass" onClick={() => setMore(false)}>
+            <div class="tb-more-h">Radar tools</div>
+            {/* radar 0.6 */ item(!!settings.value.radar6?.inspector, "Inspector (all moments)", "I", toggleInspector, <ScanSearch size={16} />)}
+            {/* workflow */ item(t === "xsect" || !!xsLine.value, "Cross-section (Level II)", "", startXSection, <Slice size={16} />)}
             {item(t === "bearing", "Distance & direction", "B", () => (tool.value = t === "bearing" ? "none" : "bearing"), <Compass size={16} />)}
+            {item(settings.value.overlays.sites, "Radar sites", "R", () => update((s) => (s.overlays.sites = !s.overlays.sites)), <RadioTower size={16} />)}
+            {/* radar 0.6 */ item(openPanel.value === "placefiles", "Placefiles", "", () => (openPanel.value = openPanel.value === "placefiles" ? null : "placefiles"), <Shapes size={16} />)}
+            {/* radar 0.6 */ item(!!settings.value.radar6?.ltgWatch, "Lightning near my points", "", () => update((s) => (s.radar6 = { ...s.radar6, ltgWatch: !s.radar6?.ltgWatch })), <Zap size={16} />)}
+            <div class="tb-more-h">Data</div>
             {item(crosshair.value, "Center crosshair value", "C", () => (crosshair.value = !crosshair.value), <Crosshair size={16} />)}
             {item(settings.value.ui.cursorValue, "Value under mouse", "V", () => update((s) => (s.ui.cursorValue = !s.ui.cursorValue)), <MousePointer2 size={16} />)}
-            {item(settings.value.overlays.sites, "Radar sites", "R", () => update((s) => (s.overlays.sites = !s.overlays.sites)), <RadioTower size={16} />)}
-            {/* workflow */ item(t === "xsect" || !!xsLine.value, "Cross-section (Level II)", "", startXSection, <Slice size={16} />)}
             {item(loopDialog.value || !!loopProgress.value, "Export loop (GIF / MP4)", "", () => (loopDialog.value = !loopDialog.value), <Film size={16} />, frameCount.value < 1 || !!loopProgress.value)}
             {item(trackPanel.value, recording.value ? "GPS track · recording" : "GPS track & chasers", "", () => (trackPanel.value = !trackPanel.value), <Route size={16} />)}
-            {item(wsOpen, "Workspaces", "", () => setWsOpen(!wsOpen), <Bookmark size={16} />)}
-            {/* radar 0.6 */ item(!!settings.value.radar6?.inspector, "Inspector (all moments)", "I", toggleInspector, <ScanSearch size={16} />)}
-            {/* radar 0.6 */ item(!!settings.value.radar6?.ltgWatch, "Lightning near my points", "", () => update((s) => (s.radar6 = { ...s.radar6, ltgWatch: !s.radar6?.ltgWatch })), <Zap size={16} />)}
             {/* workflow 0.6 */}
-            {item(!!briefing.value, "Briefing (spoken summary)", "", () => runBriefing(), <Megaphone size={16} />)}
+            <div class="tb-more-h">Workflow</div>
             {item(openPanel.value === "route", "Route weather", "", () => (openPanel.value = openPanel.value === "route" ? null : "route"), <Navigation size={16} />)}
-            {item(openPanel.value === "rules", "Notification rules", "", () => (openPanel.value = openPanel.value === "rules" ? null : "rules"), <ListChecks size={16} />)}
-            {item(openPanel.value === "widgets", "Desktop widgets", "", () => (openPanel.value = openPanel.value === "widgets" ? null : "widgets"), <AppWindow size={16} />)}
-            {item(false, "Wall / kiosk mode", "", enterKiosk, <Tv size={16} />)}
+            {item(!!briefing.value, "Briefing (spoken summary)", "", () => runBriefing(), <Megaphone size={16} />)}
+            {item(openPanel.value === "rules", "Notification rules", "", () => (openPanel.value = openPanel.value === "rules" ? null : "rules"), <ListChecks size={16} class="p6-owner" />)}
+            {item(openPanel.value === "widgets", "Desktop widgets", "", () => (openPanel.value = openPanel.value === "widgets" ? null : "widgets"), <AppWindow size={16} class="p6-owner" />)}
+            {item(wsOpen, "Workspaces", "", () => setWsOpen(!wsOpen), <Bookmark size={16} class="p6-owner" />)}
+            {item(false, "Wall / kiosk mode", "", enterKiosk, <Tv size={16} class="p6-owner" />)}
             {/* end workflow 0.6 */}
+            <div class="tb-more-h p6-owner">Share</div>
             {/* share & collab */ item(shareDialog.value, "Share live view", "", () => (shareDialog.value = !shareDialog.value), <Share2 size={16} class="p6-owner" />)}
             {item(teamOpen.value, team.value ? `Team · ${team.value.name}${unread.value ? ` (${unread.value})` : ""}` : "Team (live collaboration)", "", () => (teamOpen.value = !teamOpen.value), <Users size={16} class="p6-owner" />)}
           </div>

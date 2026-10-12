@@ -67,6 +67,8 @@ import { startRules } from "../rules/engine";
 import { startWidgets } from "../widgets/manager";
 import { startPlugins } from "../plugins/host";
 import { kioskFromArgs, kiosk } from "../kiosk";
+import { popoutSpec } from "../popout";
+import { shareParam } from "../share/share";
 /* end workflow 0.6 */
 // share & collab (Phase 6)
 import { SharePanel } from "./SharePanel";
@@ -80,11 +82,13 @@ export function App() {
     startAlerts();
     loadFiles();
     (window as any).__tbwImport = importFile;
-    /* workflow 0.6 */
-    startRules();
-    startWidgets();
-    startPlugins();
-    kioskFromArgs();
+    /* workflow 0.6: main window only (not the mini radar / map pop-outs, not share viewers) */
+    if (!popoutSpec && !shareParam) {
+      startRules();
+      startWidgets();
+      startPlugins();
+      kioskFromArgs();
+    }
   }, []);
   useHotkeys();
   const noServer = settings.value.servers.length === 0;

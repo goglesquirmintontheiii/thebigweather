@@ -2,6 +2,7 @@
 // line per model (Open-Meteo multi-model API) for temperature, precipitation, wind, pressure and
 // cloud at a point.
 
+import { themeLight } from "../theme";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { settings, update } from "../store";
 
@@ -103,6 +104,8 @@ export function LineChart({
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
     g.font = "10px Inter, system-ui, sans-serif";
+    const lt = themeLight.value; // light theme: dark text and grid
+    const ink = (a: number) => (lt ? `rgba(15,23,42,${a})` : `rgba(255,255,255,${a})`);
     for (const m of marks ?? []) {
       g.fillStyle = m.color;
       const a = Math.max(L, x(m.t0));
@@ -116,12 +119,12 @@ export function LineChart({
     const stp = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((k) => k >= raw) ?? raw;
     g.textAlign = "right";
     for (let v = Math.ceil(range[0] / stp) * stp; v <= range[1] + 1e-9; v += stp) {
-      g.strokeStyle = "rgba(255,255,255,.07)";
+      g.strokeStyle = ink(lt ? 0.1 : 0.07);
       g.beginPath();
       g.moveTo(L, y(v));
       g.lineTo(w - R, y(v));
       g.stroke();
-      g.fillStyle = "#8b97a6";
+      g.fillStyle = lt ? "#5b6675" : "#8b97a6";
       g.fillText(fmt(v), L - 4, y(v) + 3);
     }
     // x: day separators
@@ -132,25 +135,25 @@ export function LineChart({
       const k = new Date(tt).toLocaleDateString("en-CA", { timeZone: tzOpt(tz) });
       if (daily) {
         if (i % every) return;
-        g.fillStyle = "#8b97a6";
+        g.fillStyle = lt ? "#5b6675" : "#8b97a6";
         g.fillText(new Date(tt).toLocaleDateString(undefined, { month: "numeric", day: "numeric", timeZone: tzOpt(tz) }), x(tt) - 8, h - 4);
         return;
       }
       if (k !== lastKey) {
         lastKey = k;
         if (i > 0) {
-          g.strokeStyle = "rgba(255,255,255,.14)";
+          g.strokeStyle = ink(lt ? 0.2 : 0.14);
           g.beginPath();
           g.moveTo(x(tt), top);
           g.lineTo(x(tt), bottom);
           g.stroke();
         }
-        g.fillStyle = "#9aa6b5";
+        g.fillStyle = lt ? "#4b5563" : "#9aa6b5";
         g.fillText(new Date(tt).toLocaleDateString(undefined, { weekday: "short", day: "numeric", timeZone: tzOpt(tz) }), x(tt) + 3, h - 4);
       }
     });
     if (title) {
-      g.fillStyle = "#c4cdd8";
+      g.fillStyle = lt ? "#1f2937" : "#c4cdd8";
       g.font = "600 10.5px Inter, system-ui, sans-serif";
       g.fillText(`${title}${unit ? ` (${unit})` : ""}`, L, 11);
       g.font = "10px Inter, system-ui, sans-serif";
@@ -206,13 +209,13 @@ export function LineChart({
     }
     g.setLineDash([]);
     if (hov != null && t[hov] != null) {
-      g.strokeStyle = "rgba(255,255,255,.5)";
+      g.strokeStyle = ink(0.5);
       g.beginPath();
       g.moveTo(x(t[hov]), top);
       g.lineTo(x(t[hov]), bottom);
       g.stroke();
     }
-  }, [w, h, t, series, band, range, hov, title, marks, fontTick]);
+  }, [w, h, t, series, band, range, hov, title, marks, fontTick, themeLight.value]);
   const onMove = (e: PointerEvent) => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const px = e.clientX - r.left;

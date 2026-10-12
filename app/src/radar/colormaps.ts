@@ -260,6 +260,8 @@ Object.assign(BUILTIN, {
   WAVEPER: T("WAVEPER", "Wave Period", "s", 0, 25, [S(0, "#0b1d3a", 120), S(4, "#1f5fd6"), S(7, "#3fa0f0"), S(10, "#3fbf8a"), S(13, "#f2e30c"), S(16, "#f2a105"), S(19, "#d6150f"), S(25, "#ff2ab4")]),
   WAVEDIR: T("WAVEDIR", "Wave Direction", "°", 0, 360, [S(0, "#d6150f"), S(90, "#f2e30c"), S(180, "#16c45a"), S(270, "#2b5fd6"), S(360, "#d6150f")]),
   SSTA: T("SSTA", "SST Anomaly", "°C", -5, 5, [S(-5, "#2a0b6b"), S(-3, "#2b5fd6"), S(-1.5, "#3fa0f0"), S(-0.5, "#cfe8f5"), S(0, "#f2f2f2"), S(0.5, "#f5e3c0"), S(1.5, "#f2a105"), S(3, "#d6150f"), S(5, "#6b0b2a")]),
+  // QPE / flash flood guidance: 1.0 = rain equals guidance; transparent below ~0.5
+  FFGRATIO: T("FFGRATIO", "QPE / FFG", "ratio", 0, 3, [S(0, "#000000", 0), S(0.49, "#000000", 0), S(0.5, "#2f6fa8", 130), S(0.75, "#16c45a", 200), S(1, "#f2e30c"), S(1.25, "#f2a105"), S(1.5, "#e41b14"), S(2, "#ff2ab4"), S(3, "#ffffff")]),
   STREAMFLOW: T("STREAMFLOW", "Streamflow", "m³/s", 0, 5000, [S(0, "#000000", 0), S(10, "#2f6fa8", 140), S(100, "#2fb6d9"), S(500, "#16c45a"), S(1000, "#f2e30c"), S(2000, "#f2a105"), S(3500, "#e41b14"), S(5000, "#ff2ab4")]),
   /* ---------- end data 0.6 ---------- */
 });

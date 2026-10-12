@@ -383,6 +383,9 @@ pub async fn barbs_api(gs: &GridService, q: &HashMap<String, String>) -> Result<
         None => (1280.0 * 360.0 / ((bbox[2] - bbox[0]) * 256.0)).log2().clamp(0.0, 22.0),
     };
     let time = g("time").and_then(|t| t.parse::<i64>().ok());
+    if model == "gfswave" {
+        return wave_arrows(gs, bbox, zoom, spacing, time).await;
+    }
     let (gu, gv, run, fh) = gs.wind_uv(&model, &level, time).await?;
     let out = gs
         .run_blocking(move || {
@@ -419,6 +422,49 @@ pub async fn barbs_api(gs: &GridService, q: &HashMap<String, String>) -> Result<
     v["spacing_px"] = json!(spacing);
     v["zoom"] = json!(zoom);
     v["units"] = json!({"u": "m/s", "v": "m/s", "speed": "kt", "dir": "deg from"});
+    Ok(v)
+}
+
+/// GFS-Wave: thinned points of the primary wave direction (`dir` = degrees the waves come from)
+/// and significant height (`height_m`), for arrows instead of barbs.
+async fn wave_arrows(gs: &GridService, bbox: [f64; 4], zoom: f64, spacing: f64, time: Option<i64>) -> Result<Value> {
+    let key = |id: &'static str| async move {
+        let fr = gs.frames(id, 60, None, None, None).await?;
+        let f = match time {
+            Some(t) => fr.frames.iter().min_by_key(|f| (f.time - t).abs()),
+            None => fr.frames.iter().filter(|f| f.time <= chrono::Utc::now().timestamp_millis()).next_back().or(fr.frames.first()),
+        };
+        f.map(|f| f.key.clone()).ok_or_else(|| anyhow!("no frame for {id}"))
+    };
+    let (kd, kh) = tokio::try_join!(key("model/gfswave/dirpw"), key("model/gfswave/htsgw"))?;
+    let (gd, gh) = tokio::try_join!(gs.grid(&kd), gs.grid(&kh))?;
+    let out = gs
+        .run_blocking(move || {
+            let mut spacing = spacing;
+            let mut pts = barb_points(bbox, zoom, spacing);
+            while pts.len() > 8000 {
+                spacing *= 1.5;
+                pts = barb_points(bbox, zoom, spacing);
+            }
+            let feats: Vec<Value> = pts
+                .par_iter()
+                .filter_map(|&(lat, lon)| {
+                    // nearest cell: directions don't interpolate across 0/360
+                    let d = gd.sample(lat, lon)?;
+                    let h = sample_bilinear(&gh, lat, lon);
+                    Some(crate::overlays::point(lon, lat, json!({"dir": d.rem_euclid(360.0).round(), "height_m": h.map(|h| (h * 10.0).round() / 10.0)})))
+                })
+                .collect();
+            Ok((json!({"type": "FeatureCollection", "features": feats}), gd.valid_ms, spacing))
+        })
+        .await?;
+    let (mut v, valid, spacing) = out;
+    v["model"] = json!("gfswave");
+    v["level"] = json!("sfc");
+    v["time"] = json!(valid);
+    v["spacing_px"] = json!(spacing);
+    v["zoom"] = json!(zoom);
+    v["units"] = json!({"dir": "deg from", "height": "m"});
     Ok(v)
 }
 

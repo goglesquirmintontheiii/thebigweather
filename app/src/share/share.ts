@@ -181,7 +181,7 @@ export async function initViewer(): Promise<void> {
   effect(() => {
     if (tool.value === "draw") tool.value = "none";
     const p = openPanel.value as string | null;
-    if (p && ["settings", "record", "files", "workspaces"].includes(p)) openPanel.value = null;
+    if (p && ["settings", "record", "files", "workspaces", "rules", "widgets", "placefiles"].includes(p)) openPanel.value = null;
   });
 }
 

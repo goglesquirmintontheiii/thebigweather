@@ -4911,11 +4911,26 @@ body.loopx-hide .loopx {
   flex-direction: column;
   gap: 1px;
 }
+.tb-more {
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+}
+.tb-more-h {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 6px 8px 2px;
+}
+.tb-more-h:first-child {
+  padding-top: 2px;
+}
 .tb-more-item {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 7px 8px;
+  padding: 5px 8px;
   border-radius: 8px;
   text-align: left;
   color: #c4cdd8;
@@ -7170,6 +7185,21 @@ html[data-theme="light"] .bf-body .bf-alerts,
 html[data-theme="light"] .rl-title .rl-now {
   color: #b91c1c;
 }
+/* Phase 6 panels: pale dark-theme accents → darker for white backgrounds */
+html[data-theme="light"] .d6-clim .hi,
+html[data-theme="light"] .d6-card .hi {
+  color: #dc2626;
+}
+html[data-theme="light"] .d6-clim .lo,
+html[data-theme="light"] .d6-card .lo {
+  color: #2563eb;
+}
+html[data-theme="light"] .d6-clim .warm {
+  color: #c2410c;
+}
+html[data-theme="light"] .d6-clim .cold {
+  color: #1d4ed8;
+}
 
 /* ---------- data 0.6 ---------- */
 /* contours / barbs dock above the legend */
@@ -7753,6 +7783,8 @@ html[data-theme="light"] .toggle i {
 .tbw-viewer .rail-btn[title="Workspaces"],
 .tbw-viewer .tb[title^="Drawing mode"],
 .tbw-viewer .tb-more-item:has(.p6-owner),
+.tbw-viewer .tb-more-h.p6-owner,
+.tbw-viewer .p6-owner-only,
 .tbw-viewer .draw-x {
   display: none !important;
 }

@@ -1,6 +1,6 @@
-import { Shapes } from "lucide-preact"; // radar 0.6
 import { PlacefilePanel } from "./PlacefilePanel"; // radar 0.6
 import { openPanel, type PanelId, connection } from "../store";
+import { viewer } from "../share/share"; // share & collab
 import { alerts } from "../alerts";
 import { Layers, Radar, TriangleAlert, MapPin, Activity, Settings, Radio, FolderOpen, CloudSun, Search, X, Map as MapIcon, CircleDot } from "lucide-preact";
 import { RadioPanel } from "./panels/RadioPanel";
@@ -26,7 +26,6 @@ import { histStormsOpen } from "../histsearch"; // history 0.6
 import { AudioWaveform } from "lucide-preact";
 import { shakeOpen } from "../shake";
 /* workflow 0.6 */
-import { Navigation, ListChecks, AppWindow } from "lucide-preact";
 import { RoutePanel } from "./RoutePanel";
 import { RulesPanel } from "./RulesPanel";
 import { WidgetsPanel } from "./WidgetHost";
@@ -50,11 +49,7 @@ const MORE: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "record", icon: CircleDot, label: "Recordings" },
   { id: "files", icon: FolderOpen, label: "Files & backup" },
   { id: "workspaces", icon: Bookmark, label: "Workspaces" }, // workflow
-  /* workflow 0.6 */
-  { id: "route", icon: Navigation, label: "Route weather" },
-  { id: "rules", icon: ListChecks, label: "Notification rules" },
-  { id: "widgets", icon: AppWindow, label: "Desktop widgets" },
-  { id: "placefiles", icon: Shapes, label: "Placefiles" }, // radar 0.6
+  // route / rules / widgets / placefiles: in the toolbar "…" menu (keeps the rail short)
 ];
 
 export function Rail() {
@@ -91,9 +86,12 @@ export function Rail() {
 
 const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */, route: "Route weather", rules: "Notification rules", widgets: "Desktop widgets" /* workflow 0.6 */, placefiles: "Placefiles" /* radar 0.6 */ };
 
+// share viewers: no owner-only panels (the server refuses their writes anyway)
+const OWNER_ONLY = new Set(["settings", "record", "files", "workspaces", "rules", "widgets", "placefiles"]);
+
 export function SidePanel() {
   const p = openPanel.value;
-  if (!p) return null;
+  if (!p || (viewer.value && OWNER_ONLY.has(p))) return null;
   return (
     <aside class="side-panel glass">
       <div class="panel-head">

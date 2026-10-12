@@ -89,7 +89,7 @@ export async function nearestCell(lat: number, lon: number): Promise<{ cell: Cel
 // ---------- lightning ----------
 /** the radar agent's helper, when it exists (src/radar/lightning*.ts exporting lightningNear) */
 const ltgMods = import.meta.glob("./radar/lightning*.ts");
-let ltgHelper: ((lat: number, lon: number, radiusM: number, minutes: number) => any) | null | undefined;
+let ltgHelper: ((lat: number, lon: number, km: number, minutes: number) => any) | null | undefined;
 async function helper() {
   if (ltgHelper !== undefined) return ltgHelper;
   ltgHelper = null;
@@ -125,10 +125,10 @@ export async function nearestStrike(lat: number, lon: number, minutes = 15, radi
     if (!c) continue;
     const d = distance(lat, lon, c[1], c[0]);
     if (d > radiusM) continue;
-    n++;
     // GLM "age" is seconds (server); older than asked is ignored
     const ageMin = Number(f.properties?.age ?? 0) / 60;
     if (ageMin > minutes) continue;
+    n++;
     if (!best || d < best.dist) best = { dist: d, brg: bearing(lat, lon, c[1], c[0]), age: ageMin * 60_000, count: 0 };
   }
   if (best) best.count = n;
