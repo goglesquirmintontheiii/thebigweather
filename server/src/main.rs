@@ -11,6 +11,7 @@ mod grid;
 mod api;
 mod config;
 mod health;
+mod hist;
 mod hub;
 mod intlradar;
 mod radar;

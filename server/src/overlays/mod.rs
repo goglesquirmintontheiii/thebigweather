@@ -15,6 +15,7 @@ pub mod noaa;
 pub mod obs;
 pub mod ships;
 pub mod sounding;
+pub mod traffic;
 pub mod vdm;
 
 use crate::grid::service::GridService;
@@ -51,6 +52,10 @@ pub struct Overlays {
     pub tiles: more::TileCache,
     /// proxied ArcGIS raster tiles / legends (NOHRSC, HeatRisk)
     pub arcgis: more::TileCache,
+    /// keyless road events / traffic speeds (`roadwork`, `trafficflow`)
+    pub traffic: traffic::Traffic,
+    /// historical warnings / tropical cyclone archives (`/api/hist/*`)
+    pub hist: Arc<crate::hist::Hist>,
     /// offline testing: `<id>.json` files served instead of live data
     pub fixtures: parking_lot::RwLock<Option<PathBuf>>,
 }
@@ -117,6 +122,8 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("shake", 86400),
     ("vdm", 120),
     ("raobsta", 86400),
+    ("roadwork", 0),
+    ("trafficflow", 0),
 ];
 
 pub fn ttl(id: &str) -> Option<u64> {
@@ -172,6 +179,8 @@ impl Overlays {
             shake: crate::shake::Shake::default(),
             tiles: more::TileCache::default(),
             arcgis: more::TileCache::default(),
+            traffic: traffic::Traffic::default(),
+            hist: Arc::new(crate::hist::Hist::new(data_dir)),
             fixtures: parking_lot::RwLock::new(None),
         })
     }
@@ -374,6 +383,8 @@ impl Overlays {
             "shake" => more::shake_stations(self).await,
             "vdm" => vdm::vdm(self).await,
             "raobsta" => sounding::stations_geojson(self).await,
+            "roadwork" => traffic::roadwork(self, p("bbox"), p("kinds")).await,
+            "trafficflow" => traffic::trafficflow(self, p("bbox")).await,
             _ => bail!("unknown overlay {id}"),
         }
     }
@@ -430,6 +441,8 @@ fn label(id: &str) -> String {
         "shake" => "Raspberry Shake",
         "vdm" => "Recon center fixes (NHC VDMs)",
         "raobsta" => "RAOB stations (IEM)",
+        "roadwork" => "Road work & incidents (WZDx / CHP / CHART)",
+        "trafficflow" => "Traffic speeds (Digitraffic / CHART / NYC DOT)",
         _ => id,
     };
     n.to_string()
