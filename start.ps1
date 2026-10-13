@@ -8,6 +8,7 @@
   .\start.ps1 -InstallService          install + start a Windows service (runs at boot; needs admin)
   .\start.ps1 -UninstallService        remove the service (and the Caddy service)
   .\start.ps1 -Token / -NewToken       print / regenerate the app access token
+  .\start.ps1 -Update                  update to the latest GitHub release (SHA-256 checked), then start
   Double-click start.cmd to run it without changing the execution policy.
 
   Portable mode keeps everything under server\data next to this script. A service keeps its
@@ -29,6 +30,8 @@ param(
   [switch]$Token,
   [switch]$ShowProfile,
   [switch]$NoTools,            # don't offer ffmpeg / yt-dlp
+  [switch]$Update,             # update the server (+ web app) to the latest GitHub release, then start
+  [switch]$CheckUpdate,        # only show whether a newer release exists
   [switch]$NoFirewall
 )
 
@@ -121,15 +124,48 @@ elseif (-not $NoTools) {
   Try-Winget "Gyan.FFmpeg" "ffmpeg"
   if (Have "ffmpeg") { Ok "ffmpeg" } else { Warn "no ffmpeg; video camera recording stays off (put ffmpeg.exe in server\bin to enable it)" }
 } else { Info "ffmpeg skipped (-NoTools)" }
-if ((Have "yt-dlp") -or (& $exeSide "yt-dlp.exe")) { Ok "yt-dlp" }
-elseif (-not $NoTools) {
-  Warn "yt-dlp not found - installing it for YouTube camera recording (optional)"
-  Try-Winget "yt-dlp.yt-dlp" "yt-dlp"
-  if (Have "yt-dlp") { Ok "yt-dlp" } else { Warn "no yt-dlp; YouTube camera recording stays off" }
-} else { Info "yt-dlp skipped (-NoTools)" }
+# yt-dlp: the server runs server\bin\yt-dlp.exe before anything on PATH. Earlier versions copied
+# a winget yt-dlp there once (for the service) and never refreshed it, so it went stale while the
+# PATH copy was updated. Now the copy the server uses is compared with the latest release on
+# every start and replaced by the official standalone yt-dlp.exe when outdated.
+$YtLocal = Join-Path $BinDir "yt-dlp.exe"
+function Yt-Latest {
+  try {
+    $r = Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest" -Method Head -UseBasicParsing -TimeoutSec 10 -MaximumRedirection 5
+    $u = $r.BaseResponse.ResponseUri; if (-not $u) { $u = $r.BaseResponse.RequestMessage.RequestUri }
+    if ("$u" -match "/tag/([0-9.]+)$") { return $Matches[1] }
+  } catch {}
+  return ""
+}
+function Yt-Version($exe) { if (-not $exe) { return "" }; try { return ((& $exe --version 2>$null) | Select-Object -First 1) } catch { return "" } }
+function Yt-Older($v, $latest) {
+  if (-not $v) { return $true }
+  if ($latest) { try { return ([version]($v -replace '^(\d+\.\d+\.\d+).*$', '$1')) -lt ([version]($latest -replace '^(\d+\.\d+\.\d+).*$', '$1')) -or (($v -ne $latest) -and ($v.Length -lt $latest.Length) -and $latest.StartsWith($v)) } catch { return $v -ne $latest } }
+  try { $d = [datetime]::ParseExact(($v.Substring(0, 10)), "yyyy.MM.dd", $null); return ((Get-Date) - $d).TotalDays -gt 120 } catch { return $false }
+}
+$ytExe = if (Test-Path $YtLocal) { $YtLocal } else { $c = Get-Command "yt-dlp" -ErrorAction SilentlyContinue; if ($c) { $c.Source } else { $null } }
+$ytVer = Yt-Version $ytExe
+if ($NoTools -and -not $ytExe) { Info "yt-dlp skipped (-NoTools)" }
+else {
+  $ytLatest = Yt-Latest
+  if ($ytVer -and -not (Yt-Older $ytVer $ytLatest)) { Ok "yt-dlp $ytVer ($ytExe)" }
+  else {
+    if ($ytVer) { Warn "yt-dlp $ytVer is outdated (latest: $ytLatest) - updating it for YouTube camera recording (optional)" }
+    else { Warn "yt-dlp not found - installing it for YouTube camera recording (optional)" }
+    try {
+      $tmp = Join-Path $BinDir "yt-dlp.new.exe"
+      Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile $tmp -UseBasicParsing -TimeoutSec 180
+      if (Yt-Version $tmp) { Move-Item -Force $tmp $YtLocal; Ok ("yt-dlp " + (Yt-Version $YtLocal) + " (in server\bin; the server uses this copy)") }
+      else { Remove-Item -Force $tmp -ErrorAction SilentlyContinue; throw "downloaded yt-dlp.exe doesn't run" }
+    } catch {
+      if ($ytVer) { Warn "couldn't update yt-dlp ($($_.Exception.Message)); YouTube recording may fail until it's updated" }
+      else { Warn "couldn't install yt-dlp; YouTube camera recording stays off" }
+    }
+  }
+}
 if ($UseService) {
   # services run as LocalSystem, whose PATH may not include per-user winget installs: copy them next to the server
-  foreach ($t in @("ffmpeg", "yt-dlp")) {
+  foreach ($t in @("ffmpeg")) {
     $c = Get-Command $t -ErrorAction SilentlyContinue
     $dst = Join-Path $BinDir "$t.exe"
     if ($c -and $c.Source -and -not (Test-Path $dst)) {
@@ -175,6 +211,62 @@ if ($Rebuild -or -not (Bin-Works)) {
   Build-FromSource
 } else {
   Ok ("using " + ((& $Bin --version) -join " "))
+}
+
+# ---------- update from GitHub releases ----------
+$Repo = if ($env:TBW_UPDATE_REPO) { $env:TBW_UPDATE_REPO } else { "goglesquirmintontheiii/thebigweather" }
+function Do-Update {
+  Step "Checking for a newer release ($Repo)"
+  try { $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "TheBigWeather-start" } -TimeoutSec 30 }
+  catch { Warn "couldn't reach the GitHub API ($($_.Exception.Message))"; return }
+  $ver = ($rel.tag_name -replace '^[vV]', '')
+  $cur = ""
+  if (Test-Path $Bin) { try { $cur = (((& $Bin --version) -join " ") -split " ")[1] } catch {} }
+  if ($cur -and ([version]$ver -le [version]$cur)) { Ok "up to date ($cur)"; return }
+  Info "installed: $(if ($cur) { $cur } else { 'none' }) - latest: $ver"
+  if ($CheckUpdate) { return }
+  $name = "tbw-server-$ver-windows-x86_64.exe"
+  $asset = $rel.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+  $sums = $rel.assets | Where-Object { $_.name -eq "SHA256SUMS" } | Select-Object -First 1
+  if (-not $asset -or -not $sums) { Warn "release $($rel.tag_name) has no $name or SHA256SUMS"; return }
+  $tmp = Join-Path $env:TEMP ("tbw-update-" + [guid]::NewGuid())
+  New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+  try {
+    Invoke-WebRequest -Uri $sums.browser_download_url -OutFile (Join-Path $tmp "SHA256SUMS") -UseBasicParsing
+    Info "downloading $name"
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile (Join-Path $tmp $name) -UseBasicParsing
+    $want = (Get-Content (Join-Path $tmp "SHA256SUMS") | Where-Object { $_ -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($name))$" } | ForEach-Object { $Matches[1].ToLower() } | Select-Object -First 1)
+    $got = (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $name)).Hash.ToLower()
+    if (-not $want -or $want -ne $got) { Warn "checksum mismatch for $name - not installed"; return }
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($svc -and $svc.Status -eq "Running") { & sc.exe stop $ServiceName | Out-Null; Start-Sleep -Seconds 4 }
+    if (Test-Path $Bin) { Move-Item -Force $Bin "$Bin.old" }
+    Move-Item -Force (Join-Path $tmp $name) $Bin
+    Ok "server $ver installed (previous kept as tbw-server.exe.old)"
+    $web = "tbw-web-$ver.zip"
+    $wa = $rel.assets | Where-Object { $_.name -eq $web } | Select-Object -First 1
+    $dist = Join-Path $Root "app\dist"
+    if ($wa -and (Test-Path $dist)) {
+      try {
+        Invoke-WebRequest -Uri $wa.browser_download_url -OutFile (Join-Path $tmp $web) -UseBasicParsing
+        $ww = (Get-Content (Join-Path $tmp "SHA256SUMS") | Where-Object { $_ -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($web))$" } | ForEach-Object { $Matches[1].ToLower() } | Select-Object -First 1)
+        if ($ww -eq (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $web)).Hash.ToLower()) {
+          $new = "$dist.new"; Remove-Item -Recurse -Force $new -ErrorAction SilentlyContinue
+          Expand-Archive -Path (Join-Path $tmp $web) -DestinationPath $new -Force
+          Remove-Item -Recurse -Force "$dist.old" -ErrorAction SilentlyContinue
+          Move-Item $dist "$dist.old"; Move-Item $new $dist
+          Ok "web app updated"
+        } else { Warn "web app checksum mismatch - not updated" }
+      } catch { Warn "web app not updated ($($_.Exception.Message))" }
+    }
+    Write-Utf8 (Join-Path $ServerDir "VERSION") $ver
+    if ($svc -and $svc.Status -eq "Running") { & sc.exe start $ServiceName | Out-Null; Ok "restarted the service"; exit 0 }
+  } catch { Warn "update failed: $($_.Exception.Message)" }
+  finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
+}
+if ($Update -or $CheckUpdate) {
+  Do-Update
+  if ($CheckUpdate) { exit 0 }
 }
 
 # ---------- small commands ----------

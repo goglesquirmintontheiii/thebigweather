@@ -6,6 +6,17 @@ Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted
 
 ## Quick start
 
+### 0. Install from GitHub releases (and stay up to date)
+
+```bash
+# Linux: desktop app (AppImage) + server bundle into ~/TheBigWeather, SHA-256 checked
+curl -fsSL https://github.com/goglesquirmintontheiii/thebigweather/releases/latest/download/install-latest.sh | bash
+bash install-latest.sh --server-only --dir /opt/tbw     # options: --app-only, --no-desktop-entry, --version X.Y.Z
+```
+
+Windows: download and double-click `install-latest.cmd` from the [latest release](https://github.com/goglesquirmintontheiii/thebigweather/releases/latest) (`-Portable`, `-AppOnly`, `-ServerOnly`, `-Dir`).
+The installed app updates itself (Settings → Updates: daily check, background download, "Restart to update"); the server updates with `./start.sh --update` / `start.ps1 -Update` or from Settings → Updates on the server's computer. Maintainers publish a release with `tools/release.sh --version X.Y.Z`.
+
 ### 1. Server (your VPS or PC)
 
 On Windows, run `start.cmd` (or `start.ps1 -Help` for options) instead of `start.sh`. Or skip the separate server: the app can run its own (first-run dialog → "Run the server in this app").

@@ -46,6 +46,10 @@ pub struct AppState {
     pub collab: Arc<crate::collab::Collab>,
     pub rules: Arc<crate::rules::Rules>,
     pub ml: Arc<crate::ml::Ml>,
+    pub radio: Arc<crate::radio::Radio>,
+    pub notify: Arc<crate::notify::Notify>,
+    pub srules: Arc<crate::srules::ServerRules>,
+    pub timelapse: Arc<crate::timelapse::Timelapse>,
 }
 
 /// Marks a request made with a share link's read-only token.
@@ -235,6 +239,17 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/collab/ws", get(crate::collab::ws))
         .route("/rules", get(crate::rules::get).put(crate::rules::put))
         .route("/rules/webhook-test", post(crate::rules::webhook_test))
+        // server-side rules, notification channels, radio monitor, webcam timelapses (p8)
+        .route("/rules/log", get(crate::srules::get_log))
+        .route("/rules/server-test", post(crate::srules::server_test))
+        .route("/notify/channels", get(crate::notify::get_channels).put(crate::notify::put_channels))
+        .route("/notify/test", post(crate::notify::test))
+        .route("/radio/monitor", get(crate::radio::get_monitor).put(crate::radio::put_monitor))
+        .route("/radio/same", get(crate::radio::get_same))
+        .route("/radio/same/test", post(crate::radio::test_same))
+        .route("/timelapse/cams", get(crate::timelapse::get_cams).put(crate::timelapse::put_cams))
+        .route("/timelapse/list", get(crate::timelapse::list))
+        .route("/timelapse/build", post(crate::timelapse::build_now))
         // detection models (training jobs, model store, live runs)
         .merge(crate::ml::api::router())
         // local admin API (Server settings): loopback only, see admin.rs

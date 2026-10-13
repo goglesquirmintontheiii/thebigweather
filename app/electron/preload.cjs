@@ -50,6 +50,20 @@ contextBridge.exposeInMainWorld("tbw", {
     set: (patch) => ipcRenderer.invoke("desktop-set", patch),
   },
   localServer: (action) => ipcRenderer.invoke("local-server", action || "status"),
+  /* p8: app auto-update (electron-updater, GitHub releases) */
+  update: {
+    get: () => ipcRenderer.invoke("update-get"),
+    check: () => ipcRenderer.invoke("update-check"),
+    download: () => ipcRenderer.invoke("update-download"),
+    install: () => ipcRenderer.invoke("update-install"),
+    set: (p) => ipcRenderer.invoke("update-set", p),
+    openPage: () => ipcRenderer.invoke("update-open-page"),
+    onState: (cb) => {
+      const h = (_e, s) => cb(s);
+      ipcRenderer.on("update-state", h);
+      return () => ipcRenderer.removeListener("update-state", h);
+    },
+  },
   onOpenFile: (cb) => {
     const h = (_e, f) => cb(f);
     ipcRenderer.on("open-file", h);

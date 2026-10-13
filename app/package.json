@@ -15,9 +15,13 @@
     "electron": "electron .",
     "dist": "npm run build && electron-builder --linux AppImage",
     "dist:win": "npm run build && electron-builder --win nsis portable --x64",
-    "dist:all": "npm run build && electron-builder --linux AppImage --win nsis portable --x64"
+    "dist:all": "npm run build && electron-builder --linux AppImage --win nsis portable --x64",
+    "release": "bash ../tools/release.sh",
+    "dist:release": "npm run build && electron-builder --linux AppImage --win nsis portable --x64 --publish never"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
   "devDependencies": {
     "@huggingface/transformers": "^4.3.1",
     "@preact/preset-vite": "^2.10.6",
@@ -78,7 +82,14 @@
     "appImage": {
       "artifactName": "TheBigWeather-${version}-x86_64.AppImage"
     },
-    "publish": null,
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "goglesquirmintontheiii",
+        "repo": "thebigweather",
+        "releaseType": "release"
+      }
+    ],
     "fileAssociations": [
       {
         "ext": "pal",

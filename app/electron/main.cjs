@@ -719,6 +719,7 @@ ipcMain.handle("renderer-ready", () => {
 // ----- bundled local server ("Run the server in this app") -----
 let srv = null; // { child, port, url, started, restarts }
 let srvError = "";
+let srvLog = [];
 function serverBinary() {
   const exe = process.platform === "win32" ? "tbw-server.exe" : "tbw-server";
   const cands = [
@@ -742,18 +743,30 @@ function serverStatus() {
     pid: srv && srv.child ? srv.child.pid : 0,
     error: srvError,
     data: path.join(serverHome(), "data"),
+    // p8: why it failed (last log lines) and a separate server found on this computer
+    ready: !!(srv && srv.ready),
+    log: srvError ? srvLog : [],
+    dedicated,
   };
 }
-function portFree(port) {
+/** Free on loopback *and* on all interfaces: a separate server listening on 0.0.0.0 / [::] can
+ * share a port with a 127.0.0.1 listener on Windows, so a loopback-only probe isn't enough. */
+function portFreeOn(port, host) {
   return new Promise((resolve) => {
     const s = netMod.createServer();
-    s.once("error", () => resolve(false));
-    s.listen(port, "127.0.0.1", () => s.close(() => resolve(true)));
+    // only "in use" / "not allowed" mean taken (no IPv6 on this machine is fine)
+    s.once("error", (e) => resolve(!(e && (e.code === "EADDRINUSE" || e.code === "EACCES"))));
+    s.listen({ port, host, exclusive: true }, () => s.close(() => resolve(true)));
   });
 }
+async function portFree(port) {
+  for (const h of ["127.0.0.1", "0.0.0.0", "::"]) if (!(await portFreeOn(port, h))) return false;
+  return true;
+}
 async function pickPort() {
-  // keep the last port so the app's server entry stays valid; 8788+ avoids a separate install on 8787
-  for (const p of [desktop.localPort, 8788, 8789, 8790, 8791].filter(Boolean)) if (await portFree(p)) return p;
+  // keep the last port so the app's server entry stays valid; 8787 = a separate install,
+  // 8790 = the local model worker
+  for (const p of [desktop.localPort, 8788, 8789, 8791, 8792].filter((p) => p && p !== 8787 && p !== 8790)) if (await portFree(p)) return p;
   return new Promise((resolve) => {
     const s = netMod.createServer();
     s.listen(0, "127.0.0.1", () => {
@@ -773,6 +786,8 @@ function writeServerConfig(port) {
     let t = fs.readFileSync(cfg, "utf8");
     t = /^bind\s*=.*$/m.test(t) ? t.replace(/^bind\s*=.*$/m, `bind = "${bind}"`) : t.replace(/^\[server\]\s*$/m, `[server]\nbind = "${bind}"`);
     t = t.replace(/^local_no_auth\s*=.*$/m, "local_no_auth = true");
+    // p8: an absolute data_dir copied from another install would make both servers share one data folder
+    if (/^data_dir\s*=\s*"(\/|[A-Za-z]:)/m.test(t)) t = t.replace(/^data_dir\s*=.*$/m, 'data_dir = "data"');
     fs.writeFileSync(cfg, t);
   }
   return cfg;
@@ -784,6 +799,50 @@ function serverLog() {
   } catch {}
   return fs.openSync(f, "a");
 }
+/** Last lines of the server log (shown when the server fails). */
+function serverLogTail(n = 25) {
+  try {
+    const f = path.join(serverHome(), "server.log");
+    const st = fs.statSync(f);
+    const len = Math.min(st.size, 16384);
+    const fd = fs.openSync(f, "r");
+    const b = Buffer.alloc(len);
+    fs.readSync(fd, b, 0, len, st.size - len);
+    fs.closeSync(fd);
+    return b.toString("utf8").split(/\r?\n/).filter((l) => l.trim()).slice(-n).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ""));
+  } catch {
+    return [];
+  }
+}
+/** The most useful line of the log tail: the last error. */
+function logError(tail) {
+  const e = [...tail].reverse().find((l) => /error|panicked|in use|denied|failed/i.test(l));
+  return e ? e.replace(/^\S+\s+(ERROR|WARN)\s+/, "").slice(0, 300) : "";
+}
+/** Does this server binary know the p8 flags (--bind / --port-file)? Older dev builds don't. */
+const binFlags = new Map();
+function supportsPortFile(bin) {
+  if (!binFlags.has(bin)) {
+    try {
+      const r = require("node:child_process").spawnSync(bin, ["--help"], { timeout: 8000, windowsHide: true, encoding: "utf8" });
+      binFlags.set(bin, String(r.stdout || "").includes("--port-file"));
+    } catch {
+      binFlags.set(bin, false);
+    }
+  }
+  return binFlags.get(bin);
+}
+/** A separately installed server on this computer (start.sh / start.ps1 / service), if any. */
+let dedicated = "";
+async function probeDedicated() {
+  for (const p of [8787]) {
+    try {
+      const r = await net.fetch(`http://127.0.0.1:${p}/api/health`, { signal: AbortSignal.timeout(1500) });
+      if (r.ok && (!srv || srv.port !== p)) return (dedicated = `http://127.0.0.1:${p}`);
+    } catch {}
+  }
+  return (dedicated = "");
+}
 async function startLocalServer() {
   if (srv && srv.child && srv.child.exitCode === null) return serverStatus();
   const bin = serverBinary();
@@ -792,29 +851,68 @@ async function startLocalServer() {
     return serverStatus();
   }
   srvError = "";
+  srvLog = [];
+  probeDedicated().catch(() => {});
   const port = await pickPort();
   if (port !== desktop.localPort) setDesktop({ localPort: port });
-  const cfg = writeServerConfig(port);
+  let cfg;
+  try {
+    cfg = writeServerConfig(port);
+  } catch (e) {
+    srvError = `can't write the server config in ${serverHome()}: ${e.message}`;
+    return serverStatus();
+  }
   const log = serverLog();
-  const child = spawn(bin, ["--config", cfg, "run"], {
+  const portFile = path.join(serverHome(), "port");
+  try {
+    fs.rmSync(portFile, { force: true });
+  } catch {}
+  const modern = supportsPortFile(bin);
+  // --bind-fallback: if the port got taken meanwhile (or a dedicated server binds it), listen on
+  // a free one and report it in the port file instead of failing
+  const args = modern ? ["--config", cfg, "--bind", `127.0.0.1:${port}`, "--bind-fallback", "--port-file", portFile, "run"] : ["--config", cfg, "run"];
+  const child = spawn(bin, args, {
     cwd: serverHome(),
     stdio: ["ignore", log, log],
     windowsHide: true,
-    env: { ...process.env, NO_COLOR: "1", RUST_LOG: process.env.RUST_LOG || "info,tower_http=warn" },
+    // TBW_MANAGED: the server updates with the app (no self-update); TBW_CONFIG/TBW_HOME from a
+    // separate install must not redirect this server to that install's data
+    env: { ...process.env, TBW_CONFIG: "", TBW_HOME: "", TBW_MANAGED: "desktop", NO_COLOR: "1", RUST_LOG: process.env.RUST_LOG || "info,tower_http=warn" },
   });
   fs.closeSync(log);
   const prev = srv;
-  srv = { child, port, url: `http://127.0.0.1:${port}`, started: Date.now(), restarts: prev ? prev.restarts : 0 };
-  child.on("error", (err) => (srvError = err.message));
+  srv = { child, port, url: `http://127.0.0.1:${port}`, started: Date.now(), restarts: prev ? prev.restarts : 0, ready: !modern };
+  child.on("error", (err) => (srvError = `can't start ${bin}: ${err.message}`));
   child.on("exit", (code, sig) => {
     if (quitting || !desktop.localServer || !srv || srv.child !== child) return;
-    srvError = `server exited (${sig || code})`;
+    srvLog = serverLogTail();
+    const why = logError(srvLog);
+    srvError = `server exited (${sig || code})${why ? `: ${why}` : ""}`;
     // crashed: restart with a growing delay, give up after a few quick failures
     const quick = Date.now() - srv.started < 30000;
     srv.restarts = quick ? srv.restarts + 1 : 0;
-    if (srv.restarts > 4) return (srvError += "; not restarting — see server.log in the app data folder");
+    if (srv.restarts > 4) return (srvError += " — not restarting; see server.log in the app data folder");
     setTimeout(() => desktop.localServer && !quitting && startLocalServer(), 1000 * 2 ** srv.restarts);
   });
+  if (modern) {
+    // wait (up to 20 s) for the address the server really listens on
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000 && srv && srv.child === child && child.exitCode === null) {
+      try {
+        const a = fs.readFileSync(portFile, "utf8").trim();
+        const p = Number(a.split(":").pop());
+        if (p > 0) {
+          srv.port = p;
+          srv.url = `http://127.0.0.1:${p}`;
+          srv.ready = true;
+          if (p !== desktop.localPort) setDesktop({ localPort: p });
+          break;
+        }
+      } catch {}
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    if (srv && srv.child === child && !srv.ready && child.exitCode === null) srvError = "the server is taking long to start (see server.log)";
+  }
   return serverStatus();
 }
 function stopLocalServer() {
@@ -882,3 +980,104 @@ function phase6Ready() {
   if (desktop.autoStart && process.platform !== "linux") applyAutoStart(true);
 }
 // ---------- end Phase 6 ----------
+
+// ---------- p8: auto-update from GitHub releases (electron-updater) ----------
+// AppImage and the NSIS installer update in place; the portable .exe and unpackaged dev runs
+// can only point at the release page. The bundled server (resources/server) updates with the app.
+// Offline / no release: errors are kept in the state for the Updates section, never shown as dialogs.
+const RELEASES_URL = "https://github.com/goglesquirmintontheiii/thebigweather/releases/latest";
+const upd = { state: "idle", current: app.getVersion(), version: "", notes: "", date: "", progress: 0, bytesPerSecond: 0, error: "", supported: false, reason: "", lastCheck: 0, auto: true, url: RELEASES_URL };
+let updater = null;
+function updSend() {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try {
+      w.webContents.send("update-state", { ...upd });
+    } catch {}
+  }
+}
+function updSet(p) {
+  Object.assign(upd, p);
+  updSend();
+}
+function updNotes(n) {
+  if (Array.isArray(n)) return n.map((x) => x.note || "").join("\n\n");
+  return String(n || "").replace(/<[^>]+>/g, "");
+}
+function setupUpdater() {
+  upd.auto = desktop.updAuto !== false;
+  upd.lastCheck = desktop.updLastCheck || 0;
+  if (!app.isPackaged) return (upd.reason = "development build");
+  if (process.env.PORTABLE_EXECUTABLE_DIR) return (upd.reason = "the portable version can't update itself — download the new one from GitHub");
+  if (process.platform === "linux" && !process.env.APPIMAGE) return (upd.reason = "only the AppImage updates itself");
+  try {
+    updater = require("electron-updater").autoUpdater;
+  } catch (e) {
+    return (upd.reason = `updater unavailable (${e.message})`);
+  }
+  upd.supported = true;
+  updater.autoDownload = upd.auto;
+  updater.autoInstallOnAppQuit = true;
+  updater.allowPrerelease = false; // stable channel only
+  updater.allowDowngrade = false;
+  updater.logger = null;
+  updater.on("checking-for-update", () => updSet({ state: "checking", error: "" }));
+  updater.on("update-available", (i) => updSet({ state: upd.auto ? "downloading" : "available", version: i.version, notes: updNotes(i.releaseNotes), date: i.releaseDate || "" }));
+  updater.on("update-not-available", (i) => updSet({ state: "latest", version: (i && i.version) || upd.current }));
+  updater.on("download-progress", (p) => updSet({ state: "downloading", progress: Math.round(p.percent || 0), bytesPerSecond: p.bytesPerSecond || 0 }));
+  updater.on("update-downloaded", (i) => {
+    updSet({ state: "downloaded", version: i.version, progress: 100, notes: updNotes(i.releaseNotes) || upd.notes });
+    try {
+      const { Notification } = require("electron");
+      if (Notification.isSupported()) new Notification({ title: "TheBigWeather update ready", body: `Version ${i.version} is downloaded. Restart the app to update.`, silent: true }).show();
+    } catch {}
+  });
+  updater.on("error", (e) => updSet({ state: "error", error: String((e && e.message) || e).split("\n")[0].slice(0, 300) }));
+  // check at start (after the window is up) and daily
+  const due = () => upd.auto && Date.now() - (desktop.updLastCheck || 0) > 24 * 3600_000;
+  setTimeout(() => due() && updCheck().catch(() => {}), 15_000);
+  setInterval(() => due() && updCheck().catch(() => {}), 3 * 3600_000);
+}
+async function updCheck() {
+  if (!updater) return { ...upd };
+  if (upd.state === "downloading" || upd.state === "downloaded") return { ...upd };
+  setDesktop({ updLastCheck: Date.now() });
+  upd.lastCheck = Date.now();
+  try {
+    await updater.checkForUpdates();
+  } catch (e) {
+    updSet({ state: "error", error: String((e && e.message) || e).split("\n")[0].slice(0, 300) });
+  }
+  return { ...upd };
+}
+ipcMain.handle("update-get", () => ({ ...upd }));
+ipcMain.handle("update-check", () => updCheck());
+ipcMain.handle("update-download", async () => {
+  if (!updater) return { ...upd };
+  try {
+    updSet({ state: "downloading", progress: 0 });
+    await updater.downloadUpdate();
+  } catch (e) {
+    updSet({ state: "error", error: String((e && e.message) || e).slice(0, 300) });
+  }
+  return { ...upd };
+});
+ipcMain.handle("update-set", (_e, p) => {
+  if (p && typeof p.auto === "boolean") {
+    setDesktop({ updAuto: p.auto });
+    upd.auto = p.auto;
+    if (updater) updater.autoDownload = p.auto;
+  }
+  updSend();
+  return { ...upd };
+});
+ipcMain.handle("update-install", async () => {
+  if (!updater || upd.state !== "downloaded") return { ...upd };
+  // stop the bundled server first so its binary can be replaced
+  quitting = true;
+  await stopLocalServer().catch(() => {});
+  stopped = true;
+  setImmediate(() => updater.quitAndInstall(false, true));
+  return { ...upd, state: "installing" };
+});
+ipcMain.handle("update-open-page", () => shell.openExternal(RELEASES_URL));
+app.whenReady().then(setupUpdater);

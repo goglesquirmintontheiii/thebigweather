@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+aws-lc-rs = "1.18.1"
+base64 = "0.22.1"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 bytes = "1.12.1"
 bzip2 = "0.6.1"
@@ -16,6 +18,7 @@ futures = "0.3.34"
 hdf5-reader = "0.9.1"
 grib = { version = "0.19", default-features = false, features = ["png-unpack-with-png-crate", "ccsds-unpack-with-rust-aec", "jpeg2000-unpack-with-openjpeg", "time-calculation"] }
 hex = "0.4.3"
+lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1", "tokio1-rustls", "webpki-roots", "aws-lc-rs"] }
 lru = "0.18.5"
 mimalloc = "0.1.52"
 netcdf-reader = "0.9.1"

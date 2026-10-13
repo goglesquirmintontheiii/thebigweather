@@ -48,6 +48,8 @@ pub const RESTART_FIELDS: &[&str] = &[
 const SECTIONS: &[&str] = &["server", "profile", "radar", "grid", "alerts", "ml"];
 
 static RESTART: AtomicBool = AtomicBool::new(false);
+/// the binary was replaced: restart into a new process even where restarts are in-process
+static EXEC: AtomicBool = AtomicBool::new(false);
 static PENDING: AtomicBool = AtomicBool::new(false);
 static NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static ARGS: once_cell::sync::OnceCell<Vec<OsString>> = once_cell::sync::OnceCell::new();
@@ -60,6 +62,23 @@ pub fn reset_restart() {
     RESTART.store(false, Ordering::SeqCst);
     PENDING.store(false, Ordering::SeqCst);
 }
+/// True when the restart must start the (new) binary rather than loop in this process.
+pub fn exec_required() -> bool {
+    EXEC.load(Ordering::SeqCst)
+}
+/// Ask the server to restart (after the current responses are sent). `exec`: the binary changed.
+pub fn request_restart(exec: bool) {
+    if exec {
+        EXEC.store(true, Ordering::SeqCst);
+    }
+    if RESTART.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        NOTIFY.notify_one();
+    });
+}
 pub fn restart_requested() -> bool {
     RESTART.load(Ordering::SeqCst)
 }
@@ -68,7 +87,7 @@ pub async fn restart_signal() {
     NOTIFY.notified().await
 }
 
-fn exe_path() -> std::io::Result<std::path::PathBuf> {
+pub(crate) fn exe_path() -> std::io::Result<std::path::PathBuf> {
     let p = std::env::current_exe()?;
     // Linux reports "<path> (deleted)" when the binary was replaced by a rebuild: use the new one
     let s = p.to_string_lossy();
@@ -107,6 +126,7 @@ pub fn router(_st: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/admin/caches", get(caches))
         .route("/admin/caches/clear", post(caches_clear))
         .route("/admin/logs", get(logs))
+        .route("/admin/update", get(crate::update::get).post(crate::update::post))
         .route_layer(middleware::from_fn(local_only))
 }
 

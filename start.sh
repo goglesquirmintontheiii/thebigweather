@@ -46,6 +46,9 @@ Usage: ./start.sh [options]
   --memory-mb N        In-memory cache budget in MB (0 = auto: 40% of RAM, at least 4 GB).
   --cpu-percent N      Share of CPU cores the server may use, 1-100 (default 100).
   --rebuild            Rebuild the server from source even if a binary exists.
+  --update             Update the server (and web app) to the latest GitHub release: downloads,
+                       checks SHA-256, keeps the old binary as tbw-server.old, then starts it.
+  --check-update       Only show whether a newer release exists.
   --new-token          Generate a new app access token.
   --token              Print the app access token.
   --profile            Show the detected hardware profile.
@@ -57,7 +60,8 @@ Settings -> Server settings in the app on this computer (most changes apply with
 EOF
 }
 
-MEMORY_MB=""; CPU_PERCENT=""; DOMAIN=""; EMAIL=""; LAN=0; INSTALL=0; UNINSTALL=0; REBUILD=0; NEWTOKEN=0; SHOWTOKEN=0; SHOWPROFILE=0; REPLAY=""
+MEMORY_MB=""; CPU_PERCENT=""; DOMAIN=""; EMAIL=""; LAN=0; INSTALL=0; UNINSTALL=0; REBUILD=0; NEWTOKEN=0; SHOWTOKEN=0; SHOWPROFILE=0; REPLAY=""; UPDATE=0; CHECKUPDATE=0
+REPO="${TBW_UPDATE_REPO:-goglesquirmintontheiii/thebigweather}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --domain) DOMAIN="${2:-}"; shift 2 ;;
@@ -69,6 +73,8 @@ while [[ $# -gt 0 ]]; do
     --install-service) INSTALL=1; shift ;;
     --uninstall-service) UNINSTALL=1; shift ;;
     --rebuild) REBUILD=1; shift ;;
+    --update) UPDATE=1; shift ;;
+    --check-update) CHECKUPDATE=1; shift ;;
     --new-token) NEWTOKEN=1; shift ;;
     --token) SHOWTOKEN=1; shift ;;
     --profile) SHOWPROFILE=1; shift ;;
@@ -132,43 +138,62 @@ if ! command -v ffmpeg >/dev/null; then
 else
   ok "ffmpeg"
 fi
-# yt-dlp: needed only to record YouTube cameras. YouTube changes often, so a distro package is
-# used only when it's recent (< ~4 months); otherwise the official standalone build is fetched.
-ytdlp_fresh() {
-  local v; v="$(yt-dlp --version 2>/dev/null | head -1)"
+# yt-dlp: needed only to record YouTube cameras. YouTube changes often, so the server keeps its
+# own standalone copy in server/bin (the server runs that copy before anything on PATH) and it is
+# compared with the latest GitHub release on every start. An older yt-dlp elsewhere on PATH
+# (distro package, pip in ~/.local/bin) no longer matters: earlier versions installed the update
+# to /usr/local/bin while the old copy that came first on PATH kept being used, and treated
+# "released more than 120 days ago" as outdated even when it was the newest release.
+YTDLP_LOCAL="$BIN_DIR/yt-dlp"
+ytdlp_latest() { # latest release tag (YYYY.MM.DD[.N]); cached 6 h; empty when offline
+  local cache="$DATA_DIR/.yt-dlp-latest" tag
+  if [[ -f "$cache" ]] && (( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) < 21600 )); then cat "$cache"; return; fi
+  tag="$(curl -fsSIL --max-time 10 -o /dev/null -w '%{url_effective}' https://github.com/yt-dlp/yt-dlp/releases/latest 2>/dev/null | sed -n 's#.*/tag/\([0-9.]*\)$#\1#p')"
+  if [[ -n "$tag" ]]; then mkdir -p "$DATA_DIR"; echo "$tag" > "$cache"; echo "$tag"; fi
+}
+ytdlp_which() { if [[ -x "$YTDLP_LOCAL" ]]; then echo "$YTDLP_LOCAL"; else command -v yt-dlp 2>/dev/null || true; fi; }
+ytdlp_version() { [[ -n "${1:-}" ]] || return 0; "$1" --version 2>/dev/null | head -1 || true; }
+ytdlp_current() { # $1 = installed version: up to date with the latest release (or < 120 days old when offline)
+  local v="${1:-}" latest
   [[ "$v" =~ ^([0-9]{4})\.([0-9]{2})\.([0-9]{2}) ]] || return 1
-  local t; t="$(date -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}" +%s 2>/dev/null)" || return 1
-  (( $(date +%s) - t < 120 * 86400 ))
-}
-ytdlp_download() {
-  local name=yt-dlp
-  if ! command -v python3 >/dev/null; then
-    case "$(uname -m)" in
-      x86_64) name=yt-dlp_linux ;;
-      aarch64|arm64) name=yt-dlp_linux_aarch64 ;;
-      *) return 1 ;;
-    esac
+  latest="$(ytdlp_latest)"
+  if [[ -n "$latest" ]]; then
+    [[ "$(printf '%s\n%s\n' "$v" "$latest" | sort -V | tail -1)" == "$v" ]]
+  else
+    local t; t="$(date -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}" +%s 2>/dev/null)" || return 0
+    (( $(date +%s) - t < 120 * 86400 ))
   fi
-  local tmp; tmp="$(mktemp)" || return 1
-  curl -fsSL --max-time 120 -o "$tmp" "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$name" \
-    && $SUDO install -m 0755 "$tmp" /usr/local/bin/yt-dlp
-  local rc=$?; rm -f "$tmp"; return $rc
 }
-if command -v yt-dlp >/dev/null && ytdlp_fresh; then
-  ok "yt-dlp"
+ytdlp_download() { # standalone build (no Python needed) into server/bin
+  local name
+  case "$(uname -m)" in
+    x86_64) name=yt-dlp_linux ;;
+    aarch64|arm64) name=yt-dlp_linux_aarch64 ;;
+    armv7l) name=yt-dlp_linux_armv7l ;;
+    *) name=yt-dlp ;; # Python zipapp
+  esac
+  mkdir -p "$BIN_DIR"
+  local tmp="$BIN_DIR/.yt-dlp.download"
+  curl -fsSL --max-time 180 -o "$tmp" "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$name" || { rm -f "$tmp"; return 1; }
+  chmod 0755 "$tmp"
+  # only keep it if it runs here
+  "$tmp" --version >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$YTDLP_LOCAL"
+}
+YT="$(ytdlp_which)"; YTV="$(ytdlp_version "$YT")"
+if [[ -n "$YTV" ]] && ytdlp_current "$YTV"; then
+  ok "yt-dlp $YTV ${DIM}($YT)${N}"
 else
-  if command -v yt-dlp >/dev/null; then
-    warn "yt-dlp is old — updating it for YouTube camera recording (optional)"
+  if [[ -n "$YTV" ]]; then
+    warn "yt-dlp $YTV is outdated (latest: $(ytdlp_latest || true)) — updating it for YouTube camera recording (optional)"
   else
     warn "yt-dlp not found — installing it for YouTube camera recording (optional)"
-    pkg_install yt-dlp -- yt-dlp -- yt-dlp >/dev/null 2>&1 || true
   fi
-  if command -v yt-dlp >/dev/null && ytdlp_fresh; then
-    ok "yt-dlp"
-  elif ytdlp_download >/dev/null 2>&1 && hash -r && command -v yt-dlp >/dev/null; then
-    ok "yt-dlp ($(yt-dlp --version 2>/dev/null | head -1))"
-  elif command -v yt-dlp >/dev/null; then
-    warn "couldn't update yt-dlp; YouTube recording may fail until it's updated"
+  if ytdlp_download; then
+    YTV="$(ytdlp_version "$YTDLP_LOCAL")"
+    ok "yt-dlp $YTV ${DIM}(installed in server/bin; the server uses this copy)${N}"
+  elif [[ -n "$YTV" ]]; then
+    warn "couldn't update yt-dlp (offline?); YouTube recording may fail until it's updated"
   else
     warn "couldn't install yt-dlp; YouTube camera recording stays off"
   fi
@@ -220,6 +245,58 @@ elif src_newer && command -v cargo >/dev/null 2>&1; then
   build_from_source
 else
   ok "using $("$BIN" --version)"
+fi
+
+# ---------- update from GitHub releases ----------
+gh_release_json() { curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/releases/latest"; }
+json_str() { grep -o "\"$1\": *\"[^\"]*\"" | head -1 | sed -E 's/^"[^"]+": *"(.*)"$/\1/'; }
+asset_url() { grep -o '"browser_download_url": *"[^"]*"' | sed -E 's/.*"(https:[^"]*)"$/\1/' | grep -F "/$1" | head -1; }
+ver_gt() { [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" == "$1" ]]; }
+do_update() {
+  step "Checking for a newer release ($REPO)"
+  local rel tag ver cur arch name url sums want got tmp
+  rel="$(gh_release_json)" || { warn "couldn't reach the GitHub API (offline?)"; return 1; }
+  tag="$(printf '%s' "$rel" | json_str tag_name)"; ver="${tag#v}"
+  cur="$("$BIN" --version 2>/dev/null | awk '{print $2}')"
+  [[ -n "$ver" ]] || { warn "no release found"; return 1; }
+  if [[ -n "$cur" ]] && ! ver_gt "$ver" "$cur"; then ok "up to date ($cur)"; return 0; fi
+  info "installed: ${cur:-none} · latest: $ver"
+  (( CHECKUPDATE )) && return 0
+  case "$(uname -m)" in x86_64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; *) warn "no server builds for $(uname -m)"; return 1 ;; esac
+  name="tbw-server-$ver-linux-$arch"
+  url="$(printf '%s' "$rel" | asset_url "$name")"
+  sums="$(printf '%s' "$rel" | asset_url SHA256SUMS)"
+  [[ -n "$url" && -n "$sums" ]] || { warn "release $tag has no $name or SHA256SUMS"; return 1; }
+  tmp="$(mktemp -d)"
+  curl -fsSL --max-time 60 -o "$tmp/SHA256SUMS" "$sums" && curl -fL --progress-bar --max-time 900 -o "$tmp/$name" "$url" || { rm -rf "$tmp"; warn "download failed"; return 1; }
+  want="$(awk -v n="$name" '$2==n || $2=="*"n {print $1}' "$tmp/SHA256SUMS")"; got="$(sha256sum "$tmp/$name" | awk '{print $1}')"
+  [[ -n "$want" && "$want" == "$got" ]] || { rm -rf "$tmp"; warn "checksum mismatch for $name — not installed"; return 1; }
+  chmod 0755 "$tmp/$name"
+  "$tmp/$name" --version >/dev/null 2>&1 || { rm -rf "$tmp"; warn "the downloaded server doesn't run on this system — not installed"; return 1; }
+  [[ -x "$BIN" ]] && mv -f "$BIN" "$BIN.old"
+  mv -f "$tmp/$name" "$BIN"
+  ok "server $ver installed (previous kept as $BIN.old)"
+  # web app for browsers (optional)
+  local web="tbw-web-$ver.zip" wurl
+  wurl="$(printf '%s' "$rel" | asset_url "$web")"
+  if [[ -n "$wurl" && -d "$ROOT/app/dist" ]] && command -v unzip >/dev/null; then
+    if curl -fsSL --max-time 600 -o "$tmp/$web" "$wurl" && [[ "$(awk -v n="$web" '$2==n {print $1}' "$tmp/SHA256SUMS")" == "$(sha256sum "$tmp/$web" | awk '{print $1}')" ]]; then
+      rm -rf "$ROOT/app/dist.new" && mkdir -p "$ROOT/app/dist.new" && unzip -q -o "$tmp/$web" -d "$ROOT/app/dist.new" \
+        && rm -rf "$ROOT/app/dist.old" && mv "$ROOT/app/dist" "$ROOT/app/dist.old" && mv "$ROOT/app/dist.new" "$ROOT/app/dist" && ok "web app updated"
+    else
+      warn "web app not updated (download or checksum failed)"
+    fi
+  fi
+  echo "$ver" > "$SERVER_DIR/VERSION"
+  rm -rf "$tmp"
+  if systemctl is-active --quiet tbw-server.service 2>/dev/null; then
+    $SUDO systemctl restart tbw-server.service && ok "restarted tbw-server.service"
+    exit 0
+  fi
+}
+if (( UPDATE || CHECKUPDATE )); then
+  do_update || true
+  (( CHECKUPDATE )) && exit 0
 fi
 
 # ---------- small commands ----------
