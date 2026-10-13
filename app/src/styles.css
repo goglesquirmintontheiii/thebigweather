@@ -9633,6 +9633,7 @@ html[data-theme="light"] .same-foot .same-hide.on {
 }
 .sc .sc-pre + .mbar {
   flex-basis: 12px;
+} /* models 0.7: this rule was missing its closing brace (everything below was nested in it) */
 /* ---------- p7 outages/canada ---------- */
 .outage-total {
   margin: 2px 0 6px;
@@ -9718,3 +9719,442 @@ html[data-theme="light"] .same-foot .same-hide.on {
 .bottom-dock:has(.toolbar-wrap.menu-open) {
   z-index: 40;
 }
+
+/* ---------- models 0.7 ---------- */
+.ml-out {
+  font-style: normal;
+  font-size: 10.5px;
+  color: #fde68a;
+  background: rgba(250, 204, 21, 0.1);
+  border: 1px solid rgba(250, 204, 21, 0.3);
+  border-radius: 999px;
+  padding: 0 7px;
+  white-space: nowrap;
+  align-self: flex-start;
+}
+.ml-preset .ml-out {
+  margin-top: 4px;
+}
+.ml-ver {
+  font-size: 10.5px;
+  color: #a5b4fc;
+  border: 1px solid rgba(165, 180, 252, 0.35);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.ml-rt-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(165, 180, 252, 0.4);
+  background: rgba(99, 102, 241, 0.1);
+}
+.ml-rt-banner > .muted {
+  flex: 1 1 260px;
+}
+.ml-mode-sw button {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+}
+.ml-go-out {
+  line-height: 1.4;
+}
+.ml-tx {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.ml-src {
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+.ml-srcg {
+  margin-bottom: 6px;
+}
+.ml-srcg > small {
+  display: block;
+  margin: 4px 0 2px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.mlcenter section h4 .chip {
+  margin-left: 8px;
+  font-weight: 500;
+}
+/* train further dialog */
+.ml-dlg-back {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgba(3, 5, 8, 0.55);
+  border-radius: inherit;
+}
+.ml-dlg {
+  width: min(560px, calc(100% - 32px));
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgb(17, 21, 28);
+}
+.ml-dlg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ml-dlg-head b {
+  font-size: 15px;
+}
+.ml-dlg-head .icon-btn {
+  margin-left: auto;
+}
+.ml-dlg p {
+  margin: 0;
+}
+.ml-dlg-go {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 4px;
+}
+.ml-dlg .ml-range input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.ml-hist th svg {
+  vertical-align: -2px;
+}
+.ml-hist tr.cur td {
+  background: rgba(63, 183, 255, 0.07);
+}
+.ml-cur {
+  margin-left: 6px;
+  font-size: 9.5px;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+/* run tab */
+.ml-run-models:has(.ml-rm-wrap.open) {
+  max-height: none;
+  flex: none;
+  overflow: visible;
+}
+.ml-rm-wrap.open {
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.ml-rm {
+  cursor: pointer;
+}
+.ml-rm > span {
+  flex: 1;
+}
+.ml-rm-opt {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 26px;
+}
+.ml-rm-opt.set {
+  color: var(--accent);
+}
+.ml-rm-opt small {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 13px;
+  height: 13px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #001018;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+}
+.ml-prod {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  align-items: center;
+  padding: 0 8px 6px 37px;
+}
+.ml-prod .btn.xs {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ml-prod .btn.xs small {
+  opacity: 0.7;
+  font-weight: 400;
+}
+.ml-prod-err {
+  color: #fca5a5;
+}
+.ml-ropts {
+  padding: 4px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ml-ropts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+.ml-ropts-g {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+.ml-ropts-gt {
+  display: block;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+.ml-ropts .ml-grid {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.ml-num {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ml-num input {
+  flex: 1;
+  min-width: 0;
+}
+.ml-days {
+  flex-wrap: wrap;
+}
+.ml-days button {
+  padding: 5px 9px;
+}
+.ml-dt {
+  margin-top: 6px;
+}
+.ml-dt input {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 5px 7px;
+  font: inherit;
+  color-scheme: dark;
+}
+.ml-lg {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+/* probability gate cards (map, bottom-right above the legend) */
+.mlg-stack {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 310px;
+  pointer-events: none;
+}
+.mlg {
+  pointer-events: auto;
+  padding: 7px 10px 6px;
+}
+.mlg.compact {
+  padding: 4px 0 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.mlg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  margin-bottom: 5px;
+  min-width: 0;
+}
+.mlg-head b {
+  font-weight: 650;
+  white-space: nowrap;
+}
+.mlg-txt {
+  color: #c4cdd8;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.mlg-txt.on {
+  color: #ffd166;
+  font-weight: 650;
+}
+.mlg-n {
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.mlg-btns {
+  margin-left: auto;
+  display: flex;
+  gap: 3px;
+}
+.mlg-bar .bar {
+  height: 10px;
+  border-radius: 5px;
+}
+.mlg-hist {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% - 3px);
+  height: 14px;
+  pointer-events: none;
+}
+.mlg-hist i {
+  position: absolute;
+  bottom: 0;
+  width: 2%;
+  background: rgba(231, 237, 244, 0.55);
+  border-radius: 1px 1px 0 0;
+  box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.5);
+}
+.mlg-head + .mlg-bar {
+  margin-top: 14px;
+}
+.mlg-win {
+  position: absolute;
+  top: 1px;
+  height: 14px;
+  border: 1.5px solid rgba(255, 209, 102, 0.95);
+  border-radius: 5px;
+  cursor: grab;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.mlg-win:active {
+  cursor: grabbing;
+}
+.mlg .lg-h::after {
+  background: rgba(231, 237, 244, 0.7);
+}
+.mlg .lg-h.set::after {
+  background: #fff;
+}
+.mlg.paused .mlg-txt {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.mlo .seg button {
+  padding: 3px 7px;
+  font-size: 11px;
+}
+.mlo-model {
+  min-width: 0;
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 4px;
+}
+.mlo-days,
+.mlo-haz {
+  display: flex;
+  width: 100%;
+}
+.mlo-days button,
+.mlo-haz button {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  padding: 3px 5px;
+}
+.mlo-more {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 5px;
+}
+.mlo-range {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+.mlo-range input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 10.5px;
+  padding: 2px 3px;
+  color-scheme: dark;
+}
+.mlo-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+  margin: 6px 0 2px;
+  font-size: 11px;
+  font-weight: 650;
+}
+.mlo-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.mlo-cat.none {
+  opacity: 0.45;
+}
+.mlo-cat i {
+  width: 12px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1.5px solid;
+}
+.mlo-valid {
+  font-size: 10.5px;
+  min-height: 13px;
+}
+.mlo-err {
+  color: #fca5a5;
+}
+/* legend title for my models' prediction grids */
+.lg-ml {
+  font-size: 11px;
+  margin: -1px 0 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #c4cdd8;
+}
+.lg-ml b {
+  color: #fff;
+  font-weight: 650;
+}
+.legend.top .lg-ml {
+  display: none;
+}
+/* ---------- end models 0.7 ---------- */

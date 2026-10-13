@@ -5,14 +5,15 @@
 // hailstone, …), the cell outline when the server sends a polygon, a 30-minute motion arrow, and a
 // "TOR 82%" label at higher zooms. "High" detections pulse (animated only while visible).
 
-import { effect } from "@preact/signals";
+import { effect, signal } from "@preact/signals";
 import type { LayerSpecification, ExpressionSpecification, Map as MLMap } from "maplibre-gl";
 import { OVERLAYS, overlayDef, type OverlayDef, type OptionDef, type Popup } from "./defs";
 import { setData, isOn, popup } from "./manager";
 import { settings, update } from "../store";
 import { mapRef } from "../map/mapview";
 import { destination, fmtTime, fmtAge, compass } from "../util";
-import { detections, startDetections, ensureModels, detMaxAgeMin, models, catalog, loadRun, runState, mlOpen, mlTab, selModel } from "../ml/client";
+import { detections, startDetections, ensureModels, detMaxAgeMin, models, catalog, loadRun, runState, mlOpen, mlTab, selModel, detEnd } from "../ml/client";
+import { gated } from "../ml/probgate"; // models 0.7: probability gate
 import { tmeta, LEVEL_COLOR, LEVEL_NAME, TARGETS } from "../ml/targets";
 import type { Detection } from "../ml/types";
 
@@ -21,6 +22,10 @@ const bold = ["Noto Sans Bold"];
 const POINT: ExpressionSpecification = ["==", ["geometry-type"], "Point"];
 const POLY: ExpressionSpecification = ["==", ["geometry-type"], "Polygon"];
 const LINE: ExpressionSpecification = ["==", ["geometry-type"], "LineString"];
+const BOX: ExpressionSpecification = ["all", POLY, ["==", ["get", "kind"], "box"]];
+const AREA: ExpressionSpecification = ["all", POLY, ["==", ["get", "kind"], "area"]];
+/** models 0.7: probabilities of the features currently drawn (before the gate), for the gate's counts */
+export const detProbs = signal<number[]>([]);
 /** side-by-side slots when several models flag the same cell */
 const OFF = (px: number): ExpressionSpecification => ["match", ["get", "slot"], -1, ["literal", [-px, 0]], 1, ["literal", [px, 0]], ["literal", [0, 0]]];
 const LVL: ExpressionSpecification = ["match", ["get", "level"], "high", LEVEL_COLOR.high, "med", LEVEL_COLOR.med, LEVEL_COLOR.low];
@@ -52,13 +57,17 @@ const def: OverlayDef = {
       { key: "minp", label: "Min probability", choices: [["0", "Any"], ["30", "30%+"], ["50", "50%+"], ["70", "70%+"], ["85", "85%+"]], def: "0" },
       { key: "age", label: "Show last", choices: [["15", "15 min"], ["30", "30 min"], ["60", "1 hour"], ["120", "2 hours"], ["360", "6 hours"]], def: "60" },
       { key: "pulse", label: "Pulse high", choices: [["1", "On"], ["0", "Off"]], def: "1" },
+      { key: "areas", label: "Forecast areas", choices: [["1", "Show"], ["0", "Hide"]], def: "1" },
     ];
   },
   style: { opacity: 1, size: 1, labels: true },
-  layers: (s, st) => [
-    { id: `${s}-box`, type: "fill", source: s, filter: POLY, paint: { "fill-color": ["get", "color"], "fill-opacity": 0.1 * st.opacity } } as LayerSpecification,
-    { id: `${s}-boxcase`, type: "line", source: s, filter: POLY, layout: { "line-join": "round" }, paint: { "line-color": "#000", "line-width": 4 * st.size, "line-opacity": 0.55 * st.opacity, "line-blur": 1 } } as LayerSpecification,
-    { id: `${s}-boxline`, type: "line", source: s, filter: POLY, layout: { "line-join": "round" }, paint: { "line-color": LVL, "line-width": ["match", ["get", "level"], "high", 2.4, "med", 2, 1.5], "line-opacity": st.opacity, "line-dasharray": ["case", ["==", ["get", "level"], "low"], ["literal", [2, 1.5]], ["literal", [1, 0]]] } } as LayerSpecification,
+  layers: (s, st) => gated(ID, [
+    // models 0.7: grid models' areas (flood / tropical / instability), coloured by probability
+    { id: `${s}-area`, type: "fill", source: s, filter: AREA, layout: { "fill-sort-key": ["get", "prob"] }, paint: { "fill-color": ["get", "color"], "fill-opacity": ["*", st.opacity, ["interpolate", ["linear"], ["get", "prob"], 0, 0.08, 1, 0.38]] } } as LayerSpecification,
+    { id: `${s}-arealine`, type: "line", source: s, filter: AREA, layout: { "line-join": "round" }, paint: { "line-color": LVL, "line-width": ["match", ["get", "level"], "high", 2.6, "med", 2, 1.4], "line-opacity": st.opacity, "line-dasharray": ["case", ["==", ["get", "level"], "low"], ["literal", [3, 2]], ["literal", [1, 0]]] } } as LayerSpecification,
+    { id: `${s}-box`, type: "fill", source: s, filter: BOX, paint: { "fill-color": ["get", "color"], "fill-opacity": 0.1 * st.opacity } } as LayerSpecification,
+    { id: `${s}-boxcase`, type: "line", source: s, filter: BOX, layout: { "line-join": "round" }, paint: { "line-color": "#000", "line-width": 4 * st.size, "line-opacity": 0.55 * st.opacity, "line-blur": 1 } } as LayerSpecification,
+    { id: `${s}-boxline`, type: "line", source: s, filter: BOX, layout: { "line-join": "round" }, paint: { "line-color": LVL, "line-width": ["match", ["get", "level"], "high", 2.4, "med", 2, 1.5], "line-opacity": st.opacity, "line-dasharray": ["case", ["==", ["get", "level"], "low"], ["literal", [2, 1.5]], ["literal", [1, 0]]] } } as LayerSpecification,
     { id: `${s}-mvcase`, type: "line", source: s, filter: LINE, minzoom: 6, layout: { "line-cap": "round" }, paint: { "line-color": "#000", "line-width": 4 * st.size, "line-opacity": 0.6 * st.opacity } } as LayerSpecification,
     { id: `${s}-mv`, type: "line", source: s, filter: LINE, minzoom: 6, layout: { "line-cap": "round" }, paint: { "line-color": "#fff", "line-width": 1.8 * st.size, "line-opacity": 0.9 * st.opacity, "line-dasharray": [2, 1.4] } } as LayerSpecification,
     { id: `${s}-mvhead`, type: "symbol", source: s, filter: ["all", POINT, ["==", ["get", "kind"], "head"]], minzoom: 6, layout: { "icon-image": "ml-arrow", "icon-rotate": ["get", "dir"], "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-size": st.size }, paint: { "icon-opacity": st.opacity } } as LayerSpecification,
@@ -98,7 +107,7 @@ const def: OverlayDef = {
       },
       paint: { "icon-opacity": st.opacity, "text-color": "#fff", "text-halo-color": "#000", "text-halo-width": 1.4 },
     } as LayerSpecification,
-  ],
+  ]),
   click: (p): Popup => {
     ensureModels();
     const t = tmeta(p.target);
@@ -115,6 +124,10 @@ const def: OverlayDef = {
       ["Radar", p.site || "—"],
       ["Time", `${fmtTime(+p.t, true)} (${fmtAge(+p.t)})`],
     ];
+    if (p.area) {
+      rows.splice(2, 1);
+      if (p.vf) rows.push(["Valid", `${fmtTime(+p.vf, true)}${p.vt ? ` → ${fmtTime(+p.vt, true)}` : ""}`]);
+    }
     if (p.mdir !== undefined && p.mdir !== null && p.mdir !== "") rows.push(["Motion", `${compass(+p.mdir)} (${Math.round(+p.mdir)}°) at ${Math.round(+p.mkt)} kt`]);
     for (const f of tf.slice(0, 6)) {
       const [n, u] = featName(f.id);
@@ -134,7 +147,7 @@ const def: OverlayDef = {
 // ---------- data ----------
 function opts() {
   const o = settings.value.ovl[ID]?.opts ?? {};
-  return { model: o.model ?? "", target: o.target ?? "", minp: +(o.minp ?? "0") / 100, age: +(o.age ?? "60"), pulse: (o.pulse ?? "1") === "1" };
+  return { model: o.model ?? "", target: o.target ?? "", minp: +(o.minp ?? "0") / 100, age: +(o.age ?? "60"), pulse: (o.pulse ?? "1") === "1", areas: (o.areas ?? "1") === "1" };
 }
 let hasHigh = false;
 function build(list: Detection[], all = false) {
@@ -143,7 +156,7 @@ function build(list: Detection[], all = false) {
   const feats: any[] = [];
   hasHigh = false;
   for (const d of list) {
-    if (!all && (d.t < cut || d.prob < o.minp || (o.model && d.model_id !== o.model) || (o.target && d.target !== o.target))) continue;
+    if (!all && (detEnd(d) < cut || d.prob < o.minp || (o.model && d.model_id !== o.model) || (o.target && d.target !== o.target) || (d.kind === "area" && !o.areas))) continue;
     const t = tmeta(d.target);
     const props = {
       kind: "det",
@@ -161,15 +174,18 @@ function build(list: Detection[], all = false) {
       mkt: d.motion?.kt,
       _tf: JSON.stringify(d.top_features ?? []),
       _key: d.key,
+      area: d.kind === "area" ? 1 : 0,
+      vf: d.valid_from,
+      vt: d.valid_to,
     };
     if (d.level === "high") hasHigh = true;
     feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [d.lon, d.lat] }, properties: props });
-    if (d.poly?.length) feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: d.poly }, properties: { ...props, kind: "box" } });
+    if (d.poly?.length) feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: d.poly }, properties: { ...props, kind: d.kind === "area" ? "area" : "box" } });
     if (d.motion && d.motion.kt > 2) {
       const km = d.motion.kt * 1.852 * 0.5; // 30 minutes
       const end = destination(d.lat, d.lon, d.motion.dir, km * 1000);
-      feats.push({ type: "Feature", geometry: { type: "LineString", coordinates: [[d.lon, d.lat], end] }, properties: { kind: "mv", level: d.level } });
-      feats.push({ type: "Feature", geometry: { type: "Point", coordinates: end }, properties: { kind: "head", dir: d.motion.dir, level: d.level } });
+      feats.push({ type: "Feature", geometry: { type: "LineString", coordinates: [[d.lon, d.lat], end] }, properties: { kind: "mv", level: d.level, prob: d.prob } });
+      feats.push({ type: "Feature", geometry: { type: "Point", coordinates: end }, properties: { kind: "head", dir: d.motion.dir, level: d.level, prob: d.prob } });
     }
   }
   const groups = new Map<string, any[]>();
@@ -227,6 +243,7 @@ effect(() => {
   detMaxAgeMin.value = Math.max(detMaxAgeMin.value, opts().age);
   const fc = build(detections.value);
   if (isOn(ID)) setData(ID, fc);
+  detProbs.value = fc.features.filter((f: any) => f.properties.kind === "det").map((f: any) => f.properties.prob);
   kickPulse();
 });
 // re-filter ageing detections once a minute
@@ -277,3 +294,6 @@ export function openDetectionModel(model_id: string, ep = "main") {
 }
 
 (window as any).__tbwMLmap = { showDetection, build }; // console / screenshots
+
+// models 0.7: model outlook layer (registered after this one in the Severe group)
+import "../ml/outlook";

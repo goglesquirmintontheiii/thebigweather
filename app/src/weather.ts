@@ -12,7 +12,7 @@ export interface GridLayerDef {
   name: string;
   units: string;
   cmap: string;
-  source: "mrms" | "model" | "ndfd" | "metar" | "goes" | "future" | "opera" | "cwa" | "nowcast" /* data 0.6 */;
+  source: "mrms" | "model" | "ndfd" | "metar" | "goes" | "future" | "opera" | "cwa" | "nowcast" /* data 0.6 */ | "mlpred" /* models 0.7: my models' predictions */;
   model?: string;
   step_min: number;
 }
@@ -121,7 +121,7 @@ export function gridTable(cmap: string) {
 /* ---------- data 0.6 ---------- */
 /** catalog layers that are forecasts (models, NDFD, future radar, nowcasts) */
 export function isForecastDef(d: GridLayerDef | undefined): boolean {
-  return !!d && (d.source === "model" || d.source === "ndfd" || d.source === "future" || d.source === "nowcast");
+  return !!d && (d.source === "model" || d.source === "ndfd" || d.source === "future" || d.source === "nowcast" || d.source === "mlpred" /* models 0.7 */);
 }
 /** marine / hydrology layers (GFS-Wave, RTOFS, MRMS FLASH, NWM): the picker's "Water" tab */
 export function isWaterDef(d: GridLayerDef): boolean {

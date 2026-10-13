@@ -103,6 +103,31 @@ pub struct GridService {
     nowcast_lock: tokio::sync::Mutex<()>,
     nowcast_poller: std::sync::atomic::AtomicBool,
     me: std::sync::Weak<GridService>,
+    /// prediction layers published by trained models ("mlpred/…")
+    mlpred: RwLock<Vec<PredLayer>>,
+}
+
+/// A prediction layer of a trained model: its catalog entry and the frames of the newest run.
+pub struct PredLayer {
+    pub def: LayerDef,
+    pub run_ms: i64,
+    pub frames: Vec<Arc<Grid>>,
+}
+
+/// Intern a short string as `&'static` (layer units / colour maps; a small bounded set).
+fn intern(s: &str) -> &'static str {
+    static SET: std::sync::OnceLock<Mutex<std::collections::HashSet<&'static str>>> = std::sync::OnceLock::new();
+    let set = SET.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let mut g = set.lock();
+    if let Some(x) = g.get(s) {
+        return x;
+    }
+    if g.len() > 256 {
+        return "";
+    }
+    let x: &'static str = Box::leak(s.to_string().into_boxed_str());
+    g.insert(x);
+    x
 }
 
 /// One nowcast run: the MRMS frame it starts from and the motion field.
@@ -204,6 +229,7 @@ impl GridService {
             nowcast_lock: tokio::sync::Mutex::new(()),
             nowcast_poller: std::sync::atomic::AtomicBool::new(false),
             me: me.clone(),
+            mlpred: RwLock::new(vec![]),
         })
         .with_budget(memory_mb)
     }
@@ -271,6 +297,11 @@ impl GridService {
         let (b, n, cap) = self.metar_archive.mem_stats();
         v.push(CacheInfo::mem("metar-archive", &format!("METAR archive hours (max {cap})"), b, n, 0));
         {
+            let p = self.mlpred.read();
+            let b = p.iter().map(|l| l.frames.iter().map(|g| g.bytes()).sum::<usize>()).sum();
+            v.push(CacheInfo::mem("ml-pred-grids", "Detection models: prediction layers (mlpred/…)", b, p.len(), 0));
+        }
+        {
             let r = self.nowcast.lock();
             let runs: Vec<&NowcastRun> = r.values().flatten().collect();
             let b = runs.iter().map(|x| x.motion.u.len() * 8 + 256).sum();
@@ -304,20 +335,88 @@ impl GridService {
             }
             "metar-archive" => self.metar_archive.clear_mem(),
             "nowcast" => self.nowcast.lock().clear(),
+            "ml-pred-grids" => self.mlpred.write().clear(),
             _ => return false,
         }
         true
     }
 
-    pub fn layer(&self, id: &str) -> Result<&LayerDef> {
-        self.layers.iter().find(|l| l.id == id).ok_or_else(|| anyhow!("unknown layer {id}"))
+    pub fn layer(&self, id: &str) -> Result<LayerDef> {
+        if let Some(l) = self.layers.iter().find(|l| l.id == id) {
+            return Ok(l.clone());
+        }
+        self.mlpred.read().iter().find(|l| l.def.id == id).map(|l| l.def.clone()).ok_or_else(|| anyhow!("unknown layer {id}"))
     }
 
     pub fn catalog(&self) -> serde_json::Value {
+        let mut layers = serde_json::to_value(&self.layers).unwrap_or_default();
+        if let Some(a) = layers.as_array_mut() {
+            for p in self.mlpred.read().iter() {
+                let mut v = serde_json::to_value(&p.def).unwrap_or_default();
+                v["run"] = serde_json::json!(p.run_ms);
+                v["valid_times"] = serde_json::json!(p.frames.iter().map(|g| g.valid_ms).collect::<Vec<_>>());
+                a.push(v);
+            }
+        }
         serde_json::json!({
-            "layers": self.layers,
+            "layers": layers,
             "models": sources::MODELS.iter().filter(|m| m.group != "Hidden").collect::<Vec<_>>(),
         })
+    }
+
+    // ---------- trained-model prediction layers ----------
+
+    /// Publish (replace) a prediction layer: `id` must start with "mlpred/"; frames are the
+    /// newest run's grids (valid times ascending).
+    #[allow(clippy::too_many_arguments)]
+    pub fn put_pred_layer(&self, id: &str, name: &str, group: &str, units: &str, cmap: &str, step_min: u32, run_ms: i64, frames: Vec<Grid>) {
+        let def = LayerDef {
+            id: id.to_string(),
+            group: group.to_string(),
+            name: name.to_string(),
+            units: intern(units),
+            cmap: intern(cmap),
+            product: String::new(),
+            transform: decode::Transform::None,
+            nodata: vec![],
+            min_valid: None,
+            source: "mlpred",
+            model: None,
+            step_min,
+        };
+        let mut frames: Vec<Arc<Grid>> = frames.into_iter().map(Arc::new).collect();
+        frames.sort_by_key(|g| g.valid_ms);
+        let mut g = self.mlpred.write();
+        g.retain(|l| l.def.id != id);
+        g.push(PredLayer { def, run_ms, frames });
+        g.sort_by(|a, b| a.def.id.cmp(&b.def.id));
+    }
+
+    /// Remove every prediction layer whose id equals `id` or starts with `id/`.
+    pub fn remove_pred_layers(&self, id: &str) {
+        let pre = format!("{id}/");
+        self.mlpred.write().retain(|l| l.def.id != id && !l.def.id.starts_with(&pre));
+    }
+
+    /// (id, run ms, valid times) of the published prediction layers.
+    pub fn pred_layers(&self) -> Vec<(String, i64, Vec<i64>)> {
+        self.mlpred.read().iter().map(|l| (l.def.id.clone(), l.run_ms, l.frames.iter().map(|g| g.valid_ms).collect())).collect()
+    }
+
+    fn pred_frames(&self, id: &str) -> Result<FramesResp> {
+        let g = self.mlpred.read();
+        let l = g.iter().find(|l| l.def.id == id).ok_or_else(|| anyhow!("unknown layer {id} (the model has not run yet)"))?;
+        let frames = l.frames.iter().map(|f| FrameInfo { key: format!("mlpred|{}|{}|{}", id, l.run_ms, f.valid_ms), time: f.valid_ms, label: String::new() }).collect();
+        Ok(FramesResp { frames, ..Default::default() })
+    }
+
+    fn pred_grid(&self, id: &str, run: i64, valid: i64) -> Result<Arc<Grid>> {
+        let g = self.mlpred.read();
+        let l = g.iter().find(|l| l.def.id == id).ok_or_else(|| anyhow!("prediction layer {id} not found"))?;
+        if l.run_ms != run {
+            bail!("prediction run expired (a newer run replaced it)");
+        }
+        l.frames.iter().find(|f| f.valid_ms == valid).cloned().ok_or_else(|| anyhow!("prediction frame not found"))
     }
 
     // ---------- fetch helpers ----------
@@ -400,6 +499,9 @@ impl GridService {
     // ---------- frames ----------
 
     pub async fn frames(&self, layer_id: &str, n: usize, run: Option<&str>, storm: Option<&str>, end: Option<i64>) -> Result<FramesResp> {
+        if layer_id.starts_with("mlpred/") {
+            return self.pred_frames(layer_id);
+        }
         let end = end.and_then(chrono::DateTime::from_timestamp_millis).filter(|t| *t < Utc::now());
         let l = self.layer(layer_id)?.clone();
         if let Some(local) = self.local_frames(&l) {
@@ -902,6 +1004,14 @@ impl GridService {
     // ---------- decode ----------
 
     pub async fn grid(&self, key: &str) -> Result<Arc<Grid>> {
+        if let Some(rest) = key.strip_prefix("mlpred|") {
+            // served from the prediction store (not the LRU: runs replace frames)
+            let p: Vec<&str> = rest.split('|').collect();
+            if p.len() != 3 {
+                bail!("bad grid key");
+            }
+            return self.pred_grid(p[0], p[1].parse()?, p[2].parse()?);
+        }
         if let Some(g) = self.grids.lock().get(key) {
             return Ok(g);
         }
@@ -1395,7 +1505,7 @@ impl GridService {
                     break;
                 }
                 for id in active {
-                    let Ok(l) = me.layer(&id).cloned() else { continue };
+                    let Ok(l) = me.layer(&id) else { continue };
                     match me.nowcast_run(&l).await {
                         Ok(run) => {
                             for lead in NOWCAST_LEADS {

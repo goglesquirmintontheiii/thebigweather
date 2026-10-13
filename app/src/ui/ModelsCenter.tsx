@@ -11,6 +11,8 @@ import { ModelsTab } from "./ml/ModelsTab";
 import { TrainTab } from "./ml/TrainTab";
 import { JobsTab } from "./ml/JobsTab";
 import { RunTab } from "./ml/RunTab";
+import { ProbGates } from "./ml/ProbGate"; // models 0.7
+import { RetrainHost } from "./ml/Retrain"; // models 0.7
 
 export { mlOpen };
 
@@ -38,7 +40,17 @@ function PickBar() {
   );
 }
 
+/** models 0.7: the window plus the always-mounted map pieces (probability gate cards) */
 export function ModelsCenter() {
+  return (
+    <>
+      <ProbGates />
+      <ModelsWindow />
+    </>
+  );
+}
+
+function ModelsWindow() {
   const open = mlOpen.value;
   useEffect(() => {
     if (!open) return;
@@ -63,7 +75,7 @@ export function ModelsCenter() {
   return (
     <>
     {picking && <PickBar />}
-    <CenterModal cls={`mlcenter${picking ? " ml-hidden" : ""}`} title="Detection models" sub="Train models on historical radar, MRMS, METAR and model data to detect tornadoes, supercells, hail, wind, tropical genesis, wildfires… and run them on live radars" icon={<BrainCircuit size={18} />} onClose={() => (pickMode.value ? finishPick(false) : (mlOpen.value = false))}>
+    <CenterModal cls={`mlcenter${picking ? " ml-hidden" : ""}`} title="Detection models" sub="Train models on historical radar, MRMS, satellite, METAR and model data — detect tornadoes, hail, intensifying storms…, forecast temperature, rain, storms, instability, floods and tropical development, or draw your own outlooks" icon={<BrainCircuit size={18} />} onClose={() => (pickMode.value ? finishPick(false) : (mlOpen.value = false))}>
       <div class="hs-tabs ml-tabs">
         {tabs.map(([id, l, Icon, badge]) => (
           <button key={id} class={t === id ? "on" : ""} onClick={() => (mlTab.value = id)}>
@@ -78,6 +90,7 @@ export function ModelsCenter() {
         {t === "jobs" && <JobsTab />}
         {t === "run" && <RunTab />}
       </div>
+      <RetrainHost />
     </CenterModal>
     </>
   );

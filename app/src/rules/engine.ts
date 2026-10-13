@@ -16,6 +16,7 @@ import { route } from "../route/route";
 import { applyWorkspace } from "../workspaces";
 import { freshDetections, startDetections } from "../ml/client"; // detection models
 import { tmeta } from "../ml/targets"; // detection models
+import { passesGate, PG_DET } from "../ml/probgate"; // models 0.7
 
 export interface FireLog {
   t: number;
@@ -198,6 +199,7 @@ export async function check(r: Rule): Promise<Hit | null> {
       const cut = Date.now() - 20 * 60_000;
       for (const d of dets) {
         if (d.test || d.t < cut || d.prob < minp || (c.model && d.model_id !== c.model)) continue;
+        if ((c.maxp != null && d.prob > c.maxp / 100 + 1e-9) || (c.useGate && !passesGate(PG_DET, d.prob))) continue; // models 0.7: probability window / map gate
         for (const l of locs) {
           const dist = distance(l.lat, l.lon, d.lat, d.lon);
           if (dist <= R) {
@@ -238,7 +240,7 @@ export function describe(c: RuleCond): string {
     case "dbz":
       return `Radar ≥ ${c.value ?? 50} dBZ at ${where}`;
     case "mldet":
-      return `Model detection ≥ ${c.value ?? 50}% within ${c.mi} mi of ${where}`; // detection models
+      return `Model detection ${c.maxp != null ? `${c.value ?? 50}–${c.maxp}%` : `≥ ${c.value ?? 50}%`}${c.useGate ? " (map gate)" : ""} within ${c.mi} mi of ${where}`; // detection models (models 0.7: window / gate)
   }
 }
 

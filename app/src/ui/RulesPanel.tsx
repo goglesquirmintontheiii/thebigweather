@@ -123,6 +123,17 @@ function RuleEditor({ r }: { r: Rule }) {
           <span>%</span>
         </div>
       )}
+      {/* models 0.7: probability window + map gate */}
+      {c.kind === "mldet" && (
+        <div class="row">
+          <span>and ≤</span>
+          <input type="number" min={0} max={100} style={{ width: "52px" }} placeholder="100" value={c.maxp ?? ""} onChange={(e) => set((x) => { const v = (e.target as HTMLInputElement).value; x.cond.maxp = v === "" ? undefined : Math.max(0, Math.min(100, +v)); })} />
+          <span>%</span>
+          <label class="ml-check" title="Only detections inside the probability gate on the map legend">
+            <input type="checkbox" checked={!!c.useGate} onChange={(e) => set((x) => (x.cond.useGate = (e.target as HTMLInputElement).checked || undefined))} /> match map gate
+          </label>
+        </div>
+      )}
       {c.kind === "spc" && (
         <div class="row">
           <span>Risk at least</span>

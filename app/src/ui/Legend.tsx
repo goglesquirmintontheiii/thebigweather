@@ -8,6 +8,9 @@ import { hover } from "../map/mapview";
 import { shiftHeld } from "./Readouts";
 import { gateDrag, radarGateKey, gridGateKey, type Gate } from "../gate";
 import { Eye, EyeOff, X } from "lucide-preact";
+import { activeTime } from "../active"; // models 0.7
+import { predModelName } from "../ml/client"; // models 0.7
+import { gridDef } from "../weather"; // models 0.7
 
 /** legend under the mouse (`,` / `.` nudge the low filter handle) */
 let legendHovered = false;
@@ -245,6 +248,14 @@ export function Legend() {
           </button>
         )}
       </div>
+      {/* models 0.7: prediction grids from my models carry the model name and valid time */}
+      {w.kind === "grid" && w.id.startsWith("mlpred/") && (
+        <div class="lg-ml" onClick={(e) => e.stopPropagation()} title="Prediction from one of my models (Detection models)">
+          <b>{predModelName(w.id)}</b>
+          <span>{gridDef(w.id)?.name && gridDef(w.id)!.name !== predModelName(w.id) ? ` · ${gridDef(w.id)!.name}` : ""}</span>
+          {activeTime.value ? <span> · valid {new Date(activeTime.value).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit", timeZone: settings.value.utc ? "UTC" : undefined })}{settings.value.utc ? " UTC" : ""}</span> : null}
+        </div>
+      )}
       <div
         class="lbar"
         ref={barRef}

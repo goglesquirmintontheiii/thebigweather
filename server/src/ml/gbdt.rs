@@ -1,4 +1,6 @@
-//! Histogram gradient-boosted decision trees for binary classification (log loss).
+//! Histogram gradient-boosted decision trees: binary classification (log loss) and regression
+//! (squared error, Huber, quantile / pinball), with warm start (continue boosting an existing
+//! ensemble on new data).
 //!
 //! * features are bucketed into ≤ 254 quantile bins (bin 255 = missing);
 //! * trees grow depth-wise; each node's split is the best (feature, bin) by second-order gain
@@ -12,7 +14,7 @@
 //!
 //! Histograms are built per feature in parallel (rayon) with the sibling-subtraction trick.
 
-use super::core::{logit, logloss, sigmoid, Data, Progress, Rng};
+use super::core::{sigmoid, Data, Loss, Progress, Rng};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +37,14 @@ pub struct GbdtParams {
     pub scale_pos_weight: f64,
     pub early_stopping_rounds: usize,
     pub seed: u64,
+    /// auto | logloss | squared | huber | quantile (regression targets)
+    pub loss: String,
+    /// Huber threshold (target units)
+    pub huber_delta: f64,
+    /// quantile of the main model when `loss = quantile`
+    pub alpha: f64,
+    /// extra quantile models trained next to a regression model (e.g. [0.1, 0.9] → P10 / P90)
+    pub quantiles: Vec<f64>,
 }
 
 impl Default for GbdtParams {
@@ -52,6 +62,10 @@ impl Default for GbdtParams {
             scale_pos_weight: 0.0,
             early_stopping_rounds: 40,
             seed: 42,
+            loss: "auto".into(),
+            huber_delta: 1.0,
+            alpha: 0.5,
+            quantiles: vec![],
         }
     }
 }
@@ -112,6 +126,9 @@ pub struct Gbdt {
     /// total split gain per feature
     pub importance: Vec<f64>,
     pub best_iter: usize,
+    /// training loss ("" / "logloss" = classification)
+    #[serde(default)]
+    pub loss: String,
 }
 
 impl Gbdt {
@@ -310,32 +327,61 @@ pub fn auto_spw(train: &Data, spw: f64) -> f64 {
     if pos <= 0.0 { 1.0 } else { (neg / pos).clamp(1.0, 50.0) }
 }
 
-/// Fit on `train`; `valid` (if non-empty) drives early stopping.
+/// Fit a classifier on `train`; `valid` (if non-empty) drives early stopping.
 pub fn fit(train: &Data, valid: Option<&Data>, p: &GbdtParams, progress: Progress) -> Gbdt {
+    fit_with(train, valid, p, Loss::Logistic, None, progress)
+}
+
+/// Fit with any loss. `init`: continue boosting that ensemble (its base and trees are kept and
+/// new trees are added on the residuals of `train`; early stopping may keep zero new trees).
+pub fn fit_with(train: &Data, valid: Option<&Data>, p: &GbdtParams, loss: Loss, init: Option<&Gbdt>, progress: Progress) -> Gbdt {
     let n = train.n;
     let d = train.d;
-    let spw = auto_spw(train, p.scale_pos_weight);
-    let w: Vec<f64> = (0..n).map(|i| train.w[i] as f64 * if train.y[i] > 0.5 { spw } else { 1.0 }).collect();
-    let sw: f64 = w.iter().sum();
-    let pos: f64 = (0..n).filter(|&i| train.y[i] > 0.5).map(|i| w[i]).sum();
-    let base = if sw > 0.0 { logit(pos / sw) } else { 0.0 };
+    let cls = loss == Loss::Logistic;
+    let spw = if cls { auto_spw(train, p.scale_pos_weight) } else { 1.0 };
+    let w: Vec<f64> = (0..n).map(|i| train.w[i] as f64 * if cls && train.y[i] > 0.5 { spw } else { 1.0 }).collect();
+    let init = init.filter(|m| m.importance.len() == d || m.trees.is_empty());
+    let base = match init {
+        Some(m) => m.base,
+        None => loss.base(&train.y, &w),
+    };
     let binner = Binner::fit(train, p.max_bins);
     let bins = binner.transform(train);
-    let mut margin = vec![base; n];
-    let mut vmargin: Vec<f64> = valid.map(|v| vec![base; v.n]).unwrap_or_default();
+    let mut margin: Vec<f64> = match init {
+        Some(m) => (0..n).into_par_iter().map(|i| m.margin(train.row(i))).collect(),
+        None => vec![base; n],
+    };
+    let mut vmargin: Vec<f64> = match (valid, init) {
+        (Some(v), Some(m)) => (0..v.n).into_par_iter().map(|i| m.margin(v.row(i))).collect(),
+        (Some(v), None) => vec![base; v.n],
+        _ => vec![],
+    };
     // validation loss uses the same class weighting as training
-    let vw: Vec<f32> = valid.map(|v| (0..v.n).map(|i| v.w[i] * if v.y[i] > 0.5 { spw as f32 } else { 1.0 }).collect()).unwrap_or_default();
-    let mut rng = Rng::new(p.seed);
-    let mut model = Gbdt { base, trees: vec![], importance: vec![0.0; d], best_iter: 0 };
+    let vw: Vec<f32> = valid.map(|v| (0..v.n).map(|i| v.w[i] * if cls && v.y[i] > 0.5 { spw as f32 } else { 1.0 }).collect()).unwrap_or_default();
+    let n0 = init.map(|m| m.trees.len()).unwrap_or(0);
+    let mut rng = Rng::new(p.seed ^ (n0 as u64).wrapping_mul(0x9E37_79B9));
+    let mut model = Gbdt {
+        base,
+        trees: init.map(|m| m.trees.clone()).unwrap_or_default(),
+        importance: init.map(|m| m.importance.clone()).unwrap_or_else(|| vec![0.0; d]),
+        best_iter: 0,
+        loss: if cls { String::new() } else { loss.name() },
+    };
     let mut imps: Vec<Vec<f64>> = vec![];
-    let mut best = (f64::INFINITY, 0usize);
+    let has_valid = valid.map(|v| v.n > 0).unwrap_or(false);
+    // a warm start must beat the existing ensemble to add trees
+    let start_vl = match (valid, init) {
+        (Some(v), Some(_)) if v.n > 0 => loss.mean(&v.y, &vw, &vmargin),
+        _ => f64::INFINITY,
+    };
+    let mut best = (start_vl, 0usize);
     let mut g = vec![0.0; n];
     let mut h = vec![0.0; n];
     for it in 0..p.n_trees.max(1) {
         for i in 0..n {
-            let pr = sigmoid(margin[i]);
-            g[i] = (pr - train.y[i] as f64) * w[i];
-            h[i] = (pr * (1.0 - pr)).max(1e-6) * w[i];
+            let (gi, hi) = loss.grad_hess(margin[i], train.y[i] as f64);
+            g[i] = gi * w[i];
+            h[i] = hi * w[i];
         }
         let rows: Vec<u32> = if p.subsample < 1.0 { (0..n as u32).filter(|_| rng.f64() < p.subsample).collect() } else { (0..n as u32).collect() };
         let mut feats: Vec<usize> = (0..d).collect();
@@ -351,11 +397,11 @@ pub fn fit(train: &Data, valid: Option<&Data>, p: &GbdtParams, progress: Progres
         grow(&ctx, &mut nodes, rows, root, 0, &mut imp);
         let tree = Tree { nodes };
         margin.par_iter_mut().enumerate().for_each(|(i, m)| *m += tree.predict(train.row(i)) as f64);
-        let tl = logloss(&train.y, &train.w, &margin);
+        let tl = loss.mean(&train.y, &train.w, &margin);
         let vl = match valid {
             Some(v) if v.n > 0 => {
                 vmargin.par_iter_mut().enumerate().for_each(|(i, m)| *m += tree.predict(v.row(i)) as f64);
-                logloss(&v.y, &vw, &vmargin)
+                loss.mean(&v.y, &vw, &vmargin)
             }
             _ => tl,
         };
@@ -365,18 +411,19 @@ pub fn fit(train: &Data, valid: Option<&Data>, p: &GbdtParams, progress: Progres
             best = (vl, it + 1);
         }
         let more = progress(it + 1, p.n_trees, tl, vl);
-        if !more || (valid.is_some() && p.early_stopping_rounds > 0 && it + 1 - best.1 >= p.early_stopping_rounds) {
+        if !more || (has_valid && p.early_stopping_rounds > 0 && it + 1 - best.1 >= p.early_stopping_rounds) {
             break;
         }
     }
-    let keep = if valid.map(|v| v.n > 0).unwrap_or(false) { best.1.max(1) } else { model.trees.len() };
-    model.trees.truncate(keep);
+    let added = model.trees.len() - n0;
+    let keep = if has_valid { if init.is_some() { best.1 } else { best.1.max(1) } } else { added };
+    model.trees.truncate(n0 + keep);
     for imp in imps.iter().take(keep) {
         for (a, b) in model.importance.iter_mut().zip(imp) {
             *a += b;
         }
     }
-    model.best_iter = keep;
+    model.best_iter = model.trees.len();
     model
 }
 
@@ -436,6 +483,43 @@ mod tests {
         let m = fit(&d, None, &GbdtParams { n_trees: 30, ..Default::default() }, &no_progress);
         assert!(m.predict(&[f32::NAN, 0.0]) > 0.9);
         assert!(m.predict(&[0.3, 0.0]) < 0.1);
+    }
+
+    #[test]
+    fn regression_losses_and_warm_start() {
+        use crate::ml::core::synth_reg;
+        let tr = synth_reg(3000, 6, 0.5, 31);
+        let va = synth_reg(800, 6, 0.5, 32);
+        let te = synth_reg(1500, 6, 0.5, 33);
+        let p = GbdtParams { n_trees: 300, learning_rate: 0.1, ..Default::default() };
+        let m = fit_with(&tr, Some(&va), &p, Loss::Squared, None, &no_progress);
+        let pred: Vec<f64> = (0..te.n).map(|i| m.margin(te.row(i))).collect();
+        let r = crate::ml::metrics::evaluate_reg(&te.y, &pred, 10.0, None);
+        assert!(r.r2 > 0.85 && r.rmse < 1.5, "{r:?}");
+        assert!(r.bias.abs() < 0.2);
+        assert_eq!(m.loss, "squared");
+        // quantiles bracket the median
+        let lo = fit_with(&tr, None, &GbdtParams { n_trees: 150, learning_rate: 0.1, ..Default::default() }, Loss::Quantile(0.1), None, &no_progress);
+        let hi = fit_with(&tr, None, &GbdtParams { n_trees: 150, learning_rate: 0.1, ..Default::default() }, Loss::Quantile(0.9), None, &no_progress);
+        let cover = (0..te.n).filter(|&i| (te.y[i] as f64) >= lo.margin(te.row(i)) && (te.y[i] as f64) <= hi.margin(te.row(i))).count() as f64 / te.n as f64;
+        assert!(cover > 0.6 && cover < 0.95, "coverage {cover}");
+        let hub = fit_with(&tr, Some(&va), &p, Loss::Huber(1.0), None, &no_progress);
+        assert!((0..50).all(|i| hub.margin(te.row(i)).is_finite()));
+        // warm start: a short model continued on more data lowers the training loss, keeps the old trees
+        let short = fit_with(&tr, None, &GbdtParams { n_trees: 20, ..p.clone() }, Loss::Squared, None, &no_progress);
+        let before = Loss::Squared.mean(&tr.y, &tr.w, &(0..tr.n).map(|i| short.margin(tr.row(i))).collect::<Vec<_>>());
+        let cont = fit_with(&tr, None, &GbdtParams { n_trees: 40, ..p.clone() }, Loss::Squared, Some(&short), &no_progress);
+        let after = Loss::Squared.mean(&tr.y, &tr.w, &(0..tr.n).map(|i| cont.margin(tr.row(i))).collect::<Vec<_>>());
+        assert!(after < before * 0.8, "{before} -> {after}");
+        assert_eq!(cont.trees.len(), 60);
+        assert_eq!(cont.base, short.base);
+        assert_eq!(cont.trees[0].nodes.len(), short.trees[0].nodes.len());
+        // classification warm start too
+        let c = synth(2000, 5, 3, 0.3, 41);
+        let a = fit(&c, None, &GbdtParams { n_trees: 10, ..Default::default() }, &no_progress);
+        let b = fit_with(&c, None, &GbdtParams { n_trees: 30, ..Default::default() }, Loss::Logistic, Some(&a), &no_progress);
+        let ll = |m: &Gbdt| crate::ml::core::logloss(&c.y, &c.w, &(0..c.n).map(|i| m.margin(c.row(i))).collect::<Vec<_>>());
+        assert!(ll(&b) < ll(&a));
     }
 
     #[test]

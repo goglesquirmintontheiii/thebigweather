@@ -36,15 +36,57 @@ pub struct Event {
 
 /// Label-source catalog: id, name, targets, first year, notes.
 pub const SOURCES: &[(&str, &str, &[&str], i32, &str)] = &[
-    ("spc_tornado", "SPC tornado database (+ IEM reports for years not yet in it)", &["tornado", "supercell", "debris", "custom"], 1950, "https://www.spc.noaa.gov/wcm/data/1950-YYYY_actual_tornadoes.csv"),
-    ("spc_hail", "SPC hail database", &["hail", "sighail", "supercell", "custom"], 1955, "https://www.spc.noaa.gov/wcm/data/YYYY_hail.csv"),
-    ("spc_wind", "SPC damaging wind database", &["wind", "custom"], 1955, "https://www.spc.noaa.gov/wcm/data/YYYY_wind.csv"),
-    ("iem_lsr", "IEM local storm reports", &["tornado", "hail", "sighail", "wind", "flash_flood", "custom"], 2003, "https://mesonet.agron.iastate.edu/geojson/lsr.geojson"),
-    ("iem_sbw", "NWS storm-based warnings (IEM, weak labels)", &["tornado", "supercell", "hail", "wind", "flash_flood", "custom"], 2008, "https://mesonet.agron.iastate.edu/geojson/sbw.geojson"),
-    ("hurdat_genesis", "HURDAT2 tropical-storm genesis", &["tropical_genesis", "custom"], 1851, "https://www.nhc.noaa.gov/data/hurdat/"),
-    ("hurdat_first_fix", "HURDAT2 first fix (any tropical cyclone)", &["tropical_possible", "custom"], 1851, "https://www.nhc.noaa.gov/data/hurdat/"),
+    ("spc_tornado", "SPC tornado database (+ IEM reports for years not yet in it)", &["tornado", "supercell", "debris", "storm_intensify", "instability", "outlook", "custom"], 1950, "https://www.spc.noaa.gov/wcm/data/1950-YYYY_actual_tornadoes.csv"),
+    ("spc_hail", "SPC hail database", &["hail", "sighail", "supercell", "storm_intensify", "instability", "outlook", "custom"], 1955, "https://www.spc.noaa.gov/wcm/data/YYYY_hail.csv"),
+    ("spc_wind", "SPC damaging wind database", &["wind", "storm_intensify", "instability", "outlook", "custom"], 1955, "https://www.spc.noaa.gov/wcm/data/YYYY_wind.csv"),
+    ("iem_lsr", "IEM local storm reports", &["tornado", "hail", "sighail", "wind", "flash_flood", "flood_forecast", "instability", "custom"], 2003, "https://mesonet.agron.iastate.edu/geojson/lsr.geojson"),
+    ("iem_sbw", "NWS storm-based warnings (IEM, weak labels)", &["tornado", "supercell", "hail", "wind", "flash_flood", "flood_forecast", "storm_intensify", "custom"], 2008, "https://mesonet.agron.iastate.edu/geojson/sbw.geojson"),
+    ("hurdat_genesis", "HURDAT2 tropical-storm genesis", &["tropical_genesis", "tropical_forecast", "custom"], 1851, "https://www.nhc.noaa.gov/data/hurdat/"),
+    ("hurdat_first_fix", "HURDAT2 first fix (any tropical cyclone)", &["tropical_possible", "tropical_forecast", "custom"], 1851, "https://www.nhc.noaa.gov/data/hurdat/"),
     ("hms_fire", "NOAA HMS satellite fire detections (new fires)", &["wildfire", "custom"], 2003, "https://satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Fire_Points/Text/"),
+    // gridded "truth" (labels computed from analyses rather than event reports)
+    ("radar_tracks", "Self-supervised: the same cell tracked in later radar volumes", &["storm_intensify"], 1991, "https://registry.opendata.aws/noaa-nexrad/"),
+    ("urma_t2m", "URMA / RTMA 2.5 km 2 m temperature analysis (METAR fallback)", &["temp_forecast"], 2015, "https://noaa-urma-pds.s3.amazonaws.com/"),
+    ("mrms_qpe", "MRMS MultiSensor QPE pass 2", &["precip_forecast"], 2020, "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/"),
+    ("mrms_cref", "MRMS composite reflectivity (1 h max)", &["storm_forecast", "instability"], 2020, "https://noaa-mrms-pds.s3.amazonaws.com/CONUS/"),
+    ("goes_glm", "GOES GLM lightning flashes", &["storm_forecast"], 2018, "https://noaa-goes16.s3.amazonaws.com/GLM-L2-LCFA/"),
 ];
+
+/// Label sources computed from gridded data (not event databases).
+pub fn is_truth_source(id: &str) -> bool {
+    matches!(id, "radar_tracks" | "urma_t2m" | "mrms_qpe" | "mrms_cref" | "goes_glm")
+}
+
+/// Events sorted by start time, for window queries over any span.
+pub struct TimeIndex {
+    pub events: Vec<Event>,
+    t0: Vec<i64>,
+    max_dur: i64,
+}
+
+impl TimeIndex {
+    pub fn new(mut events: Vec<Event>) -> Self {
+        events.sort_by_key(|e| e.t0);
+        let t0 = events.iter().map(|e| e.t0).collect();
+        let max_dur = events.iter().map(|e| (e.t1 - e.t0).max(0)).max().unwrap_or(0);
+        TimeIndex { events, t0, max_dur }
+    }
+    /// First event active in (w0, w1] within `radius_km` of the point (inside a warning polygon,
+    /// or within the radius of the path).
+    pub fn find(&self, lat: f64, lon: f64, w0: i64, w1: i64, radius_km: f64) -> Option<&Event> {
+        let a = self.t0.partition_point(|t| *t <= w0 - self.max_dur);
+        let b = self.t0.partition_point(|t| *t <= w1);
+        self.events[a..b].iter().find(|e| {
+            e.t1.max(e.t0) > w0 && e.t0 <= w1 && if !e.poly.is_empty() { point_in_poly(lat, lon, &e.poly) || dist_to_path_km(lat, lon, e) <= radius_km * 0.25 } else { dist_to_path_km(lat, lon, e) <= radius_km }
+        })
+    }
+    /// Events starting in [w0, w1).
+    pub fn in_window(&self, w0: i64, w1: i64) -> &[Event] {
+        let a = self.t0.partition_point(|t| *t < w0);
+        let b = self.t0.partition_point(|t| *t < w1);
+        &self.events[a..b]
+    }
+}
 
 /// Label filters (each applies to the sources it concerns).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -580,6 +622,16 @@ mod tests {
         let poly = vec![[-98.0, 34.0], [-96.0, 34.0], [-96.0, 36.0], [-98.0, 36.0], [-98.0, 34.0]];
         assert!(point_in_poly(35.0, -97.0, &poly));
         assert!(!point_in_poly(37.0, -97.0, &poly));
+    }
+
+    #[test]
+    fn time_index_windows() {
+        let mk = |t: i64, lat: f64| Event { id: format!("e{t}"), kind: "hail".into(), t0: t, t1: t, lat, lon: -97.0, elat: 0.0, elon: 0.0, mag: 1.0, st: String::new(), poly: vec![] };
+        let ix = TimeIndex::new(vec![mk(5_000, 35.0), mk(1_000, 36.0), mk(10_000, 35.0)]);
+        assert_eq!(ix.find(35.1, -97.0, 0, 6_000, 40.0).unwrap().t0, 5_000);
+        assert!(ix.find(35.1, -97.0, 5_000, 9_000, 40.0).is_none());
+        assert!(ix.find(37.0, -97.0, 0, 6_000, 40.0).is_none());
+        assert_eq!(ix.in_window(0, 6_000).len(), 2);
     }
 
     #[test]

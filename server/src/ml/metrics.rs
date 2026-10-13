@@ -199,6 +199,114 @@ pub fn evaluate(y: &[f32], p: &[f64], thr: f64) -> Metrics {
     }
 }
 
+/// Verification of a regression (continuous) forecast.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegMetrics {
+    pub n: usize,
+    pub mean_obs: f64,
+    pub mean_pred: f64,
+    pub mae: f64,
+    pub rmse: f64,
+    /// mean(pred − obs)
+    pub bias: f64,
+    pub r2: f64,
+    /// climatology baseline (training mean): RMSE and skill = 1 − MSE / MSE_clim
+    pub rmse_clim: f64,
+    pub skill_clim: f64,
+    /// persistence baseline (the current observation), when known for the samples
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rmse_persistence: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mae_persistence: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_persistence: Option<f64>,
+    /// samples where the persistence baseline was available
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_persistence: Option<usize>,
+    /// headline skill: vs persistence when known, else vs climatology
+    pub skill: f64,
+    /// mean observation per predicted-value decile (calibration of the forecast values)
+    pub reliability: Vec<RelBin>,
+}
+
+/// Regression metrics; `clim` = climatological (training-mean) forecast, `persist` = the
+/// persistence forecast per sample (NaN = unknown).
+pub fn evaluate_reg(y: &[f32], p: &[f64], clim: f64, persist: Option<&[f64]>) -> RegMetrics {
+    let n = y.len();
+    if n == 0 {
+        return RegMetrics::default();
+    }
+    let nf = n as f64;
+    let mean_obs = y.iter().map(|v| *v as f64).sum::<f64>() / nf;
+    let mean_pred = p.iter().sum::<f64>() / nf;
+    let mut mae = 0.0;
+    let mut mse = 0.0;
+    let mut bias = 0.0;
+    let mut sst = 0.0;
+    let mut mse_c = 0.0;
+    for i in 0..n {
+        let e = p[i] - y[i] as f64;
+        mae += e.abs();
+        mse += e * e;
+        bias += e;
+        sst += (y[i] as f64 - mean_obs).powi(2);
+        mse_c += (clim - y[i] as f64).powi(2);
+    }
+    mae /= nf;
+    mse /= nf;
+    bias /= nf;
+    mse_c /= nf;
+    let r2 = if sst > 0.0 { 1.0 - mse * nf / sst } else { 0.0 };
+    let (mut rp, mut ap, mut sp, mut np) = (None, None, None, None);
+    if let Some(ps) = persist {
+        let idx: Vec<usize> = (0..n).filter(|&i| ps[i].is_finite()).collect();
+        if !idx.is_empty() {
+            let k = idx.len() as f64;
+            let mse_p = idx.iter().map(|&i| (ps[i] - y[i] as f64).powi(2)).sum::<f64>() / k;
+            let mae_p = idx.iter().map(|&i| (ps[i] - y[i] as f64).abs()).sum::<f64>() / k;
+            let mse_m = idx.iter().map(|&i| (p[i] - y[i] as f64).powi(2)).sum::<f64>() / k;
+            rp = Some(round4(mse_p.sqrt()));
+            ap = Some(round4(mae_p));
+            sp = Some(round4(if mse_p > 0.0 { 1.0 - mse_m / mse_p } else { 0.0 }));
+            np = Some(idx.len());
+        }
+    }
+    // reliability by predicted-value deciles
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by(|&a, &b| p[a].partial_cmp(&p[b]).unwrap_or(std::cmp::Ordering::Equal));
+    let bins = 10.min(n);
+    let reliability = (0..bins)
+        .map(|b| {
+            let part = &order[b * n / bins..(b + 1) * n / bins];
+            let k = part.len().max(1) as f64;
+            RelBin {
+                lo: round4(part.first().map(|&i| p[i]).unwrap_or(0.0)),
+                hi: round4(part.last().map(|&i| p[i]).unwrap_or(0.0)),
+                n: part.len(),
+                mean_pred: round4(part.iter().map(|&i| p[i]).sum::<f64>() / k),
+                obs_freq: round4(part.iter().map(|&i| y[i] as f64).sum::<f64>() / k),
+            }
+        })
+        .collect();
+    RegMetrics {
+        n,
+        mean_obs: round4(mean_obs),
+        mean_pred: round4(mean_pred),
+        mae: round4(mae),
+        rmse: round4(mse.sqrt()),
+        bias: round4(bias),
+        r2: round4(r2),
+        rmse_clim: round4(mse_c.sqrt()),
+        skill_clim: round4(if mse_c > 0.0 { 1.0 - mse / mse_c } else { 0.0 }),
+        rmse_persistence: rp,
+        mae_persistence: ap,
+        skill_persistence: sp,
+        n_persistence: np,
+        skill: sp.unwrap_or(round4(if mse_c > 0.0 { 1.0 - mse / mse_c } else { 0.0 })),
+        reliability,
+    }
+}
+
 /// Fold (0..k) per sample such that every group lands in one fold; groups containing positives
 /// are spread evenly first (stratified by group).
 pub fn group_folds(groups: &[String], y: &[f32], k: usize, seed: u64) -> Vec<usize> {
@@ -248,6 +356,20 @@ mod tests {
         assert!(m.best_csi >= m.csi);
         assert!(m.best_csi_threshold > 0.6);
         assert_eq!(m.reliability.len(), 10);
+    }
+
+    #[test]
+    fn regression_metrics() {
+        let y = [1.0f32, 2.0, 3.0, 4.0];
+        let r = evaluate_reg(&y, &[1.5, 2.5, 3.5, 4.5], 2.5, Some(&[0.0, 1.0, f64::NAN, 3.0]));
+        assert_eq!(r.mae, 0.5);
+        assert_eq!(r.bias, 0.5);
+        assert_eq!(r.rmse, 0.5);
+        assert!((r.r2 - 0.8).abs() < 1e-9);
+        assert!((r.skill_clim - 0.8).abs() < 1e-9);
+        assert_eq!(r.n_persistence, Some(3));
+        assert_eq!(r.rmse_persistence, Some(1.0));
+        assert!((r.skill_persistence.unwrap() - 0.75).abs() < 1e-9);
     }
 
     #[test]

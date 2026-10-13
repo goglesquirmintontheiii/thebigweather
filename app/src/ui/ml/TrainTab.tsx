@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { Rocket, Sparkles, SlidersHorizontal, SquareDashed, X, Info } from "lucide-preact";
-import { catalog, catalogErr, loadCatalog, startTraining, trainDraft, mlTab, mlPrefs, canLocal } from "../../ml/client";
-import { tmeta } from "../../ml/targets";
+import { catalog, catalogErr, loadCatalog, startTraining, trainDraft, mlTab, mlPrefs, canLocal, retrainModel, models, type RetrainMode } from "../../ml/client";
+import { tmeta, outputOf, taskOf } from "../../ml/targets";
+import { ModeSwitch } from "./Retrain"; // models 0.7
+import { OptInput, optChoices } from "./RunOptions"; // models 0.7: generic option inputs
 import { pickBox } from "../../ml/pick";
 import { update } from "../../store";
 import type { Catalog, Ep, FilterDef, ParamDef, Preset, TrainSpec } from "../../ml/types";
@@ -18,6 +20,44 @@ const DEF_MRMS = ["azs02", "mesh", "vil", "et18", "cref", "posh", "rot2h", "qpe1
 const DEF_MODEL = ["cape", "mucape", "cin", "pwat", "rh700", "absv850", "shear_850_200", "sst", "mslp", "t2m", "rh2m", "wind10"];
 const SRC_NAMES: Record<string, string> = { REF: "Reflectivity", VEL: "Velocity", SW: "Spectrum width", ZDR: "ZDR", RHO: "Correlation coef.", PHI: "Diff. phase", KDP: "KDP", CREF: "Composite refl.", ET: "Echo tops", VIL: "VIL" };
 const opt = (x: string | { id: string; name: string }): [string, string] => (typeof x === "string" ? [x, SRC_NAMES[x] ?? x.replace(/_/g, " ")] : [x.id, x.name]);
+/* models 0.7: satellite + other source fallbacks (the catalog's `sources` wins) */
+type SrcItem = string | { id: string; name: string; group?: string; help?: string; unit?: string };
+const DEF_SAT: SrcItem[] = [
+  { id: "abi_c02", name: "C02 · Red visible 0.64 µm", group: "GOES ABI bands" },
+  { id: "abi_c07", name: "C07 · Shortwave IR 3.9 µm", group: "GOES ABI bands" },
+  { id: "abi_c08", name: "C08 · Upper water vapor 6.2 µm", group: "GOES ABI bands" },
+  { id: "abi_c09", name: "C09 · Mid water vapor 6.9 µm", group: "GOES ABI bands" },
+  { id: "abi_c10", name: "C10 · Low water vapor 7.3 µm", group: "GOES ABI bands" },
+  { id: "abi_c13", name: "C13 · Clean IR 10.3 µm", group: "GOES ABI bands" },
+  { id: "abi_c14", name: "C14 · IR 11.2 µm", group: "GOES ABI bands" },
+  { id: "abi_c15", name: "C15 · Dirty IR 12.3 µm", group: "GOES ABI bands" },
+  { id: "ir_cooling", name: "Cloud-top cooling rate", group: "Derived" },
+  { id: "ir_min", name: "Coldest cloud top", group: "Derived" },
+  { id: "ot", name: "Overshooting-top score", group: "Derived" },
+  { id: "glm_fed", name: "GLM flash-extent density", group: "Lightning (GLM)" },
+  { id: "glm_trend", name: "GLM flash-rate trend (jump)", group: "Lightning (GLM)" },
+];
+const DEF_OTHER: SrcItem[] = [
+  { id: "spc_outlook", name: "SPC outlook (as a feature)" },
+  { id: "nws_warnings", name: "Active NWS warnings" },
+  { id: "lightning", name: "Ground lightning" },
+  { id: "nwm", name: "National Water Model streamflow" },
+  { id: "soil_moisture", name: "Soil moisture" },
+  { id: "climatology", name: "Climatology (day of year)" },
+  { id: "terrain", name: "Terrain / land use" },
+];
+const srcList = (v: any, d: SrcItem[]): SrcItem[] => (Array.isArray(v) && v.length ? v : d);
+const ids2 = (l: SrcItem[]) => l.map((x) => (typeof x === "string" ? x : x.id));
+/** grouped [group, [id, name][]] */
+function groupsOf(l: SrcItem[]): [string, [string, string][]][] {
+  const g = new Map<string, [string, string][]>();
+  for (const x of l) {
+    const k = typeof x === "string" ? "" : x.group ?? "";
+    if (!g.has(k)) g.set(k, []);
+    g.get(k)!.push(opt(x as any));
+  }
+  return [...g.entries()];
+}
 
 const TIME_LIMITS: [string, string][] = [["", "No limit"], ["30", "30 min"], ["60", "1 hour"], ["120", "2 hours"], ["240", "4 hours"], ["480", "8 hours"], ["1440", "24 hours"], ["c", "Custom…"]];
 
@@ -67,13 +107,19 @@ function defaults(cat: Catalog, target: string, prev?: Partial<TrainSpec>): Trai
     null_days: base.null_days ?? (grid ? 20 : 10),
     match: base.match ?? { radius_km: grid ? 150 : 15, before_min: grid ? 0 : 20, after_min: grid ? 0 : 10 },
     sources: pre
-      ? { radar_products: base.sources?.radar_products ?? [], mrms: base.sources?.mrms ?? [], metar: !!base.sources?.metar, model: base.sources?.model ?? [] }
+      ? { radar_products: base.sources?.radar_products ?? [], mrms: base.sources?.mrms ?? [], metar: !!base.sources?.metar, model: base.sources?.model ?? [], satellite: base.sources?.satellite ?? [], other: base.sources?.other ?? [] }
       : {
           radar_products: grid ? [] : ids(cat.radar_products, DEF_RADAR),
           mrms: grid ? [] : ids(cat.mrms, DEF_MRMS).slice(0, 5),
           metar: !grid || id === "wildfire",
           model: grid ? ids(cat.model_fields, DEF_MODEL).slice(0, 12) : [],
+          satellite: ids2(srcList(cat.sources?.satellite, DEF_SAT)).slice(0, 6),
+          other: [],
         },
+    // models 0.7: the target's own parameters and sub-target
+    target_params: { ...Object.fromEntries((t?.params ?? []).map((p) => [p.id, p.default])), ...(base.target_params ?? {}), ...(t?.leads?.length && !base.target_params?.leads ? { leads: base.grid?.lead_hours?.length ? base.grid.lead_hours : t.leads } : {}) },
+    subtarget: base.subtarget ?? (t?.subtargets?.length ? (typeof t.subtargets[0] === "string" ? t.subtargets[0] : t.subtargets[0].id) : undefined),
+    task: taskOf(id, t?.task),
     features: base.features?.length ? base.features : undefined,
     algo: algo?.id ?? "gbdt",
     params: { ...Object.fromEntries((algo?.params ?? []).map((p) => [p.id, p.default])), ...(base.params ?? {}) },
@@ -181,6 +227,11 @@ function Quick({ cat }: { cat: Catalog }) {
                 <b>{p.name}</b>
                 <span>{p.description ?? cat.targets.find((t) => t.id === p.target)?.description ?? tmeta(p.target).name}</span>
                 <small>≈ {fmtDur(est * 60)}{p.spec?.years ? ` · ${p.spec.years[0]}–${p.spec.years[1]}` : ""}{p.spec?.max_events ? ` · ${p.spec.max_events} events` : ""}</small>
+                {(() => {
+                  const td = cat.targets.find((t) => t.id === p.target);
+                  const o = outputOf(p.target, td?.output);
+                  return o !== "detections" ? <em class="ml-out">{o === "grid" ? "→ weather layer" : "→ outlook"}</em> : null;
+                })()}
               </div>
             </button>
           );
@@ -277,6 +328,48 @@ function FilterInput({ f, value, onChange }: { f: FilterDef; value: any; onChang
   );
 }
 
+/** models 0.7: output summary, sub-target, leads and the target's own params (catalog targets[].params) */
+function TargetExtras({ cat, s, set }: { cat: Catalog; s: TrainSpec; set: (p: Partial<TrainSpec>) => void }) {
+  const t = cat.targets.find((x) => x.id === s.target);
+  if (!t) return null;
+  const subs = (t.subtargets ?? []).map((x) => (typeof x === "string" ? { id: x, name: x.replace(/_/g, " ") } : x));
+  const tp = s.target_params ?? {};
+  const leads: number[] = Array.isArray(tp.leads) ? tp.leads : [];
+  const params = (t.params ?? []).filter((p) => p.id !== "leads");
+  if (!subs.length && !t.leads?.length && !params.length) return null;
+  return (
+    <div class="ml-grid ml-tx">
+      {subs.length > 0 && (
+        <Field label={t.output === "outlook" ? "Hazard" : "Predict"} wide>
+          <div class="ml-chips">
+            {subs.map((x) => (
+              <button key={x.id} class={`chip ${s.subtarget === x.id ? "on" : ""}`} title={(x as any).help} onClick={(e) => (e.preventDefault(), set({ subtarget: x.id }))}>
+                {x.name}
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
+      {!!t.leads?.length && (
+        <Field label="Forecast leads (h)" wide help="Lead times the model is trained for; it forecasts each when run (more leads = more samples, longer training)">
+          <div class="ml-chips">
+            {t.leads.map((h) => (
+              <button key={h} class={`chip ${leads.includes(h) ? "on" : ""}`} onClick={(e) => (e.preventDefault(), set({ target_params: { ...tp, leads: leads.includes(h) ? leads.filter((x) => x !== h) : [...leads, h].sort((a, b) => a - b) } }))}>
+                {h} h
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
+      {params.map((p) => (
+        <Field key={p.id} label={`${p.name}${p.unit ? ` (${p.unit})` : ""}`} help={p.help} wide={p.type === "multi" || (optChoices(p).length > 4 && p.type !== "choice")}>
+          <OptInput p={p} value={tp[p.id]} onChange={(v) => set({ target_params: { ...tp, [p.id]: v } })} />
+        </Field>
+      ))}
+    </div>
+  );
+}
+
 function Checks({ all, sel, onChange, cols = 3 }: { all: [string, string][]; sel: string[]; onChange: (v: string[]) => void; cols?: number }) {
   return (
     <div class="ml-checks" style={{ "--cols": String(cols) }}>
@@ -299,6 +392,9 @@ function Custom({ cat }: { cat: Catalog }) {
   useEffect(() => () => void (trainDraft.value = null), []);
   const [where, setWhere] = useWhere();
   const [busy, setBusy] = useState(false);
+  // models 0.7: retraining an existing model (opened from the model's "Retrain…")
+  const [rt] = useState<{ ep: Ep; id: string; name: string; version?: number } | null>(() => (draft as any)?.__retrain ?? null);
+  const [rtMode, setRtMode] = useState<RetrainMode>("replace");
   const set = (p: Partial<TrainSpec>) => setS((x) => ({ ...x, ...p }));
   const tdef = cat.targets.find((t) => t.id === s.target);
   const cand = cat.candidates.find((c) => c.id === s.candidate);
@@ -327,7 +423,14 @@ function Custom({ cat }: { cat: Catalog }) {
     <div class="ml-custom">
       <div class="ml-form">
         <section>
-          <h4>1 · What to detect</h4>
+          {rt && (
+            <div class="ml-rt-banner">
+              <b>Retraining “{rt.name}”</b> <small class="muted">v{rt.version ?? 1} → v{(rt.version ?? 1) + 1}</small>
+              <span class="muted small">Every setting below can change (sources, features, algorithm…). The job runs where the model is.</span>
+              <ModeSwitch value={rtMode} onChange={setRtMode} name={rt.name} />
+            </div>
+          )}
+          <h4>1 · What to detect / forecast</h4>
           <div class="ml-grid">
             <Field label="Name" wide>
               <input value={s.name} placeholder={`${tmeta(s.target).name} model`} onInput={(e) => set({ name: (e.target as HTMLInputElement).value })} />
@@ -382,6 +485,8 @@ function Custom({ cat }: { cat: Catalog }) {
               <FilterInput key={f.id} f={f} value={s.filters[f.id]} onChange={(v) => set({ filters: { ...s.filters, [f.id]: v } })} />
             ))}
           </div>
+          {/* models 0.7: what the model produces, sub-targets, leads and the target's own parameters */}
+          <TargetExtras cat={cat} s={s} set={set} />
         </section>
 
         <section>
@@ -448,7 +553,29 @@ function Custom({ cat }: { cat: Catalog }) {
         </section>
 
         <section>
-          <h4>4 · Data sources</h4>
+          <h4>
+            4 · Data sources{" "}
+            <button
+              class="chip"
+              title="Tick every source the server offers (more data per sample; longer gathering)"
+              onClick={(e) => {
+                e.preventDefault();
+                const c = cat.sources ?? {};
+                set({
+                  sources: {
+                    radar_products: s.candidate === "grid_point" ? s.sources.radar_products : (cat.radar_products ?? DEF_RADAR).map((x) => opt(x)[0]),
+                    mrms: (cat.mrms ?? DEF_MRMS).map((x) => opt(x)[0]),
+                    model: (cat.model_fields ?? DEF_MODEL).map((x) => opt(x)[0]),
+                    metar: true,
+                    satellite: ids2(srcList(c.satellite, DEF_SAT)),
+                    other: ids2(srcList(c.other, DEF_OTHER)),
+                  },
+                });
+              }}
+            >
+              Use every source
+            </button>
+          </h4>
           <div class="ml-src">
             <div>
               <span class="ml-flabel">NEXRAD / TDWR products</span>
@@ -464,6 +591,27 @@ function Custom({ cat }: { cat: Catalog }) {
               <label class="ml-check ml-metar">
                 <input type="checkbox" checked={s.sources.metar} onChange={(e) => set({ sources: { ...s.sources, metar: (e.target as HTMLInputElement).checked } })} /> Nearby METARs (surface obs)
               </label>
+            </div>
+            {/* models 0.7: satellite (GOES ABI bands, cooling rate, GLM) and every other source group */}
+            <div>
+              <span class="ml-flabel">
+                Satellite <Help text="GOES-East/West ABI bands, derived cloud-top cooling / overshooting tops, and GLM lightning, sampled around each case (archive on AWS)." />
+              </span>
+              {groupsOf(srcList(cat.sources?.satellite, DEF_SAT)).map(([g, all]) => (
+                <div key={g} class="ml-srcg">
+                  {g && <small class="muted">{g}</small>}
+                  <Checks all={all} sel={s.sources.satellite ?? []} onChange={(v) => set({ sources: { ...s.sources, satellite: [...(s.sources.satellite ?? []).filter((x) => !all.some(([k]) => k === x)), ...v] } })} cols={1} />
+                </div>
+              ))}
+            </div>
+            <div>
+              <span class="ml-flabel">Other sources</span>
+              {groupsOf(srcList(cat.sources?.other, DEF_OTHER)).map(([g, all]) => (
+                <div key={g} class="ml-srcg">
+                  {g && <small class="muted">{g}</small>}
+                  <Checks all={all} sel={s.sources.other ?? []} onChange={(v) => set({ sources: { ...s.sources, other: [...(s.sources.other ?? []).filter((x) => !all.some(([k]) => k === x)), ...v] } })} cols={1} />
+                </div>
+              ))}
             </div>
           </div>
         </section>
@@ -557,9 +705,19 @@ function Custom({ cat }: { cat: Catalog }) {
               </small>
             </div>
           </div>
-          <Field label="Where">
-            <WhereToggle value={where} onChange={setWhere} />
-          </Field>
+          {!rt && (
+            <Field label="Where">
+              <WhereToggle value={where} onChange={setWhere} />
+            </Field>
+          )}
+          {(() => {
+            const o = outputOf(s.target, tdef?.output);
+            return (
+              <div class="ml-go-out muted small">
+                {taskOf(s.target, tdef?.task) === "regression" ? "Regression (predicts a value)" : "Classification (predicts a probability)"} · when run: {o === "grid" ? "a weather layer (forecast grid)" : o === "outlook" ? "an SPC-style outlook layer" : "detections on the map"}
+              </div>
+            );
+          })()}
           <Field label="Time limit" help="None by default: training runs until it's done. Stop early any time from Jobs.">
             <TimeLimit value={s.time_limit_min ?? null} onChange={(v) => set({ time_limit_min: v })} />
           </Field>
@@ -568,16 +726,23 @@ function Custom({ cat }: { cat: Catalog }) {
           </div>
           <button
             class="btn ml-start"
-            disabled={busy || !s.target || !s.label_source.length || (!s.sources.radar_products.length && !s.sources.mrms.length && !s.sources.model.length && !s.sources.metar)}
+            disabled={busy || !s.target || !s.label_source.length || (!s.sources.radar_products.length && !s.sources.mrms.length && !s.sources.model.length && !s.sources.metar && !s.sources.satellite?.length && !s.sources.other?.length)}
             onClick={async () => {
               setBusy(true);
               const body: TrainSpec = { ...s, name: s.name.trim() || `${tmeta(s.target).name} model` };
-              const id = await startTraining(where, body);
+              delete (body as any).__retrain;
+              // the server's grid options take the leads too
+              if (Array.isArray(body.target_params?.leads)) body.grid = { ...(body.grid ?? {}), lead_hours: body.target_params!.leads };
+              let id: string | null = null;
+              if (rt) {
+                const m = models.value.find((x) => x.ep === rt.ep && x.id === rt.id);
+                id = m ? await retrainModel(m, body, rtMode) : null;
+              } else id = await startTraining(where, body);
               setBusy(false);
               if (id) mlTab.value = "jobs";
             }}
           >
-            <Rocket size={15} /> Start training
+            <Rocket size={15} /> {rt ? (rtMode === "replace" ? "Retrain (replace)" : "Retrain as new model") : "Start training"}
           </button>
           <small class="muted">Runs in the background. You can close this window.</small>
         </div>

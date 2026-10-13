@@ -32,10 +32,36 @@ export interface FilterDef {
   options?: [string, string][];
   help?: string;
 }
+/** models 0.7: a per-target training parameter / a per-model run option (rendered generically) */
+export interface OptDef {
+  id: string;
+  name: string;
+  type: "int" | "float" | "number" | "bool" | "choice" | "multi" | "string" | "region" | "leads" | "range" | "day" | "states" | "bbox" | string;
+  default?: any;
+  min?: number;
+  max?: number;
+  step?: number;
+  unit?: string;
+  choices?: (string | number | [string | number, string] | { id: string | number; name: string })[];
+  help?: string;
+  group?: string;
+  /** run_params: target ids (or outputs "detections" | "grid" | "outlook") the option applies to; empty = all */
+  applies_to?: string[];
+}
+export type Task = "classification" | "regression";
+export type Output = "detections" | "grid" | "outlook";
 export interface TargetDef {
   id: string;
   name: string;
   candidate: string;
+  /** models 0.7 */
+  task?: Task;
+  output?: Output;
+  /** forecast lead hours the target supports (grid / outlook forecasts) */
+  leads?: number[];
+  /** e.g. outlook hazards, precip accumulation windows */
+  subtargets?: (string | { id: string; name: string; help?: string })[];
+  params?: OptDef[];
   /** server: an array of label-source ids */
   default_labels_source?: string[] | string;
   description?: string;
@@ -77,6 +103,10 @@ export interface Catalog {
   radar_products?: (string | { id: string; name: string })[];
   mrms?: (string | { id: string; name: string })[];
   model_fields?: (string | { id: string; name: string })[];
+  /** models 0.7: options for POST /api/ml/run per model */
+  run_params?: OptDef[];
+  /** models 0.7: every data source group the server can train on */
+  sources?: Partial<Record<"radar_products" | "mrms" | "satellite" | "model_vars" | "metar" | "other", (string | { id: string; name: string; unit?: string; group?: string; help?: string })[] | boolean>> & Record<string, any>;
   /** TrainSpec defaults (server) */
   defaults?: Partial<TrainSpec>;
   server?: { enabled?: boolean; max_jobs?: number; cpu_threads?: number; profile?: string; version?: string };
@@ -95,7 +125,11 @@ export interface TrainSpec {
   neg_ratio: number;
   null_days: number;
   match: { radius_km: number; before_min: number; after_min: number };
-  sources: { radar_products: string[]; mrms: string[]; metar: boolean; model: string[] };
+  sources: { radar_products: string[]; mrms: string[]; metar: boolean; model: string[]; satellite?: string[]; other?: string[] };
+  /** models 0.7: values of the target's own params (catalog targets[].params) */
+  target_params?: Record<string, any>;
+  subtarget?: string;
+  task?: Task;
   features?: string[];
   algo: string;
   params: Record<string, any>;
@@ -147,6 +181,19 @@ export interface Metrics {
   samples?: number;
   positives?: number;
   eval_kind?: string;
+  /** models 0.7: regression */
+  mae?: number;
+  rmse?: number;
+  bias?: number;
+  r2?: number;
+  skill?: number;
+}
+export interface HistoryEntry {
+  version: number;
+  at?: number;
+  kind: "train" | "retrain" | "continue" | string;
+  metrics_summary?: Record<string, number>;
+  samples?: number;
 }
 export interface Model {
   id: string;
@@ -168,6 +215,12 @@ export interface Model {
   levels?: { low: number; med: number; high: number };
   notes?: string;
   size?: number;
+  /** models 0.7 */
+  task?: Task;
+  output?: Output;
+  version?: number;
+  history?: HistoryEntry[];
+  imported?: boolean;
 }
 
 export interface RunState {
@@ -179,6 +232,42 @@ export interface RunState {
   interval_s?: number;
   last_cycle?: number;
   per_radar: Record<string, { t?: number | null; cells?: number; ms?: number; error?: string; detections?: number; key?: string; checked?: number }>;
+  /** models 0.7 */
+  models_state?: Record<string, { state?: string; last_run?: number; next_run?: number; error?: string; detections?: number; valid_times?: number[]; [k: string]: any }>;
+  layers?: PredLayer[];
+  concurrency?: number;
+  /** per-model options as the runner has them */
+  model_opts?: Record<string, ModelRunOpts>;
+}
+export interface PredLayer {
+  model_id: string;
+  layer_id: string;
+  kind: "grid" | "outlook" | string;
+  valid_times: number[];
+  name?: string;
+  field?: string;
+}
+/** per-model run options (POST /api/ml/run models[]) */
+export interface ModelRunOpts {
+  threshold?: number;
+  min_prob?: number;
+  max_prob?: number;
+  persistence?: number;
+  min_cell_dbz?: number;
+  min_area_km2?: number;
+  max_range_km?: number;
+  region?: { bbox?: [number, number, number, number]; states?: string[] };
+  leads?: number[];
+  valid_from?: number;
+  valid_to?: number;
+  day?: 1 | 2 | 3 | "4-7";
+  grid_res_deg?: number;
+  smoothing_km?: number;
+  ensemble?: boolean | string | number;
+  cadence_min?: number;
+  max_detections?: number;
+  notify?: boolean;
+  [k: string]: any;
 }
 
 export interface Detection {
@@ -200,4 +289,8 @@ export interface Detection {
   test?: boolean;
   /** cell outline when the server sends a polygon */
   poly?: number[][][];
+  /** models 0.7: "area" = a grid model's polygon (flood / tropical / instability areas) */
+  kind?: "cell" | "area";
+  valid_from?: number;
+  valid_to?: number;
 }

@@ -279,8 +279,13 @@ pub fn decode(bytes: &[u8], index: usize, opts: &DecodeOpts) -> Result<Grid> {
 /// holding a whole national grid when just a small window is needed (MRMS 3D cube).
 /// Missing / outside → NaN.
 pub fn decode_at(bytes: &[u8], opts: &DecodeOpts, pts: &[(f64, f64)]) -> Result<(Vec<f32>, i64)> {
+    decode_at_msg(bytes, 0, opts, pts)
+}
+
+/// [`decode_at`] for message `index` (0-based) of a multi-message file.
+pub fn decode_at_msg(bytes: &[u8], index: usize, opts: &DecodeOpts, pts: &[(f64, f64)]) -> Result<(Vec<f32>, i64)> {
     let g = grib::from_bytes(bytes).map_err(|e| anyhow!("grib: {e}"))?;
-    let (_, sub) = g.iter().next().ok_or_else(|| anyhow!("empty grib"))?;
+    let (_, sub) = g.iter().nth(index).ok_or_else(|| anyhow!("message {index} not found"))?;
     let def = G::try_from(sub.grid_def()).map_err(|e| anyhow!("grid def: {e}"))?;
     let (nx, ny, proj, scan) = geometry(&def)?;
     if scan & 0x30 != 0 {

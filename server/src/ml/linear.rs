@@ -1,6 +1,7 @@
 //! L2-regularised logistic regression on standardised features (missing → feature mean), fitted
-//! by Newton / IRLS. A fast, well-calibrated baseline. Also hosts the standardiser shared with
-//! the MLP.
+//! by Newton / IRLS, and ridge (linear) regression in closed form. Both can be warm-started from
+//! an existing model (continued training keeps its standardiser). Also hosts the standardiser
+//! shared with the MLP.
 
 use super::core::{logit, logloss, sigmoid, Data, Progress};
 use serde::{Deserialize, Serialize};
@@ -48,11 +49,13 @@ pub struct LogRegParams {
     pub max_iter: usize,
     /// weight multiplier for positives; 0 = automatic
     pub scale_pos_weight: f64,
+    /// continued training (ridge): pull towards the previous coefficients with this weight
+    pub prior: f64,
 }
 
 impl Default for LogRegParams {
     fn default() -> Self {
-        Self { l2: 1.0, max_iter: 50, scale_pos_weight: 0.0 }
+        Self { l2: 1.0, max_iter: 50, scale_pos_weight: 0.0, prior: 1.0 }
     }
 }
 
@@ -114,8 +117,14 @@ fn cholesky_solve(a: &[f64], b: &[f64], n: usize) -> Option<Vec<f64>> {
 }
 
 pub fn fit(train: &Data, valid: Option<&Data>, p: &LogRegParams, progress: Progress) -> LogReg {
-    let scaler = Standardizer::fit(train);
+    fit_init(train, valid, p, None, progress)
+}
+
+/// Logistic fit, optionally continuing from `init` (its standardiser and coefficients).
+pub fn fit_init(train: &Data, valid: Option<&Data>, p: &LogRegParams, init: Option<&LogReg>, progress: Progress) -> LogReg {
     let d = train.d;
+    let init = init.filter(|m| m.coef.len() == d);
+    let scaler = init.map(|m| m.scaler.clone()).unwrap_or_else(|| Standardizer::fit(train));
     let n = train.n;
     let spw = super::gbdt::auto_spw(train, p.scale_pos_weight);
     let w: Vec<f64> = (0..n).map(|i| train.w[i] as f64 * if train.y[i] > 0.5 { spw } else { 1.0 }).collect();
@@ -124,6 +133,10 @@ pub fn fit(train: &Data, valid: Option<&Data>, p: &LogRegParams, progress: Progr
     let pos: f64 = (0..n).filter(|&i| train.y[i] > 0.5).map(|i| w[i]).sum();
     let mut beta = vec![0.0; d + 1];
     beta[d] = if sw > 0.0 { logit(pos / sw) } else { 0.0 };
+    if let Some(m) = init {
+        beta[..d].copy_from_slice(&m.coef);
+        beta[d] = m.intercept;
+    }
     let m = d + 1;
     let mut best: (f64, Vec<f64>) = (f64::INFINITY, beta.clone());
     for it in 0..p.max_iter.max(1) {
@@ -182,6 +195,65 @@ pub fn fit(train: &Data, valid: Option<&Data>, p: &LogRegParams, progress: Progr
     LogReg { scaler, coef: beta[..d].to_vec(), intercept: beta[d] }
 }
 
+/// Ridge regression (weighted least squares on standardised features, unpenalised intercept).
+/// With `init`, keeps its standardiser and shrinks towards its coefficients (`p.prior`), so
+/// training further on new data updates rather than replaces the fit.
+pub fn fit_ridge(train: &Data, valid: Option<&Data>, p: &LogRegParams, init: Option<&LogReg>, progress: Progress) -> LogReg {
+    let d = train.d;
+    let init = init.filter(|m| m.coef.len() == d);
+    let scaler = init.map(|m| m.scaler.clone()).unwrap_or_else(|| Standardizer::fit(train));
+    let n = train.n;
+    let m = d + 1;
+    let mut a = vec![0.0; m * m];
+    let mut b = vec![0.0; m];
+    let mut sw = 0.0;
+    for i in 0..n {
+        let wi = train.w[i] as f64;
+        let mut z = scaler.row(train.row(i));
+        z.push(1.0);
+        let yi = train.y[i] as f64;
+        sw += wi;
+        for j in 0..m {
+            b[j] += wi * z[j] * yi;
+            for k in 0..=j {
+                a[j * m + k] += wi * z[j] * z[k];
+            }
+        }
+    }
+    let lam = p.l2.max(0.0) * sw / n.max(1) as f64;
+    let mu = if init.is_some() { p.prior.max(0.0) * sw / n.max(1) as f64 } else { 0.0 };
+    for j in 0..m {
+        for k in 0..j {
+            a[k * m + j] = a[j * m + k];
+        }
+        if j < d {
+            a[j * m + j] += lam + mu;
+            if let Some(im) = init {
+                b[j] += mu * im.coef[j];
+            }
+        }
+        a[j * m + j] += 1e-9;
+    }
+    let beta = cholesky_solve(&a, &b, m).unwrap_or_else(|| {
+        let mut v = vec![0.0; m];
+        v[d] = if sw > 0.0 { (0..n).map(|i| train.y[i] as f64 * train.w[i] as f64).sum::<f64>() / sw } else { 0.0 };
+        v
+    });
+    let model = LogReg { scaler, coef: beta[..d].to_vec(), intercept: beta[d] };
+    let mse = |data: &Data| -> f64 {
+        let (mut s, mut w) = (0.0, 0.0);
+        for i in 0..data.n {
+            s += (model.margin(data.row(i)) - data.y[i] as f64).powi(2) * data.w[i] as f64;
+            w += data.w[i] as f64;
+        }
+        if w > 0.0 { s / w } else { 0.0 }
+    };
+    let tl = mse(train);
+    let vl = valid.filter(|v| v.n > 0).map(mse).unwrap_or(tl);
+    progress(1, 1, tl, vl);
+    model
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +272,31 @@ mod tests {
         assert!(m.coef[4].abs() < 0.3);
         let (c, b) = m.contributions(te.row(0));
         assert!((c.iter().sum::<f64>() + b - m.margin(te.row(0))).abs() < 1e-9);
+        // warm start keeps the scaler and does not get worse on the training data
+        let short = fit(&tr, None, &LogRegParams { max_iter: 1, ..Default::default() }, &no_progress);
+        let more = fit_init(&tr, None, &LogRegParams::default(), Some(&short), &no_progress);
+        let ll = |m: &LogReg| crate::ml::core::logloss(&tr.y, &tr.w, &(0..tr.n).map(|i| m.margin(tr.row(i))).collect::<Vec<_>>());
+        assert!(ll(&more) < ll(&short));
+        assert_eq!(more.scaler.mean, short.scaler.mean);
+    }
+
+    #[test]
+    fn ridge_regression_and_continue() {
+        use crate::ml::core::synth_reg;
+        let tr = synth_reg(2000, 5, 0.3, 5);
+        let te = synth_reg(1000, 5, 0.3, 6);
+        let m = fit_ridge(&tr, None, &LogRegParams { l2: 0.01, ..Default::default() }, None, &no_progress);
+        let p: Vec<f64> = (0..te.n).map(|i| m.margin(te.row(i))).collect();
+        let r = crate::ml::metrics::evaluate_reg(&te.y, &p, 10.0, None);
+        assert!(r.r2 > 0.7, "{r:?}");
+        assert!((m.intercept - 10.0).abs() < 0.3, "{}", m.intercept);
+        // continue on shifted data moves towards it, but less than a fresh fit
+        let mut sh = synth_reg(500, 5, 0.3, 7);
+        for y in sh.y.iter_mut() {
+            *y += 5.0;
+        }
+        let c = fit_ridge(&sh, None, &LogRegParams { l2: 0.01, prior: 1.0, ..Default::default() }, Some(&m), &no_progress);
+        assert!(c.intercept > m.intercept + 3.0);
+        assert_eq!(c.scaler.mean, m.scaler.mean);
     }
 }

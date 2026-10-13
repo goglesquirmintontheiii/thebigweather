@@ -110,11 +110,14 @@ pub struct MlCfg {
     pub run_concurrency: usize,
     /// Disk cap for cached extracted samples (MB); 0 = auto (2048)
     pub cache_disk_mb: u64,
+    /// Max grid points of one prediction layer (grid models are coarsened to fit); 0 = auto
+    /// (full 400000, lite 150000)
+    pub pred_max_points: usize,
 }
 
 impl Default for MlCfg {
     fn default() -> Self {
-        Self { enabled: true, max_jobs: 1, download_concurrency: 0, run_concurrency: 0, cache_disk_mb: 0 }
+        Self { enabled: true, max_jobs: 1, download_concurrency: 0, run_concurrency: 0, cache_disk_mb: 0, pred_max_points: 0 }
     }
 }
 
@@ -326,6 +329,8 @@ download_concurrency = 0
 run_concurrency = 0
 # Disk cap for cached extracted samples in MB; 0 = auto (2048)
 cache_disk_mb = 0
+# Max grid points of one model prediction layer (coarsened to fit); 0 = auto (full 400000, lite 150000)
+pred_max_points = 0
 
 # Optional API keys. Missing keys just disable that source.
 [keys]

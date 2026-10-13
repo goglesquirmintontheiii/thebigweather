@@ -197,7 +197,17 @@ export interface Settings {
   placefiles: PlacefileCfg[];
   /* ---------- detection models ---------- */
   /** where training / the runner go by default ("local" = the server bundled with the app) */
-  ml?: { trainWhere?: "main" | "local"; runWhere?: "main" | "local" };
+  ml?: {
+    trainWhere?: "main" | "local";
+    runWhere?: "main" | "local";
+    /* models 0.7 */
+    /** per-model run options, keyed "ep|id" */
+    runOpts?: Record<string, Record<string, any>>;
+    /** runner-wide: concurrency (radars scored at once) */
+    concurrency?: number;
+    /** Run-tab detections list follows the map's probability gate */
+    listGate?: boolean;
+  };
   /* ---------- end detection models ---------- */
   /* ---------- end radar 0.6 ---------- */
 }
@@ -267,6 +277,10 @@ export interface RuleCond {
   field?: "temp_hi" | "temp_lo" | "gust";
   /** detection models: model id ("" = any model); value = min probability (%) */
   model?: string;
+  /** models 0.7: max probability (%) (with value = min: a window) */
+  maxp?: number;
+  /** models 0.7: also require the detection to pass the map's probability gate */
+  useGate?: boolean;
 }
 export interface RuleAction {
   sound?: "off" | "chime" | "beep" | "alarm" | "siren";

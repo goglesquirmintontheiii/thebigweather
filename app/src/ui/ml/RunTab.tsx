@@ -3,8 +3,14 @@
 
 import { signal } from "@preact/signals";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { Power, MousePointerClick, RefreshCw, Crosshair, AlertTriangle, FlaskConical } from "lucide-preact";
-import { models, loadModels, runState, loadRun, setRun, testRun, detections, startDetections, detStatus, mkey, mlTab, mlPrefs, canLocal, localIsMain } from "../../ml/client";
+import { Power, MousePointerClick, RefreshCw, Crosshair, AlertTriangle, FlaskConical, Settings2, Map as MapIcon, Layers } from "lucide-preact";
+import { models, loadModels, runState, loadRun, setRun, testRun, detections, startDetections, detStatus, mkey, mlTab, mlPrefs, canLocal, localIsMain, ensurePredDef, refreshGridCatalog, mlOpen } from "../../ml/client";
+import { RunOptionsPanel, runItem, runOptsOf } from "./RunOptions"; // models 0.7
+import { probGate, PG_DET } from "../../ml/probgate"; // models 0.7
+import { showOutlook } from "../../ml/outlook"; // models 0.7
+import { selectWeather } from "../../weather"; // models 0.7
+import { outputOf } from "../../ml/targets"; // models 0.7
+import type { Model, PredLayer } from "../../ml/types"; // models 0.7
 import { tmeta, LEVEL_COLOR } from "../../ml/targets";
 import { pickRadars, usSites, pickMode } from "../../ml/pick";
 import { settings, update } from "../../store";
@@ -44,6 +50,8 @@ export function RunTab() {
   const [interval, setIntv] = useState(60);
   const [test, setTest] = useState<{ busy?: boolean; text?: string }>({});
   const [busy, setBusy] = useState(false);
+  const [optFor, setOptFor] = useState<string>(""); // models 0.7: model whose options are open
+  const [conc, setConc] = useState<number>(mlPrefs().concurrency ?? 4);
   useEffect(() => {
     loadModels();
     loadRun();
@@ -58,6 +66,12 @@ export function RunTab() {
     setStates(r.states);
     setPicked(r.picked);
     setIntv(st?.interval_s ?? 60);
+    if (st?.concurrency) setConc(st.concurrency);
+    // models 0.7: adopt the runner's per-model options when this app has none saved (new session / other machine)
+    const mo = st?.model_opts ?? {};
+    const saved = settings.peek().ml?.runOpts ?? {};
+    const adopt = Object.entries(mo).filter(([id, o]) => o && Object.keys(o).length && !saved[`${where}|${id}`]);
+    if (adopt.length) update((s) => (s.ml = { ...(s.ml ?? {}), runOpts: { ...(s.ml?.runOpts ?? {}), ...Object.fromEntries(adopt.map(([id, o]) => [`${where}|${id}`, o])) } }));
     if (preset.value) {
       setSel(preset.value.filter((k) => k.startsWith(`${where}|`)).map((k) => k.split("|")[1]));
       preset.value = null;
@@ -82,21 +96,38 @@ export function RunTab() {
   })();
   const apply = async (enabled: boolean) => {
     setBusy(true);
-    const ok = await setRun(where, { models: sel, radars: radars(), enabled, interval_s: interval });
+    update((s) => (s.ml = { ...(s.ml ?? {}), concurrency: conc }));
+    const items = sel.map((id) => {
+      const m = mine.find((x) => x.id === id);
+      return m ? runItem(m) : id;
+    });
+    const ok = await setRun(where, { models: items, radars: radars(), enabled, interval_s: interval, concurrency: conc });
     setBusy(false);
     if (ok && enabled) enableDetectionLayer();
   };
   const cellModels = sel.filter((id) => mine.find((m) => m.id === id)?.candidate !== "grid_point");
   const site = settings.value.radar.site;
+  // models 0.7: test runs every selected model once (cell models on the current radar; grid / outlook
+  // models over their region and valid period) with the per-model options
+  const testItems = sel.map((id) => {
+    const m = mine.find((x) => x.id === id);
+    return m ? runItem(m) : id;
+  });
   const runTest = async () => {
-    setTest({ busy: true, text: `Scoring the newest ${site} volume…` });
-    const r = await testRun(where, site, cellModels);
+    setTest({ busy: true, text: cellModels.length ? `Scoring the newest ${site} volume…` : "Running the selected models once…" });
+    const r = await testRun(where, site, testItems);
+    loadRun();
     if (r) enableDetectionLayer();
     setTest({ text: !r ? "" : r.error ? `${site}: ${r.error}` : `${site}: ${r.cells ?? "?"} cells, ${r.n} detection${r.n === 1 ? "" : "s"}${r.ms != null ? ` · ${r.ms} ms` : ""}${r.n ? " · shown on the map" : ""}` });
   };
   const per = Object.entries(st?.per_radar ?? {}).sort((a, b) => +!!b[1].error - +!!a[1].error || (b[1].detections ?? 0) - (a[1].detections ?? 0) || a[0].localeCompare(b[0]));
   const c = mapRef.value?.getCenter();
-  const dets = detections.value.slice(0, 200);
+  // models 0.7: optionally follow the map's probability gate
+  const lg = !!settings.value.ml?.listGate;
+  const pg = probGate(PG_DET);
+  const allDets = detections.value;
+  const gatedDets = lg && pg.on ? allDets.filter((d) => d.prob >= pg.lo - 1e-9 && d.prob <= pg.hi + 1e-9) : allDets;
+  const dets = gatedDets.slice(0, 200);
   return (
     <div class="ml-run">
       <div class="ml-run-cfg">
@@ -120,17 +151,29 @@ export function RunTab() {
         <div class="ml-run-models">
           {mine.map((m) => {
             const on = sel.includes(m.id);
+            const nOpt = Object.keys(runOptsOf(m)).length;
+            const out = outputOf(m.target, m.output);
             return (
-              <button key={mkey(m)} class={`ml-rm ${on ? "on" : ""}`} onClick={() => setSel(on ? sel.filter((x) => x !== m.id) : [...sel, m.id])}>
-                <input type="checkbox" checked={on} tabIndex={-1} />
-                <TIcon t={m.target} size={20} />
-                <span>
-                  <b>{m.name}</b>
-                  <small>
-                    {tmeta(m.target).name} · CSI {m.metrics?.csi != null ? m.metrics.csi.toFixed(2) : "—"}
-                  </small>
-                </span>
-              </button>
+              <div key={mkey(m)} class={`ml-rm-wrap ${optFor === mkey(m) ? "open" : ""}`}>
+                <div class={`ml-rm ${on ? "on" : ""}`} role="button" onClick={() => setSel(on ? sel.filter((x) => x !== m.id) : [...sel, m.id])}>
+                  <input type="checkbox" checked={on} tabIndex={-1} />
+                  <TIcon t={m.target} size={20} />
+                  <span>
+                    <b>{m.name}</b>
+                    <small>
+                      {tmeta(m.target).name} · {m.task === "regression" ? `MAE ${m.metrics?.mae != null ? m.metrics.mae.toFixed(1) : "—"}` : `CSI ${m.metrics?.csi != null ? m.metrics.csi.toFixed(2) : "—"}`}
+                      {out !== "detections" ? ` · → ${out === "grid" ? "weather layer" : "outlook"}` : ""}
+                      {st?.models_state?.[m.id]?.state ? ` · ${st.models_state[m.id].state}` : ""}
+                    </small>
+                  </span>
+                  <button class={`icon-btn ml-rm-opt ${nOpt ? "set" : ""}`} title="Run options for this model" onClick={(e) => (e.stopPropagation(), setOptFor(optFor === mkey(m) ? "" : mkey(m)))}>
+                    <Settings2 size={14} />
+                    {nOpt > 0 && <small>{nOpt}</small>}
+                  </button>
+                </div>
+                <Produced m={m} layers={(st?.layers ?? []).filter((l) => l.model_id === m.id)} err={st?.models_state?.[m.id]?.error} />
+                {optFor === mkey(m) && <RunOptionsPanel m={m} />}
+              </div>
             );
           })}
           {!mine.length && <div class="muted small">No models on {where === "local" ? "this computer" : "the server"} yet — train or import one first.</div>}
@@ -187,7 +230,10 @@ export function RunTab() {
           </div>
         )}
         <div class="ml-run-row">
-          <Field label="Interval" help="How often each radar is scored. 'Every new volume' scores each volume as it arrives (most timely, most CPU).">
+          <Field label="Concurrency" help="Radars / grid tiles scored at the same time (more = faster cycles, more CPU)">
+            <input type="number" min={1} max={32} value={conc} onChange={(e) => setConc(Math.max(1, Math.min(32, Math.round(+(e.target as HTMLInputElement).value))))} style={{ width: "64px" }} />
+          </Field>
+          <Field label="Interval" help="How often each radar is scored. 'Every new volume' scores each volume as it arrives (most timely, most CPU). Grid / outlook models use their own 'Run every' option.">
             <select value={String(interval)} onChange={(e) => setIntv(+(e.target as HTMLSelectElement).value)}>
               {INTERVALS.map(([k, l]) => (
                 <option key={k} value={k}>
@@ -197,8 +243,8 @@ export function RunTab() {
             </select>
           </Field>
           <div class="ml-run-btns">
-            <button class="btn ghost" disabled={busy || test.busy || !cellModels.length || !site} title={cellModels.length ? `Run the selected radar-cell models once on the newest ${site} volume and show the result on the map` : "Select a radar-cell model"} onClick={runTest}>
-              <FlaskConical size={14} /> {test.busy ? "Testing…" : `Test on ${site || "radar"}`}
+            <button class="btn ghost" disabled={busy || test.busy || !sel.length || (!!cellModels.length && !site)} title={cellModels.length ? `Run the selected models once (radar-cell models on the newest ${site} volume) and show the result on the map` : "Run the selected models once and show the result"} onClick={runTest}>
+              <FlaskConical size={14} /> {test.busy ? "Testing…" : cellModels.length ? `Test on ${site || "radar"}` : "Run once"}
             </button>
             {st?.enabled && (
               <button class="btn ghost" disabled={busy} onClick={() => apply(false)}>
@@ -216,7 +262,10 @@ export function RunTab() {
       <div class="ml-run-out">
         <div class="ml-box ml-dets">
           <h4>
-            Detections <small class="muted">newest first · {detections.value.length}</small>
+            Detections <small class="muted">newest first · {gatedDets.length}{gatedDets.length !== allDets.length ? ` of ${allDets.length}` : ""}</small>
+            <label class="ml-check ml-lg" title="Show only detections inside the probability gate on the map (legend bar)">
+              <input type="checkbox" checked={lg} onChange={(e) => update((s) => (s.ml = { ...(s.ml ?? {}), listGate: (e.target as HTMLInputElement).checked }))} /> match map gate{lg && pg.on ? ` (${Math.round(pg.lo * 100)}–${Math.round(pg.hi * 100)}%)` : ""}
+            </label>
             {detStatus.value.error && (
               <span class="ml-warn" title={detStatus.value.error}>
                 <AlertTriangle size={12} />
@@ -235,14 +284,14 @@ export function RunTab() {
                     <b>{tmeta(d.target).code}</b> {d.model_name}
                   </span>
                   <small>
-                    {d.site || "—"} · {fmtTime(d.t)} ({fmtAge(d.t)}){c ? ` · ${fmtDist(distance(c.lat, c.lng, d.lat, d.lon))} from centre` : ""}
+                    {d.kind === "area" ? `area${d.valid_from ? ` · valid ${fmtTime(d.valid_from)}${d.valid_to ? `–${fmtTime(d.valid_to)}` : ""}` : ""}` : d.site || "—"} · {fmtTime(d.t)} ({fmtAge(d.t)}){c ? ` · ${fmtDist(distance(c.lat, c.lng, d.lat, d.lon))} from centre` : ""}
                   </small>
                 </span>
                 {d.ep === "local" && !localIsMain.value && <EpBadge ep="local" />}
                 <Crosshair size={13} class="muted" />
               </button>
             ))}
-            {!dets.length && <div class="ml-empty small">No detections in the last hour.</div>}
+            {!dets.length && <div class="ml-empty small">{allDets.length ? "No detections inside the map's probability gate." : "No detections in the last hour."}</div>}
           </div>
         </div>
         <div class="ml-box ml-per">
@@ -291,6 +340,38 @@ export function RunTab() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ---------- models 0.7: layers a grid / outlook model produced ---------- */
+function Produced({ m, layers, err }: { m: Model; layers: PredLayer[]; err?: string }) {
+  const out = outputOf(m.target, m.output);
+  if (out === "detections" && !layers.length && !err) return null;
+  const open = async (l: PredLayer) => {
+    await refreshGridCatalog();
+    ensurePredDef(l, m);
+    selectWeather({ kind: "grid", id: l.layer_id });
+    mlOpen.value = false;
+  };
+  const span = (l: PredLayer) => (l.valid_times.length ? `${l.valid_times.length} time${l.valid_times.length > 1 ? "s" : ""} · ${fmtTime(Math.min(...l.valid_times), true)} → ${fmtTime(Math.max(...l.valid_times), true)}` : "no frames yet");
+  return (
+    <div class="ml-prod">
+      {layers
+        .filter((l) => l.kind !== "outlook")
+        .map((l) => (
+          <button key={l.layer_id} class="btn xs" title={`Show ${l.layer_id} as the main weather layer (${span(l)})`} onClick={() => open(l)}>
+            <Layers size={12} /> Open as weather layer{l.field || l.layer_id.split("/")[2] ? ` · ${l.name ?? l.field ?? l.layer_id.split("/")[2]}` : ""}
+            <small>{span(l)}</small>
+          </button>
+        ))}
+      {out === "outlook" && (
+        <button class="btn xs" title="Add the model's outlook to the map (Day 1 by default; change day / hazard on the map card)" onClick={() => (showOutlook(m, String(runOptsOf(m).day ?? "1")), (mlOpen.value = false))}>
+          <MapIcon size={12} /> Show outlook
+        </button>
+      )}
+      {out !== "detections" && !layers.some((l) => l.kind !== "outlook") && out !== "outlook" && <small class="muted">The forecast layer appears here after the first run.</small>}
+      {err && <small class="ml-prod-err">{err}</small>}
     </div>
   );
 }

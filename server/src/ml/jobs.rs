@@ -44,6 +44,15 @@ pub struct JobState {
     pub time_limit_min: Option<f64>,
     #[serde(default)]
     pub resumable: bool,
+    /// train | retrain | continue
+    #[serde(default)]
+    pub kind: String,
+    /// the model retrained / continued
+    #[serde(default)]
+    pub base_model: Option<String>,
+    /// replace | new (retrain / continue)
+    #[serde(default)]
+    pub mode: String,
 }
 
 /// Overall progress span of each phase.
@@ -213,6 +222,13 @@ impl Ctl {
         self.set_state(state);
     }
 
+    pub fn set_kind(&self, kind: &str, base: Option<String>, mode: &str) {
+        let mut s = self.st.lock();
+        s.kind = kind.into();
+        s.base_model = base;
+        s.mode = mode.into();
+    }
+
     pub fn snapshot(&self) -> JobState {
         self.st.lock().clone()
     }
@@ -237,6 +253,7 @@ impl Ctl {
             "progress": (s.progress * 1000.0).round() / 1000.0, "counts": s.counts, "eta_s": eta,
             "started": s.started, "finished": s.finished, "elapsed_s": elapsed.round(),
             "model_id": s.model_id, "error": s.error, "train": s.train, "time_limit_min": s.time_limit_min, "resumable": s.resumable,
+            "kind": if s.kind.is_empty() { "train" } else { s.kind.as_str() }, "base_model": s.base_model, "mode": s.mode,
         });
         if full {
             v["log"] = json!(s.log);
@@ -295,6 +312,9 @@ pub fn blank_state(id: &str, spec: Value, limit: Option<f64>) -> JobState {
         train: None,
         time_limit_min: limit,
         resumable: false,
+        kind: "train".into(),
+        base_model: None,
+        mode: String::new(),
     }
 }
 

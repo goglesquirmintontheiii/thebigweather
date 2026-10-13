@@ -4,7 +4,7 @@
 
 use super::cells::{self, VolCells};
 use super::core::{hash_str, Rng};
-use super::features::{day_of_year, solar_hour, FeatMap, Sources};
+use super::features::{FeatMap, Sources};
 use super::jobs::Ctl;
 use super::labels::{self, Event, EventIndex, Filters, MatchRule};
 use super::source::Fetch;
@@ -97,7 +97,8 @@ pub async fn load_events(fetch: &dyn Fetch, spec: &TrainSpec, years: (i32, i32),
                 let ph = if spec.filters.phenomena.is_empty() {
                     match spec.target.as_str() {
                         "hail" | "sighail" | "wind" => vec!["SV".to_string()],
-                        "flash_flood" => vec!["FF".to_string()],
+                        "flash_flood" | "flood_forecast" => vec!["FF".to_string()],
+                        "instability" | "storm_intensify" | "outlook" => vec!["SV".to_string(), "TO".to_string()],
                         _ => vec!["TO".to_string()],
                     }
                 } else {
@@ -108,6 +109,7 @@ pub async fn load_events(fetch: &dyn Fetch, spec: &TrainSpec, years: (i32, i32),
             }
             "hurdat_genesis" | "hurdat_first_fix" => fetch.storms().await.map(|s| labels::genesis(&s, src == "hurdat_first_fix", &spec.filters.basins)),
             "hms_fire" => Ok(vec![]), // sampled per day in the grid-point builder
+            x if labels::is_truth_source(x) => continue, // gridded truth, no events
             x => Err(anyhow!("unknown label source {x}")),
         };
         match r {
@@ -195,6 +197,12 @@ pub struct Built {
 
 /// Build the training set for a spec.
 pub async fn build(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, concurrency: usize) -> Result<Built> {
+    if spec.target == "storm_intensify" {
+        return build_intensify(fetch, spec, ctl, cache_root, concurrency).await;
+    }
+    if super::gridds::is_v2(&spec.target) {
+        return super::gridds::build(fetch, spec, ctl, cache_root, concurrency).await;
+    }
     if spec.candidate == "radar_cell" {
         build_radar(fetch, spec, ctl, cache_root, concurrency).await
     } else {
@@ -202,19 +210,28 @@ pub async fn build(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_roo
     }
 }
 
-async fn build_radar(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, concurrency: usize) -> Result<Built> {
+/// Radar volume runs to process for a spec (target events + storm null cases).
+struct Plan {
+    runs: Vec<Run>,
+    target: Vec<Event>,
+    ambiguous: Vec<Event>,
+    n_cases: usize,
+    n_nulls: usize,
+    total: usize,
+}
+
+async fn plan_runs(fetch: &Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, rng: &mut Rng, with_nulls: bool) -> Result<Plan> {
     let years = (spec.years[0], spec.years[1]);
     ctl.phase("collect events", 0.0);
     let all = load_events(fetch.as_ref(), spec, years, ctl).await?;
     let target = labels::filter(&all, &spec.filters, years);
     let ambiguous = labels::filter(&all, &relaxed(&spec.filters), years);
-    let mut rng = Rng::new(spec.seed);
     let mut cases: Vec<&Event> = target.iter().filter(|e| spec.region.contains(e.lat, e.lon, &e.st)).collect();
     rng.shuffle(&mut cases);
     cases.truncate(spec.max_events);
     ctl.log(format!("{} target events ({} in region); using {}", target.len(), target.iter().filter(|e| spec.region.contains(e.lat, e.lon, &e.st)).count(), cases.len()));
     ctl.counts(|c| c.events = cases.len());
-    if cases.is_empty() && spec.null_days == 0 {
+    if cases.is_empty() && (spec.null_days == 0 || !with_nulls) {
         bail!("no events match the spec (years {}–{}, region, filters)", years.0, years.1);
     }
     let sites = fetch.sites();
@@ -224,7 +241,7 @@ async fn build_radar(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_r
 
     // null cases: other severe reports with no target event nearby (storms, but no event)
     let mut nulls: Vec<Event> = vec![];
-    if spec.null_days > 0 {
+    if spec.null_days > 0 && with_nulls {
         let have: HashSet<&str> = spec.label_source.iter().map(|s| s.as_str()).collect();
         let mut proxies = vec![];
         for (src, kind) in [("spc_hail", "hail"), ("spc_wind", "wind"), ("spc_tornado", "tornado")] {
@@ -315,10 +332,16 @@ async fn build_radar(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_r
     if total == 0 {
         bail!("no radar volumes found for the selected events");
     }
+    let n_cases = cases.len();
+    Ok(Plan { runs, target, ambiguous, n_cases, n_nulls: nulls.len(), total })
+}
 
+async fn build_radar(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, concurrency: usize) -> Result<Built> {
+    let mut rng = Rng::new(spec.seed);
+    let Plan { runs, target, ambiguous, n_cases, n_nulls, total } = plan_runs(&fetch, spec, ctl, &mut rng, true).await?;
     // fetch + extract (cached) → trends → environment → labels, streamed per run
     ctl.phase("fetch & extract", 0.0);
-    let ids: Vec<String> = super::features::all_features("radar_cell", &spec.sources).into_iter().map(|f| f.id).collect();
+    let ids: Vec<String> = super::features::all_features_for(&spec.target, "radar_cell", &spec.sources).into_iter().map(|f| f.id).collect();
     let ctx = RunCtx {
         fetch: fetch.clone(),
         cache: CellCache::new(cache_root),
@@ -371,7 +394,7 @@ async fn build_radar(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_r
         neg = strong.into_iter().chain(rest).collect();
     }
     ctl.log(format!("{n_cells} cells: {} positive, {} negatives kept, {amb} ambiguous skipped", pos.len(), neg.len()));
-    let stats = serde_json::json!({"events": cases.len(), "null_cases": nulls.len(), "volumes": ld(&ctx.vols_ok), "volumes_planned": total, "volumes_failed": ld(&ctx.errs), "cells": n_cells, "positives": pos.len(), "negatives": neg.len(), "ambiguous": amb});
+    let stats = serde_json::json!({"events": n_cases, "null_cases": n_nulls, "volumes": ld(&ctx.vols_ok), "volumes_planned": total, "volumes_failed": ld(&ctx.errs), "cells": n_cells, "positives": pos.len(), "negatives": neg.len(), "ambiguous": amb});
     let mut samples = pos;
     samples.extend(neg);
     ctl.counts(|c| {
@@ -458,6 +481,52 @@ impl RunCtx {
         }
     }
 
+    async fn run_intensify(&self, run: Run, ctl: &Ctl, p: &IntensifyParams, reports: &labels::TimeIndex) -> RunOut {
+        let mut out = RunOut::default();
+        let mut vcs: Vec<VolCells> = vec![];
+        for (key, _) in &run.vols {
+            if ctl.stopping() {
+                break;
+            }
+            let res = self.cells(key).await;
+            let n = self.done.fetch_add(1, Ordering::Relaxed) + 1;
+            ctl.counts(|c| c.volumes_done = n);
+            ctl.set_progress(n as f64 / self.total.max(1) as f64);
+            match res {
+                Ok(v) => {
+                    self.vols_ok.fetch_add(1, Ordering::Relaxed);
+                    vcs.push(v);
+                }
+                Err(e) => {
+                    if self.errs.fetch_add(1, Ordering::Relaxed) < 20 {
+                        ctl.log(format!("skip {key}: {e:#}"));
+                    }
+                }
+            }
+        }
+        if vcs.len() < 2 {
+            return out;
+        }
+        let ids = track(&mut vcs);
+        let labs = intensify_labels(&vcs, &ids, p, Some(reports));
+        for (k, vc) in vcs.iter_mut().enumerate() {
+            if labs[k].iter().all(|l| l.is_none()) || !self.emitted.lock().insert(vc.key.clone()) {
+                out.amb += labs[k].iter().filter(|l| l.is_none()).count();
+                continue;
+            }
+            self.env(vc, ctl).await;
+            for (c, l) in vc.cells.iter().zip(&labs[k]) {
+                let Some(l) = l else {
+                    out.amb += 1;
+                    continue;
+                };
+                let s = Sample { features: c.feats.vector(&self.ids), label: *l, weight: 1.0, group: run.group.clone(), meta: SampleMeta { lat: c.lat, lon: c.lon, t: c.t, site: Some(run.site.clone()), cell_id: Some(c.id.clone()), event: None } };
+                if *l > 0.5 { out.pos.push(s) } else { out.neg.push(s) }
+            }
+        }
+        out
+    }
+
     async fn run(&self, run: Run, ctl: &Ctl) -> RunOut {
         let mut out = RunOut::default();
         let mut prev: Option<VolCells> = None;
@@ -501,6 +570,150 @@ impl RunCtx {
         }
         out
     }
+}
+
+/// Settings of the storm-intensification target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IntensifyParams {
+    pub lead_min: f64,
+    /// any | vil | ref | both
+    pub criteria: String,
+    pub dvil: f64,
+    pub dref: f64,
+    pub use_reports: bool,
+    pub report_radius_km: f64,
+}
+
+impl Default for IntensifyParams {
+    fn default() -> Self {
+        Self { lead_min: 30.0, criteria: "any".into(), dvil: 10.0, dref: 5.0, use_reports: true, report_radius_km: 15.0 }
+    }
+}
+
+/// Track ids through consecutive volumes (greedy matching by `apply_trends`, which also adds the
+/// trend / motion features). Returns the track id of every cell.
+pub fn track(vcs: &mut [VolCells]) -> Vec<Vec<usize>> {
+    let mut next = 0usize;
+    let mut ids: Vec<Vec<usize>> = vec![];
+    for k in 0..vcs.len() {
+        let m = if k > 0 {
+            let (a, b) = vcs.split_at_mut(k);
+            cells::apply_trends(&mut b[0], &a[k - 1])
+        } else {
+            vec![None; vcs[0].cells.len()]
+        };
+        let row: Vec<usize> = m
+            .iter()
+            .map(|x| match x {
+                Some(j) if k > 0 => ids[k - 1][*j],
+                _ => {
+                    next += 1;
+                    next - 1
+                }
+            })
+            .collect();
+        ids.push(row);
+    }
+    ids
+}
+
+/// Intensification labels for the cells of a tracked run: `Some(label)` when the future state is
+/// known (a volume close to t + lead exists in the run), else None.
+pub fn intensify_labels(vcs: &[VolCells], ids: &[Vec<usize>], p: &IntensifyParams, reports: Option<&labels::TimeIndex>) -> Vec<Vec<Option<f32>>> {
+    let lead = (p.lead_min * 60_000.0) as i64;
+    let tol = (lead as f64 * 0.3).max(180_000.0) as i64;
+    (0..vcs.len())
+        .map(|k| {
+            let tt = vcs[k].t + lead;
+            let fut = (k + 1..vcs.len()).filter(|&m| (vcs[m].t - tt).abs() <= tol).min_by_key(|&m| (vcs[m].t - tt).abs());
+            vcs[k]
+                .cells
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let rep = p.use_reports && reports.map(|r| r.find(c.lat, c.lon, c.t, c.t + lead, p.report_radius_km).is_some()).unwrap_or(false);
+                    let Some(m) = fut else { return if rep { Some(1.0) } else { None } };
+                    let later = vcs[m].cells.iter().zip(&ids[m]).find(|(_, id)| **id == ids[k][i]).map(|(c, _)| c);
+                    let grow = match later {
+                        Some(l) => {
+                            let dv = l.feats.get("vil_max") - c.feats.get("vil_max");
+                            let dr = l.feats.get("ref_max") - c.feats.get("ref_max");
+                            let v = dv.is_finite() && dv as f64 >= p.dvil;
+                            let r = dr.is_finite() && dr as f64 >= p.dref;
+                            match p.criteria.as_str() {
+                                "vil" => v,
+                                "ref" => r,
+                                "both" => v && r,
+                                _ => v || r,
+                            }
+                        }
+                        // the track ended (dissipated or merged)
+                        None => false,
+                    };
+                    Some(if grow || rep { 1.0 } else { 0.0 })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Storm-intensification samples: consecutive volumes around storm reports, cells tracked, each
+/// cell labelled by its own future state.
+async fn build_intensify(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, concurrency: usize) -> Result<Built> {
+    let p: IntensifyParams = serde_json::from_value(spec.target_params.clone()).unwrap_or_default();
+    let mut rng = Rng::new(spec.seed);
+    let Plan { runs, target, n_cases, total, .. } = plan_runs(&fetch, spec, ctl, &mut rng, false).await?;
+    ctl.phase("fetch & extract", 0.0);
+    let ids: Vec<String> = super::features::all_features_for(&spec.target, "radar_cell", &spec.sources).into_iter().map(|f| f.id).collect();
+    let ctx = RunCtx {
+        fetch: fetch.clone(),
+        cache: CellCache::new(cache_root),
+        params_key: serde_json::to_string(&spec.cell).unwrap_or_default(),
+        cell: spec.cell.clone(),
+        sources: spec.sources.clone(),
+        skey: spec.sources.key(),
+        ids: ids.clone(),
+        rule: spec.match_rule,
+        tidx: EventIndex::new(vec![]),
+        aidx: EventIndex::new(vec![]),
+        emitted: parking_lot::Mutex::new(HashSet::new()),
+        done: AtomicUsize::new(0),
+        errs: AtomicUsize::new(0),
+        hits: AtomicUsize::new(0),
+        env_errs: AtomicUsize::new(0),
+        vols_ok: AtomicUsize::new(0),
+        total,
+    };
+    let reports = labels::TimeIndex::new(target);
+    let rp = (&p, &reports);
+    let outs: Vec<RunOut> = futures::stream::iter(runs).map(|r| ctx.run_intensify(r, ctl, rp.0, rp.1)).buffer_unordered(concurrency.max(1)).collect().await;
+    if ctl.cancelled() {
+        bail!("cancelled");
+    }
+    let (mut pos, mut neg, mut unknown) = (vec![], vec![], 0usize);
+    for o in outs {
+        pos.extend(o.pos);
+        neg.extend(o.neg);
+        unknown += o.amb;
+    }
+    let ld = |a: &AtomicUsize| a.load(Ordering::Relaxed);
+    ctl.log(format!("extracted {} volumes ({} from cache, {} failed); {} cells intensify, {} do not, {} without a future volume", ld(&ctx.vols_ok), ld(&ctx.hits), ld(&ctx.errs), pos.len(), neg.len(), unknown));
+    ctl.phase("label", 0.0);
+    let want = ((pos.len() as f64 * spec.neg_ratio).ceil() as usize).max(100.min(neg.len()));
+    if neg.len() > want {
+        rng.shuffle(&mut neg);
+        neg.truncate(want);
+    }
+    let stats = serde_json::json!({"events": n_cases, "volumes": ld(&ctx.vols_ok), "volumes_planned": total, "volumes_failed": ld(&ctx.errs), "positives": pos.len(), "negatives": neg.len(), "unknown_future": unknown, "lead_min": p.lead_min});
+    let mut samples = pos;
+    samples.extend(neg);
+    let samples = super::gridds::cap_samples(samples, spec.max_samples, false, spec.seed);
+    ctl.counts(|c| {
+        c.samples = samples.len();
+        c.positives = samples.iter().filter(|s| s.label > 0.5).count();
+    });
+    Ok(Built { ids, samples, stats })
 }
 
 /// A candidate point for grid-point targets.
@@ -669,7 +882,7 @@ async fn build_grid(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_ro
         .buffer_unordered(concurrency.clamp(1, 3))
         .collect()
         .await;
-    let ids: Vec<String> = super::features::all_features("grid_point", &spec.sources).into_iter().map(|f| f.id).collect();
+    let ids: Vec<String> = super::features::all_features_for(&spec.target, "grid_point", &spec.sources).into_iter().map(|f| f.id).collect();
     let mut samples = vec![];
     let land_rule = if fire { Some(true) } else if tropical { Some(false) } else { None };
     let mut dropped = 0;
@@ -678,10 +891,7 @@ async fn build_grid(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_ro
         for (k, &i) in by_t[&t].iter().enumerate() {
             let p = &pts[i];
             let mut fm = env.get(k).cloned().unwrap_or_default();
-            fm.set("lat", p.lat as f32);
-            fm.set("lon", p.lon as f32);
-            fm.set("doy", day_of_year(p.t));
-            fm.set("solar_hour", solar_hour(p.t, p.lon));
+            super::features::set_context(&mut fm, p.lat, p.lon, p.t);
             // negatives on the wrong surface are trivially negative: drop them
             if p.label < 0.5 {
                 if let Some(want_land) = land_rule {

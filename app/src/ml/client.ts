@@ -5,8 +5,9 @@ import { signal, computed } from "@preact/signals";
 import { api, ApiError } from "../api";
 import { settings, activeServer, toast } from "../store";
 import { hasDesktop, localServer, BUILTIN_ID } from "../share/desktop";
-import type { Catalog, Detection, Ep, Job, Metrics, Model, RunState, TrainSpec } from "./types";
-import { levelOf, normTarget } from "./targets";
+import type { Catalog, Detection, Ep, Job, Metrics, Model, RunState, TrainSpec, HistoryEntry, ModelRunOpts, PredLayer, TargetDef } from "./types";
+import { levelOf, normTarget, outputOf, taskOf } from "./targets";
+import { gridLayers, type GridLayerDef } from "../weather"; // models 0.7
 
 // ---------- endpoints ----------
 /** base URL of the app's bundled server once it is known to be running ("" = not running) */
@@ -155,7 +156,7 @@ function normMetrics(raw: any): Metrics {
   const out: Metrics = { ...e };
   out.auc = e.auc ?? e.roc_auc ?? undefined;
   const nn = (v: any) => (v == null || !Number.isFinite(+v) ? undefined : +v);
-  for (const k of ["auc", "pr_auc", "pod", "far", "csi", "brier", "threshold", "best_csi_threshold"] as const) (out as any)[k] = nn((out as any)[k]);
+  for (const k of ["auc", "pr_auc", "pod", "far", "csi", "brier", "threshold", "best_csi_threshold", "mae", "rmse", "bias", "r2", "skill"] as const) (out as any)[k] = nn((out as any)[k]);
   out.samples = nn(r.dataset?.samples ?? e.samples ?? e.n);
   out.positives = nn(r.dataset?.positives ?? e.positives);
   if (Array.isArray(e.reliability)) out.reliability = e.reliability.map((b: any) => ({ p: num(b.p ?? b.mean_pred), obs: num(b.obs ?? b.obs_freq), n: num(b.n) }));
@@ -179,6 +180,11 @@ export function normModel(m: any, ep: Ep): Model {
     metrics,
     importance: Array.isArray(m.importance) ? m.importance : [],
     threshold: num(m.threshold, metrics.best_csi_threshold ?? metrics.threshold ?? 0.5),
+    // models 0.7
+    task: taskOf(m.target || m.spec?.target || "", m.task ?? m.spec?.task),
+    output: outputOf(m.target || m.spec?.target || "", m.output),
+    version: m.version != null ? num(m.version, 1) : Array.isArray(m.history) && m.history.length ? Math.max(...m.history.map((h: any) => num(h.version, 1))) : 1,
+    history: Array.isArray(m.history) ? m.history.map((h: any, i: number): HistoryEntry => ({ ...h, version: num(h.version, i + 1), at: tms(h.at), kind: h.kind || (i ? "retrain" : "train"), samples: h.samples != null ? num(h.samples) : undefined, metrics_summary: h.metrics_summary && typeof h.metrics_summary === "object" ? h.metrics_summary : undefined })) : [],
   };
 }
 export function normJob(j: any, ep: Ep): Job {
@@ -216,8 +222,13 @@ export function normDetection(f: any, ep: Ep): Detection | null {
   if (prob > 1) prob /= 100;
   const t = tms(p.t) ?? Date.now();
   const model_id = String(p.model_id ?? "");
+  const area = p.kind === "area"; // models 0.7: grid models' areas
+  const vf = tms(p.valid_from), vt = tms(p.valid_to);
   return {
-    key: `${ep}|${model_id}|${p.cell_id ?? `${p.site}|${c[0].toFixed(2)},${c[1].toFixed(2)}`}`,
+    kind: area ? "area" : "cell",
+    valid_from: vf,
+    valid_to: vt,
+    key: area ? `${ep}|${model_id}|area|${p.id ?? f?.id ?? `${c[0].toFixed(2)},${c[1].toFixed(2)}`}|${vf ?? ""}` : `${ep}|${model_id}|${p.cell_id ?? `${p.site}|${c[0].toFixed(2)},${c[1].toFixed(2)}`}`,
     ep,
     model_id,
     model_name: p.model_name || "Model",
@@ -292,7 +303,11 @@ export async function loadCatalog(force = false) {
         model_fields: c.model_fields ?? (c as any).model_vars,
         defaults: c.defaults,
         server: c.server,
+        // models 0.7
+        run_params: Array.isArray(c.run_params) ? c.run_params : undefined,
+        sources: c.sources && typeof c.sources === "object" ? c.sources : undefined,
       };
+      catalog.value.targets = catalog.value.targets.map((t: TargetDef) => ({ ...t, id: normTarget(t.id), task: taskOf(t.id, t.task), output: outputOf(t.id, t.output) }));
       catalogErr.value = "";
       return;
     } catch (e: any) {
@@ -528,7 +543,18 @@ export async function loadRun() {
     liveEps().map(async (ep) => {
       try {
         const r = await mlReq<any>(ep, "GET", "/api/ml/run");
-        out[ep] = { enabled: !!r?.enabled, models: (r?.models ?? []).map(String), radars: r?.radars ?? "all", sites: Array.isArray(r?.sites) ? r.sites : undefined, interval_s: r?.interval_s, last_cycle: tms(r?.last_cycle), per_radar: r?.per_radar ?? {} };
+        // models 0.7: models may be {id, …options}; layers produced by grid / outlook models
+        const mo: Record<string, ModelRunOpts> = {};
+        const ids = (Array.isArray(r?.models) ? r.models : []).map((x: any) => {
+          if (x && typeof x === "object") {
+            const { id, ...rest } = x;
+            mo[String(id)] = rest;
+            return String(id);
+          }
+          return String(x);
+        });
+        const layers: PredLayer[] = (Array.isArray(r?.layers) ? r.layers : []).filter((l: any) => l && (l.layer_id || l.id)).map((l: any) => ({ ...l, model_id: String(l.model_id ?? ""), layer_id: String(l.layer_id ?? l.id), kind: l.kind || "grid", valid_times: (Array.isArray(l.valid_times) ? l.valid_times : []).map((t: any) => tms(t)).filter((t: any) => t != null) }));
+        out[ep] = { enabled: !!r?.enabled, models: ids, radars: r?.radars ?? "all", sites: Array.isArray(r?.sites) ? r.sites : undefined, interval_s: r?.interval_s, last_cycle: tms(r?.last_cycle), per_radar: r?.per_radar ?? {}, models_state: r?.models_state && typeof r.models_state === "object" ? r.models_state : undefined, layers, concurrency: r?.concurrency, model_opts: mo };
       } catch {
         /* no runner */
       }
@@ -536,7 +562,7 @@ export async function loadRun() {
   );
   runState.value = out;
 }
-export async function setRun(ep: Ep, body: { models: string[]; radars: any; enabled: boolean; interval_s?: number }) {
+export async function setRun(ep: Ep, body: { models: (string | ({ id: string } & ModelRunOpts))[]; radars: any; enabled: boolean; interval_s?: number; concurrency?: number }) {
   try {
     if (ep === "local" && !(await ensureLocal())) return false;
     await mlReq(ep, "POST", "/api/ml/run", body);
@@ -550,10 +576,11 @@ export async function setRun(ep: Ep, body: { models: string[]; radars: any; enab
 }
 /** Score the newest volume of one radar once (POST /api/ml/run/test); detections are not stored on
  *  the server — they're merged into the map layer here. */
-export async function testRun(ep: Ep, site: string, ids: string[]): Promise<{ n: number; cells?: number; ms?: number; error?: string } | null> {
+export async function testRun(ep: Ep, site: string, ids: (string | ({ id: string } & ModelRunOpts))[], extra: { valid_time?: number; day?: any } = {}): Promise<{ n: number; cells?: number; ms?: number; error?: string } | null> {
   try {
     if (ep === "local" && !(await ensureLocal())) return null;
-    const r = await mlReq<any>(ep, "POST", "/api/ml/run/test", { models: ids, site });
+    const r = await mlReq<any>(ep, "POST", "/api/ml/run/test", { models: ids, site, ...extra });
+    if (Array.isArray(r?.layers) && r.layers.length) refreshGridCatalog(); // models 0.7: test produced prediction grids
     const list = detectionsFromFeatures(r?.features ?? [], ep);
     // shown regardless of the volume's age
     const now = Date.now();
@@ -593,11 +620,13 @@ function mergeDetections(list: Detection[]) {
     if (!o || o.t <= d.t) m.set(d.key, d);
   }
   const cut = Date.now() - detMaxAgeMin.value * 60_000;
-  detections.value = [...m.values()].filter((d) => d.t >= cut).sort((a, b) => b.t - a.t).slice(0, 3000);
+  detections.value = [...m.values()].filter((d) => detEnd(d) >= cut).sort((a, b) => b.t - a.t).slice(0, 3000);
 }
+/** models 0.7: an area stays as long as it's valid */
+export const detEnd = (d: Detection) => Math.max(d.t, d.valid_to ?? 0);
 function pruneDetections() {
   const cut = Date.now() - detMaxAgeMin.value * 60_000;
-  if (detections.value.some((d) => d.t < cut)) detections.value = detections.value.filter((d) => d.t >= cut);
+  if (detections.value.some((d) => detEnd(d) < cut)) detections.value = detections.value.filter((d) => detEnd(d) >= cut);
 }
 
 export async function pollDetections() {
@@ -669,4 +698,62 @@ api.on("ml_job", (m) => {
 // settings group (store.ts declares `ml?`)
 export function mlPrefs() {
   return { trainWhere: "main" as Ep, runWhere: "main" as Ep, ...(settings.value.ml ?? {}) };
+}
+
+/* ---------- models 0.7: retrain / train further ---------- */
+export type RetrainMode = "replace" | "new";
+async function modelJob(m: Model, what: "retrain" | "continue", body: any): Promise<string | null> {
+  try {
+    if (m.ep === "local" && !(await ensureLocal())) return null;
+    const r = await mlReq<{ job_id: string }>(m.ep, "POST", `/api/ml/models/${encodeURIComponent(m.id)}/${what}`, body);
+    const id = String(r?.job_id ?? (r as any)?.id ?? "");
+    toast(`${what === "retrain" ? "Retraining" : "Training further"}: “${m.name}” · see Jobs`);
+    await loadJobs();
+    return id;
+  } catch (e: any) {
+    const msg = String(e.message ?? e);
+    toast(what === "continue" && /feature|schema|retrain/i.test(msg) ? `Can't train further: ${msg} — use Retrain instead` : `Couldn't start: ${msg}`, "error", 9000);
+    return null;
+  }
+}
+/** retrain from scratch with (optionally edited) spec; mode "new" keeps the old model */
+export const retrainModel = (m: Model, spec: Partial<TrainSpec>, mode: RetrainMode) => modelJob(m, "retrain", { ...spec, mode });
+export interface ContinueOpts {
+  extra_events?: number;
+  years?: [number, number];
+  region?: { states?: string[]; bbox?: [number, number, number, number] };
+  n_trees?: number;
+  iterations?: number;
+  epochs?: number;
+  learning_rate?: number;
+  mode: RetrainMode;
+  name?: string;
+  [k: string]: any;
+}
+export const continueModel = (m: Model, o: ContinueOpts) => modelJob(m, "continue", o);
+
+/* ---------- models 0.7: prediction layers (mlpred/*) in the grid catalog ---------- */
+export async function refreshGridCatalog() {
+  if (!api.base) return;
+  try {
+    const c = await api.get("/api/grid/catalog");
+    if (Array.isArray(c?.layers)) gridLayers.value = c.layers;
+  } catch {
+    /* older server */
+  }
+}
+export const predLayers = computed(() => gridLayers.value.filter((d) => (d.source as string) === "mlpred" || d.id.startsWith("mlpred/")));
+/** model id of a prediction layer id "mlpred/<model_id>[/<field>]" */
+export const predModelId = (layerId: string) => layerId.split("/")[1] ?? "";
+export function predModelName(layerId: string): string {
+  const id = predModelId(layerId);
+  return models.value.find((m) => m.id === id)?.name ?? gridLayers.value.find((d) => d.id === layerId)?.group?.replace(/^My models · /, "") ?? id;
+}
+/** make sure the grid catalog knows a layer the runner reports (so the legend has units/cmap) */
+export function ensurePredDef(l: PredLayer, m?: Model) {
+  if (gridLayers.value.some((d) => d.id === l.layer_id)) return;
+  const t = normTarget(m?.target ?? "");
+  const [units, cmap] = t === "temp_forecast" ? ["°C", "TEMP"] : t === "precip_forecast" ? ["mm", "PRECIPMM"] : ["%", "PROB"];
+  const def: GridLayerDef = { id: l.layer_id, group: "My models", name: l.name ?? m?.name ?? l.layer_id, units, cmap, source: "mlpred" as any, model: l.model_id, step_min: 60 };
+  gridLayers.value = [...gridLayers.value, def];
 }

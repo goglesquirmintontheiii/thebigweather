@@ -1,13 +1,17 @@
 // Detection models → Models: list, search/filter, detail (metrics, charts, importance, spec), manage.
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { Search, Upload, Download, Copy, Trash2, Pencil, Check, X, RefreshCw, Play, Server, Laptop, Tag } from "lucide-preact";
+import { Search, Upload, Download, Copy, Trash2, Pencil, Check, X, RefreshCw, Play, Server, Laptop, Tag, RotateCcw, FastForward } from "lucide-preact";
 import { models, modelsErr, modelsLoading, loadModels, loadModel, selModel, mkey, patchModel, deleteModel, exportModel, importModel, copyModel, trainDraft, mlTab, runningOn, catalog, canLocal, localIsMain } from "../../ml/client";
 import { tmeta, TARGETS } from "../../ml/targets";
 import type { Model, Ep } from "../../ml/types";
 import { TIcon, EpBadge, pct, f2, fmtDay, scoresAt, Help } from "./common";
 import { ThresholdChart, RocChart, ReliabilityChart } from "./charts";
 import { runPreset } from "./RunTab";
+import { openRetrain, continueFor, ModelHistory } from "./Retrain"; // models 0.7
+
+/** models 0.7: what running the model produces */
+const OUT_LABEL: Record<string, string> = { detections: "detections", grid: "weather layer", outlook: "outlook" };
 
 export function ModelsTab() {
   const [q, setQ] = useState("");
@@ -110,7 +114,7 @@ function ModelCard({ m, on }: { m: Model; on: boolean }) {
           <b>{m.name}</b>
           {n != null && (
             <span class="ml-live" title="Running now">
-              <i /> {n ? `${n} radar${n > 1 ? "s" : ""}` : "running"}
+              <i /> {n && (m.output ?? "detections") === "detections" ? `${n} radar${n > 1 ? "s" : ""}` : "running"}
             </span>
           )}
         </div>
@@ -118,6 +122,8 @@ function ModelCard({ m, on }: { m: Model; on: boolean }) {
           <span>{tmeta(m.target).name}</span>
           <span>·</span>
           <span>{fmtDay(m.created)}</span>
+          {(m.version ?? 1) > 1 && <span class="ml-ver">v{m.version}</span>}
+          {m.output && m.output !== "detections" && <span class="ml-out">→ {OUT_LABEL[m.output]}</span>}
           {m.ep === "local" && !localIsMain.value && <EpBadge ep="local" />}
         </div>
         {m.labels.length > 0 && (
@@ -131,16 +137,29 @@ function ModelCard({ m, on }: { m: Model; on: boolean }) {
           </div>
         )}
       </div>
-      <div class="ml-card-k">
-        <span>
-          <small>AUC</small>
-          {f2(mt.auc)}
-        </span>
-        <span>
-          <small>CSI</small>
-          {f2(mt.csi)}
-        </span>
-      </div>
+      {m.task === "regression" ? (
+        <div class="ml-card-k">
+          <span>
+            <small>MAE</small>
+            {f2(mt.mae, 1)}
+          </span>
+          <span>
+            <small>Skill</small>
+            {f2(mt.skill)}
+          </span>
+        </div>
+      ) : (
+        <div class="ml-card-k">
+          <span>
+            <small>AUC</small>
+            {f2(mt.auc)}
+          </span>
+          <span>
+            <small>CSI</small>
+            {f2(mt.csi)}
+          </span>
+        </div>
+      )}
     </button>
   );
 }
@@ -243,10 +262,12 @@ function ModelDetail({ m }: { m: Model }) {
             <span>· {m.candidate === "grid_point" ? "grid points" : "radar cells"}</span>
             <span>· {catalog.value?.algos.find((a) => a.id === m.algo)?.name ?? m.algo ?? "model"}</span>
             <span>· trained {fmtDay(m.created)}</span>
+            <span>· v{m.version ?? 1}</span>
+            {m.output && m.output !== "detections" && <span class="ml-out">→ {OUT_LABEL[m.output]}</span>}
             <EpBadge ep={m.ep} />
             {n != null && (
               <span class="ml-live">
-                <i /> running on {n} radar{n === 1 ? "" : "s"}
+                <i /> {(m.output ?? "detections") === "detections" ? `running on ${n} radar${n === 1 ? "" : "s"}` : "running"}
               </span>
             )}
           </div>
@@ -255,6 +276,12 @@ function ModelDetail({ m }: { m: Model }) {
         <div class="ml-det-actions">
           <button class="btn sm" title="Run this model on radars" onClick={() => runPreset([mkey(m)])}>
             <Play size={13} /> Run
+          </button>
+          <button class="btn sm ghost" title="Retrain from scratch: opens the training form with this model's settings (replace it or save a new model)" onClick={() => openRetrain(m)}>
+            <RotateCcw size={13} /> Retrain…
+          </button>
+          <button class="btn sm ghost" title="Continue training with more events / rounds (works for imported models too)" onClick={() => (continueFor.value = m)}>
+            <FastForward size={13} /> Train further…
           </button>
           <button class="btn sm ghost" title="Download as a .tbwmodel file" onClick={() => exportModel(m)}>
             <Download size={13} /> Export
@@ -292,6 +319,16 @@ function ModelDetail({ m }: { m: Model }) {
         </div>
       </div>
 
+      {m.task === "regression" ? (
+        <div class="ml-metrics">
+          <Metric k="MAE" v={f2(mt.mae, 2)} help="Mean absolute error (forecast units)" hl />
+          <Metric k="RMSE" v={f2(mt.rmse, 2)} help="Root-mean-square error" hl />
+          <Metric k="Bias" v={f2(mt.bias, 2)} help="Mean error (forecast − observed); 0 = unbiased" />
+          <Metric k="R²" v={f2(mt.r2, 3)} help="Variance explained (1 = perfect)" />
+          <Metric k="Skill" v={f2(mt.skill, 3)} help="Skill score vs. the reference forecast (persistence / climatology): > 0 = better than the reference" hl />
+          <Metric k="Samples" v={mt.samples != null ? mt.samples.toLocaleString() : "—"} help="Training samples" />
+        </div>
+      ) : (
       <div class="ml-metrics">
         <Metric k="AUC" v={f2(mt.auc, 3)} help="Area under the ROC curve: 0.5 = coin flip, 1 = perfect ranking" />
         <Metric k="PR-AUC" v={f2(mt.pr_auc, 3)} help="Area under the precision–recall curve (more telling than AUC for rare events)" />
@@ -302,6 +339,9 @@ function ModelDetail({ m }: { m: Model }) {
         <Metric k={mt.positives != null ? `Samples · ${mt.positives.toLocaleString()} events` : "Samples"} v={mt.samples != null ? mt.samples.toLocaleString() : mt.confusion ? (mt.confusion.tp + mt.confusion.fp + mt.confusion.fn + mt.confusion.tn).toLocaleString() : "—"} help="Training samples (positive = event)" />
       </div>
 
+      )}
+
+      {m.task !== "regression" && (
       <div class="ml-thr">
         <span class="ml-flabel">
           Detection threshold <Help text="Probability at which a detection counts as a hit (shown as moderate). Lower = catch more events but more false alarms. POD/FAR/CSI above update live; saved automatically." />
@@ -320,11 +360,15 @@ function ModelDetail({ m }: { m: Model }) {
         )}
       </div>
 
+      )}
+
+      {m.task !== "regression" && (
       <div class="ml-charts">
         <ThresholdChart m={mt} thr={thr} onPick={setThreshold} />
         <RocChart m={mt} />
         <ReliabilityChart m={mt} />
       </div>
+      )}
 
       <div class="ml-row2">
         <div class="ml-box">
@@ -361,6 +405,12 @@ function ModelDetail({ m }: { m: Model }) {
               </table>
             </div>
           )}
+          <div class="ml-box">
+            <h4>
+              Versions <small class="muted">retrain / train further keep the history</small>
+            </h4>
+            <ModelHistory m={m} />
+          </div>
           <div class="ml-box">
             <h4>Training setup</h4>
             <SpecSummary m={m} />
@@ -452,6 +502,8 @@ function SpecSummary({ m }: { m: Model }) {
     ["MRMS", src.mrms?.length ? src.mrms.join(", ") : "—"],
     ["METARs", src.metar ? "yes" : "no"],
     ["Model fields", src.model?.length ? src.model.join(", ") : "—"],
+    ["Satellite", src.satellite?.length ? src.satellite.join(", ") : "—"], // models 0.7
+    ["Other sources", src.other?.length ? src.other.join(", ") : "—"],
     ["Features", s.features?.length ? `${s.features.length} selected` : m.feature_schema?.length ? `${m.feature_schema.length} (all)` : "all"],
     ["Algorithm", `${cat?.algos.find((a) => a.id === (s.algo ?? m.algo))?.name ?? s.algo ?? m.algo ?? "—"}${m.params || s.params ? ` (${Object.entries(m.params ?? s.params ?? {}).slice(0, 4).map(([k, v]) => `${k} ${v}`).join(", ")})` : ""}`],
     ["Validation", s.cv_folds >= 2 ? `${s.cv_folds}-fold CV` : "held-out days"],

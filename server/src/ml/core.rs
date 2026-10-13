@@ -122,6 +122,116 @@ pub fn logloss(y: &[f32], w: &[f32], margin: &[f64]) -> f64 {
     if sw > 0.0 { s / sw } else { 0.0 }
 }
 
+/// Training loss of a learner (classification = logistic; the others are regression).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Loss {
+    Logistic,
+    Squared,
+    /// Huber with threshold δ (in target units)
+    Huber(f64),
+    /// pinball loss for quantile α (0–1)
+    Quantile(f64),
+}
+
+impl Loss {
+    /// `name`: auto | logloss | squared | huber | quantile (auto = logloss for classification,
+    /// squared for regression).
+    pub fn parse(regression: bool, name: &str, delta: f64, alpha: f64) -> Loss {
+        if !regression {
+            return Loss::Logistic;
+        }
+        match name {
+            "huber" => Loss::Huber(if delta > 0.0 { delta } else { 1.0 }),
+            "quantile" => Loss::Quantile(alpha.clamp(0.01, 0.99)),
+            _ => Loss::Squared,
+        }
+    }
+    pub fn is_regression(&self) -> bool {
+        !matches!(self, Loss::Logistic)
+    }
+    pub fn name(&self) -> String {
+        match self {
+            Loss::Logistic => "logloss".into(),
+            Loss::Squared => "squared".into(),
+            Loss::Huber(d) => format!("huber:{d}"),
+            Loss::Quantile(a) => format!("quantile:{a}"),
+        }
+    }
+    /// Gradient and hessian of the loss at prediction `m` (margin) for label `y`.
+    #[inline]
+    pub fn grad_hess(&self, m: f64, y: f64) -> (f64, f64) {
+        match *self {
+            Loss::Logistic => {
+                let p = sigmoid(m);
+                (p - y, (p * (1.0 - p)).max(1e-6))
+            }
+            Loss::Squared => (m - y, 1.0),
+            Loss::Huber(d) => ((m - y).clamp(-d, d), 1.0),
+            Loss::Quantile(a) => (if m >= y { 1.0 - a } else { -a }, 1.0),
+        }
+    }
+    #[inline]
+    pub fn value(&self, m: f64, y: f64) -> f64 {
+        match *self {
+            Loss::Logistic => {
+                let p = sigmoid(m).clamp(1e-12, 1.0 - 1e-12);
+                if y > 0.5 { -p.ln() } else { -(1.0 - p).ln() }
+            }
+            Loss::Squared => (m - y).powi(2),
+            Loss::Huber(d) => {
+                let r = (m - y).abs();
+                if r <= d { 0.5 * r * r } else { d * (r - 0.5 * d) }
+            }
+            Loss::Quantile(a) => {
+                let r = y - m;
+                if r >= 0.0 { a * r } else { (a - 1.0) * r }
+            }
+        }
+    }
+    /// Weighted mean loss.
+    pub fn mean(&self, y: &[f32], w: &[f32], m: &[f64]) -> f64 {
+        let (mut s, mut sw) = (0.0, 0.0);
+        for i in 0..y.len() {
+            s += self.value(m[i], y[i] as f64) * w[i] as f64;
+            sw += w[i] as f64;
+        }
+        if sw > 0.0 { s / sw } else { 0.0 }
+    }
+    /// Best constant prediction (the initial margin).
+    pub fn base(&self, y: &[f32], w: &[f64]) -> f64 {
+        let sw: f64 = w.iter().sum();
+        match *self {
+            Loss::Logistic => {
+                let pos: f64 = y.iter().zip(w).filter(|(y, _)| **y > 0.5).map(|(_, w)| *w).sum();
+                if sw > 0.0 { logit(pos / sw) } else { 0.0 }
+            }
+            Loss::Squared => {
+                if sw > 0.0 { y.iter().zip(w).map(|(y, w)| *y as f64 * w).sum::<f64>() / sw } else { 0.0 }
+            }
+            Loss::Huber(_) => weighted_quantile(y, w, 0.5),
+            Loss::Quantile(a) => weighted_quantile(y, w, a),
+        }
+    }
+}
+
+/// Weighted quantile of `y`.
+pub fn weighted_quantile(y: &[f32], w: &[f64], q: f64) -> f64 {
+    let mut v: Vec<(f32, f64)> = y.iter().copied().zip(w.iter().copied()).filter(|(y, _)| y.is_finite()).collect();
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let tot: f64 = v.iter().map(|x| x.1).sum();
+    let mut acc = 0.0;
+    for (y, w) in &v {
+        acc += w;
+        if acc >= q * tot {
+            return *y as f64;
+        }
+    }
+    v.last().unwrap().0 as f64
+}
+
 /// Progress of an iterative fit: (iteration, max iterations, train loss, validation loss).
 /// Returning `false` stops training (the best model so far is kept).
 pub type Progress<'a> = &'a (dyn Fn(usize, usize, f64, f64) -> bool + Sync);
@@ -149,6 +259,19 @@ pub fn synth(n: usize, d: usize, informative: usize, noise: f64, seed: u64) -> D
         z += r.normal() * noise - 1.0;
         let y = if r.f64() < sigmoid(z * 2.0) { 1.0 } else { 0.0 };
         data.push(&row, y, 1.0);
+    }
+    data
+}
+
+/// Synthetic regression data: y = 3·x0 − 2·x1 + x0·x2 + noise (first 3 features informative).
+#[cfg(test)]
+pub fn synth_reg(n: usize, d: usize, noise: f64, seed: u64) -> Data {
+    let mut r = Rng::new(seed);
+    let mut data = Data::new(d);
+    for _ in 0..n {
+        let row: Vec<f32> = (0..d).map(|_| r.normal() as f32).collect();
+        let y = 3.0 * row[0] as f64 - 2.0 * row[1] as f64 + row[0] as f64 * row[2] as f64 + 10.0 + r.normal() * noise;
+        data.push(&row, y as f32, 1.0);
     }
     data
 }

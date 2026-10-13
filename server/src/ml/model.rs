@@ -14,8 +14,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Model file format version (bump on incompatible changes).
-pub const FORMAT_VERSION: u32 = 1;
+/// Model file format version (bump on incompatible changes). v2: regression learners, quantile
+/// learners, history, `format` field (`version` became the training revision).
+pub const FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -141,6 +142,36 @@ pub struct Importance {
     pub gain: f64,
 }
 
+/// An extra quantile model (regression), e.g. q = 0.1 → P10.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuantLearner {
+    pub q: f64,
+    pub learner: Learner,
+}
+
+/// One training of a model (train / retrain / continue).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistEntry {
+    pub version: u32,
+    pub at: i64,
+    /// train | retrain | continue | import
+    pub kind: String,
+    pub metrics_summary: Value,
+    pub samples: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_model: Option<String>,
+}
+
+fn one() -> u32 {
+    1
+}
+
+fn classification() -> String {
+    "classification".into()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelRecord {
     pub id: String,
@@ -160,7 +191,22 @@ pub struct ModelRecord {
     pub metrics: Value,
     pub threshold: f64,
     pub levels: Levels,
+    /// training revision (bumped by retrain / continue in replace mode)
     pub version: u32,
+    /// file format (see [`FORMAT_VERSION`])
+    #[serde(default = "one")]
+    pub format: u32,
+    /// classification | regression
+    #[serde(default = "classification")]
+    pub task: String,
+    /// detections | grid | outlook ("" = the target's)
+    #[serde(default)]
+    pub output: String,
+    #[serde(default)]
+    pub history: Vec<HistEntry>,
+    /// regression: extra quantile learners (P10 / P90 …)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quantiles: Vec<QuantLearner>,
     #[serde(default)]
     pub notes: String,
     #[serde(default)]
@@ -188,34 +234,66 @@ impl ModelRecord {
     pub fn ids(&self) -> Vec<String> {
         self.feature_schema.ids()
     }
-    /// Calibrated probability and the top `k` feature contributions (by |margin change|).
+    pub fn is_regression(&self) -> bool {
+        self.task == "regression"
+    }
+    /// detections | grid | outlook
+    pub fn output(&self) -> &str {
+        if !self.output.is_empty() {
+            return &self.output;
+        }
+        super::spec::target(&self.target).map(|t| t.output).unwrap_or("detections")
+    }
+    /// Grid-layer id of a grid / outlook model's output.
+    pub fn layer_id(&self) -> Option<String> {
+        (self.output() != "detections").then(|| format!("mlpred/{}", self.id))
+    }
+    /// Calibrated probability (classification) or predicted value (regression) and the top `k`
+    /// feature contributions (by |margin change|).
     pub fn score(&self, fm: &FeatMap, k: usize) -> (f64, Vec<Contribution>) {
         let ids = self.ids();
         let x = fm.vector(&ids);
         let (c, bias) = self.learner.contributions(&x);
         let margin = bias + c.iter().sum::<f64>();
-        let p = self.calib.apply(margin);
+        let reg = self.is_regression();
+        let p = if reg { margin } else { self.calib.apply(margin) };
+        let a = if reg { 1.0 } else { self.calib.a };
         let mut top: Vec<Contribution> = c
             .iter()
             .enumerate()
-            .map(|(i, v)| Contribution { id: ids[i].clone(), value: x[i].is_finite().then(|| (x[i] as f64 * 100.0).round() / 100.0), contribution: (v * self.calib.a * 1000.0).round() / 1000.0 })
+            .map(|(i, v)| Contribution { id: ids[i].clone(), value: x[i].is_finite().then(|| (x[i] as f64 * 100.0).round() / 100.0), contribution: (v * a * 1000.0).round() / 1000.0 })
             .collect();
         top.sort_by(|a, b| b.contribution.abs().partial_cmp(&a.contribution.abs()).unwrap_or(std::cmp::Ordering::Equal));
         top.truncate(k);
         (p, top)
     }
+    /// Probability (classification) or value (regression) of a feature vector in schema order.
     pub fn prob(&self, x: &[f32]) -> f64 {
-        self.calib.apply(self.learner.margin(x))
+        let m = self.learner.margin(x);
+        if self.is_regression() { m } else { self.calib.apply(m) }
+    }
+    /// Short metrics for lists / history.
+    pub fn metrics_summary(&self) -> Value {
+        let m = self.metrics.get("eval").cloned().unwrap_or(json!({}));
+        if self.is_regression() {
+            json!({"mae": m["mae"], "rmse": m["rmse"], "bias": m["bias"], "r2": m["r2"], "skill": m["skill"], "skill_clim": m["skill_clim"], "skill_persistence": m["skill_persistence"], "n": m["n"]})
+        } else {
+            json!({"roc_auc": m["roc_auc"], "pr_auc": m["pr_auc"], "csi": m["csi"], "pod": m["pod"], "far": m["far"], "brier": m["brier"], "n": m["n"], "positives": m["positives"]})
+        }
     }
     /// List entry (no learner / spec / reliability).
     pub fn summary(&self) -> Value {
-        let m = self.metrics.get("eval").cloned().unwrap_or(json!({}));
         json!({
             "id": self.id, "name": self.name, "labels": self.labels, "target": self.target, "candidate": self.candidate,
+            "task": self.task, "output": self.output(), "layer_id": self.layer_id(),
             "created": self.created, "updated": self.updated, "algo": self.algo, "threshold": self.threshold, "levels": self.levels,
             "version": self.version, "notes": self.notes, "origin": self.origin, "n_features": self.feature_schema.features.len(),
-            "metrics": {"roc_auc": m["roc_auc"], "pr_auc": m["pr_auc"], "csi": m["csi"], "pod": m["pod"], "far": m["far"], "brier": m["brier"], "n": m["n"], "positives": m["positives"]},
+            "metrics": self.metrics_summary(),
             "samples": self.metrics.get("dataset").and_then(|d| d.get("samples")).cloned().unwrap_or(Value::Null),
+            "history_len": self.history.len(),
+            "history": self.history,
+            "quantiles": self.quantiles.iter().map(|q| q.q).collect::<Vec<_>>(),
+            "retrainable": self.spec.get("target").is_some(),
         })
     }
     /// Full JSON for `GET /api/ml/models/{id}` (learner omitted).
@@ -223,6 +301,10 @@ impl ModelRecord {
         let mut v = serde_json::to_value(self).unwrap_or_default();
         if let Some(o) = v.as_object_mut() {
             o.remove("learner");
+            o.remove("quantiles");
+            o.insert("quantile_levels".into(), json!(self.quantiles.iter().map(|q| q.q).collect::<Vec<_>>()));
+            o.insert("output".into(), json!(self.output()));
+            o.insert("layer_id".into(), json!(self.layer_id()));
             o.insert("learner_info".into(), match &self.learner {
                 Learner::Gbdt(g) => json!({"type": "gbdt", "trees": g.trees.len(), "nodes": g.trees.iter().map(|t| t.nodes.len()).sum::<usize>()}),
                 Learner::Logreg(l) => json!({"type": "logreg", "coef": self.ids().iter().zip(&l.coef).map(|(i, c)| json!({"id": i, "coef": c})).collect::<Vec<_>>(), "intercept": l.intercept}),
@@ -232,8 +314,11 @@ impl ModelRecord {
         v
     }
     pub fn validate(&self) -> Result<()> {
-        if self.version > FORMAT_VERSION {
-            bail!("model format v{} is newer than this server supports (v{FORMAT_VERSION}); update the server", self.version);
+        if self.format > FORMAT_VERSION {
+            bail!("model format v{} is newer than this server supports (v{FORMAT_VERSION}); update the server", self.format);
+        }
+        if !matches!(self.task.as_str(), "classification" | "regression") {
+            bail!("unknown task {}", self.task);
         }
         let cur = super::features::candidate_version(&self.candidate);
         if !matches!(self.candidate.as_str(), "radar_cell" | "grid_point") {
@@ -347,9 +432,13 @@ impl Store {
             m.notes = n.chars().take(10_000).collect();
         }
         if let Some(t) = body.get("threshold") {
-            let t = t.as_f64().filter(|t| (0.01..=0.99).contains(t)).ok_or_else(|| anyhow!("threshold must be 0.01-0.99"))?;
-            m.threshold = t;
-            m.levels = Levels::from_threshold(t);
+            if m.is_regression() {
+                m.threshold = t.as_f64().filter(|t| t.is_finite()).ok_or_else(|| anyhow!("threshold must be a number"))?;
+            } else {
+                let t = t.as_f64().filter(|t| (0.01..=0.99).contains(t)).ok_or_else(|| anyhow!("threshold must be 0.01-0.99"))?;
+                m.threshold = t;
+                m.levels = Levels::from_threshold(t);
+            }
         }
         if let Some(l) = body.get("levels") {
             let lv: Levels = serde_json::from_value(l.clone()).map_err(|e| anyhow!("levels: {e}"))?;

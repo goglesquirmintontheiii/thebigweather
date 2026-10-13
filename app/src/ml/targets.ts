@@ -20,7 +20,21 @@ export const TARGETS: Record<string, TargetMeta> = {
   tropical_possible: { code: "TC?", name: "Possible TC formation", color: "#fb7185" },
   wildfire: { code: "FIRE", name: "Wildfire", color: "#fb923c" },
   custom: { code: "DET", name: "Custom", color: "#a3e635" },
+  // models 0.7
+  storm_intensify: { code: "INT+", name: "Storm intensification", color: "#f59e0b" },
+  instability: { code: "INST", name: "Atmospheric instability", color: "#eab308" },
+  temp_forecast: { code: "TMP", name: "Temperature forecast", color: "#f87171" },
+  precip_forecast: { code: "QPF", name: "Precipitation forecast", color: "#22c55e" },
+  storm_forecast: { code: "STRM", name: "Storm forecast", color: "#a78bfa" },
+  tropical_forecast: { code: "TCF", name: "Tropical development", color: "#f472b6" },
+  outlook: { code: "OTLK", name: "Severe outlook", color: "#facc15" },
+  flood_forecast: { code: "FLD", name: "Flood forecast", color: "#0ea5e9" },
 };
+/** models 0.7: what running a model produces when the catalog/model doesn't say */
+const OUTPUT: Record<string, "detections" | "grid" | "outlook"> = { instability: "grid", temp_forecast: "grid", precip_forecast: "grid", storm_forecast: "grid", tropical_forecast: "grid", flood_forecast: "grid", outlook: "outlook" };
+export const outputOf = (t: string, given?: string): "detections" | "grid" | "outlook" => (given === "grid" || given === "outlook" || given === "detections" ? given : OUTPUT[normTarget(t)] ?? "detections");
+const REGRESSION = new Set(["temp_forecast", "precip_forecast"]);
+export const taskOf = (t: string, given?: string): "classification" | "regression" => (given === "regression" || given === "classification" ? given : REGRESSION.has(normTarget(t)) ? "regression" : "classification");
 /** older client ids → the server's target ids */
 const ALIAS: Record<string, string> = { flashflood: "flash_flood", tc_genesis: "tropical_genesis", tc_possible: "tropical_possible" };
 export const normTarget = (t: string) => ALIAS[t] ?? t;
@@ -226,6 +240,188 @@ const reticle: Draw = (c, s) => {
   c.stroke();
 };
 
+/* ---------- models 0.7 icons ---------- */
+function rounded(c: CanvasRenderingContext2D, s: number, fill: string) {
+  c.fillStyle = fill;
+  c.strokeStyle = "rgba(0,0,0,.8)";
+  c.lineWidth = 1.5;
+  c.beginPath();
+  c.roundRect(1.5, 1.5, s - 3, s - 3, 5);
+  c.fill();
+  c.stroke();
+}
+function cloudPath(c: CanvasRenderingContext2D, s: number, y: number, k = 1) {
+  c.beginPath();
+  c.arc(s * 0.36, s * y, s * 0.16 * k, Math.PI * 0.5, Math.PI * 1.5);
+  c.arc(s * 0.5, s * (y - 0.1 * k), s * 0.19 * k, Math.PI * 1.1, Math.PI * 1.95);
+  c.arc(s * 0.66, s * y, s * 0.15 * k, Math.PI * 1.5, Math.PI * 0.5);
+  c.closePath();
+}
+/** storm intensification: storm cell with a rising arrow */
+const intensify: Draw = (c, s) => {
+  disc(c, s, "#78350f");
+  c.fillStyle = "rgba(251,191,36,.35)";
+  c.strokeStyle = "#fbbf24";
+  c.lineWidth = 1.3;
+  c.beginPath();
+  c.ellipse(s / 2, s * 0.56, s * 0.3, s * 0.22, 0, 0, Math.PI * 2);
+  c.fill();
+  c.stroke();
+  c.strokeStyle = "#fff";
+  c.fillStyle = "#fff";
+  c.lineWidth = 2.2;
+  c.lineCap = "round";
+  c.beginPath();
+  c.moveTo(s / 2, s * 0.74);
+  c.lineTo(s / 2, s * 0.32);
+  c.stroke();
+  c.beginPath();
+  c.moveTo(s / 2, s * 0.16);
+  c.lineTo(s * 0.68, s * 0.38);
+  c.lineTo(s * 0.32, s * 0.38);
+  c.closePath();
+  c.fill();
+};
+/** instability: gauge with the needle in the red */
+const gauge: Draw = (c, s) => {
+  disc(c, s, "#1c1917");
+  const cx = s / 2, cy = s * 0.62, r = s * 0.32;
+  const seg = [["#22c55e", 1, 1.33], ["#eab308", 1.33, 1.66], ["#ef4444", 1.66, 2]] as const;
+  c.lineWidth = 3;
+  for (const [col, a, b] of seg) {
+    c.strokeStyle = col;
+    c.beginPath();
+    c.arc(cx, cy, r, Math.PI * a, Math.PI * b);
+    c.stroke();
+  }
+  const a = Math.PI * 1.82;
+  c.strokeStyle = "#fff";
+  c.lineWidth = 1.8;
+  c.lineCap = "round";
+  c.beginPath();
+  c.moveTo(cx, cy);
+  c.lineTo(cx + Math.cos(a) * r * 0.95, cy + Math.sin(a) * r * 0.95);
+  c.stroke();
+  c.fillStyle = "#fff";
+  c.beginPath();
+  c.arc(cx, cy, 2, 0, Math.PI * 2);
+  c.fill();
+};
+/** temperature: thermometer */
+const thermo: Draw = (c, s) => {
+  rounded(c, s, "#450a0a");
+  const x = s / 2;
+  c.fillStyle = "#fee2e2";
+  c.beginPath();
+  c.roundRect(x - s * 0.08, s * 0.14, s * 0.16, s * 0.5, s * 0.08);
+  c.fill();
+  c.beginPath();
+  c.arc(x, s * 0.7, s * 0.15, 0, Math.PI * 2);
+  c.fill();
+  c.fillStyle = "#ef4444";
+  c.fillRect(x - s * 0.035, s * 0.34, s * 0.07, s * 0.34);
+  c.beginPath();
+  c.arc(x, s * 0.7, s * 0.1, 0, Math.PI * 2);
+  c.fill();
+  c.strokeStyle = "#fecaca";
+  c.lineWidth = 1;
+  for (const y of [0.24, 0.34, 0.44]) {
+    c.beginPath();
+    c.moveTo(x + s * 0.12, s * y);
+    c.lineTo(x + s * 0.2, s * y);
+    c.stroke();
+  }
+};
+/** precipitation: raindrop */
+const drop: Draw = (c, s) => {
+  rounded(c, s, "#052e16");
+  const g = c.createLinearGradient(0, s * 0.15, 0, s * 0.85);
+  g.addColorStop(0, "#86efac");
+  g.addColorStop(1, "#16a34a");
+  c.fillStyle = g;
+  c.strokeStyle = "rgba(0,0,0,.6)";
+  c.lineWidth = 1;
+  c.beginPath();
+  c.moveTo(s / 2, s * 0.14);
+  c.bezierCurveTo(s * 0.62, s * 0.36, s * 0.76, s * 0.5, s * 0.76, s * 0.62);
+  c.arc(s / 2, s * 0.62, s * 0.26, 0, Math.PI);
+  c.bezierCurveTo(s * 0.24, s * 0.5, s * 0.38, s * 0.36, s / 2, s * 0.14);
+  c.fill();
+  c.stroke();
+  c.fillStyle = "rgba(255,255,255,.75)";
+  c.beginPath();
+  c.ellipse(s * 0.42, s * 0.62, s * 0.05, s * 0.1, -0.4, 0, Math.PI * 2);
+  c.fill();
+};
+/** storms: cloud with a bolt */
+const stormCloud: Draw = (c, s) => {
+  rounded(c, s, "#2e1065");
+  c.fillStyle = "#e9d5ff";
+  cloudPath(c, s, 0.46);
+  c.fill();
+  c.fillStyle = "#facc15";
+  c.strokeStyle = "rgba(0,0,0,.6)";
+  c.lineWidth = 0.8;
+  c.beginPath();
+  c.moveTo(s * 0.52, s * 0.5);
+  c.lineTo(s * 0.4, s * 0.7);
+  c.lineTo(s * 0.5, s * 0.7);
+  c.lineTo(s * 0.44, s * 0.88);
+  c.lineTo(s * 0.64, s * 0.62);
+  c.lineTo(s * 0.54, s * 0.62);
+  c.lineTo(s * 0.6, s * 0.5);
+  c.closePath();
+  c.fill();
+  c.stroke();
+};
+/** tropical forecast: cyclone + small clock */
+const cycloneClock: Draw = (c, s) => {
+  cyclone("#f9a8d4", false)(c, s);
+  const cx = s * 0.76, cy = s * 0.76, r = s * 0.2;
+  c.fillStyle = "#0f172a";
+  c.strokeStyle = "#fff";
+  c.lineWidth = 1.2;
+  c.beginPath();
+  c.arc(cx, cy, r, 0, Math.PI * 2);
+  c.fill();
+  c.stroke();
+  c.lineWidth = 1.2;
+  c.beginPath();
+  c.moveTo(cx, cy);
+  c.lineTo(cx, cy - r * 0.65);
+  c.moveTo(cx, cy);
+  c.lineTo(cx + r * 0.5, cy);
+  c.stroke();
+};
+/** outlook: map tile with nested outlook bands */
+const outlookMap: Draw = (c, s) => {
+  rounded(c, s, "#14532d");
+  const bands: [string, number][] = [["#c1e9c1", 0.36], ["#66a366", 0.29], ["#ffe066", 0.21], ["#ffa366", 0.14], ["#e06666", 0.08]];
+  for (const [col, r] of bands) {
+    c.fillStyle = col;
+    c.beginPath();
+    c.ellipse(s * 0.52, s * 0.54, s * r * 1.15, s * r * 0.85, -0.5, 0, Math.PI * 2);
+    c.fill();
+  }
+};
+/** flood forecast: staff gauge in rising water */
+const floodGauge: Draw = (c, s) => {
+  rounded(c, s, "#082f49");
+  c.fillStyle = "#e2e8f0";
+  c.fillRect(s * 0.42, s * 0.14, s * 0.16, s * 0.62);
+  c.fillStyle = "#ef4444";
+  for (const y of [0.18, 0.3, 0.42]) c.fillRect(s * 0.42, s * y, s * 0.09, s * 0.05);
+  c.fillStyle = "rgba(56,189,248,.9)";
+  c.beginPath();
+  c.moveTo(s * 0.1, s * 0.56);
+  for (let x = 0.1; x <= 0.9001; x += 0.05) c.lineTo(s * x, s * 0.56 + Math.sin((x - 0.1) * Math.PI * 4) * s * 0.03);
+  c.lineTo(s * 0.9, s * 0.88);
+  c.lineTo(s * 0.1, s * 0.88);
+  c.closePath();
+  c.fill();
+};
+/* ---------- end models 0.7 icons ---------- */
+
 const DRAW: Record<string, Draw> = {
   tornado,
   supercell,
@@ -238,6 +434,14 @@ const DRAW: Record<string, Draw> = {
   tropical_possible: cyclone("#fda4af", true),
   wildfire: flame,
   custom: reticle,
+  storm_intensify: intensify,
+  instability: gauge,
+  temp_forecast: thermo,
+  precip_forecast: drop,
+  storm_forecast: stormCloud,
+  tropical_forecast: cycloneClock,
+  outlook: outlookMap,
+  flood_forecast: floodGauge,
 };
 export const drawFor = (t: string): Draw => DRAW[normTarget(t)] ?? reticle;
 export const ICON_TARGETS = Object.keys(DRAW);

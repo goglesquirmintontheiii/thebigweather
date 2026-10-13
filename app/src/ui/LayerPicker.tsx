@@ -7,8 +7,11 @@ import { currentSite } from "../radar/controller";
 import { Layers, ChevronDown, Search, Radar, Satellite, Grid3x3, CloudSun, Thermometer, CalendarClock, FastForward, Globe, Waves } from "lucide-preact";
 import { intlSources, intlErrors, intlListLoading, loadIntlList, selectIntl, flyForGrid, intlRegion, INTL_REGIONS, INTL_NAMES, groupOf, allIdOf, groupName, errKey, curPrecip, setIntlPrecip, type IntlSource, type Precip } from "../intl/radar"; // intl & forecast tools
 import { noLevel3 } from "../intl/sites";
+import { BrainCircuit } from "lucide-preact"; // models 0.7
+import { predLayers, predModelId, runState, models as mlModels, mlOpen, mlTab, refreshGridCatalog, loadRun } from "../ml/client"; // models 0.7
+import { fmtTime } from "../util"; // models 0.7
 
-type Cat = "radar" | "world" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs" | "water" /* data 0.6 */;
+type Cat = "radar" | "world" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs" | "water" /* data 0.6 */ | "mine" /* models 0.7 */;
 const CATS: { id: Cat; name: string; icon: any }[] = [
   { id: "radar", name: "Radar", icon: Radar },
   { id: "world", name: "World", icon: Globe },
@@ -19,12 +22,14 @@ const CATS: { id: Cat; name: string; icon: any }[] = [
   { id: "ndfd", name: "Forecast", icon: CalendarClock },
   { id: "obs", name: "Surface", icon: Thermometer },
   { id: "water", name: "Water", icon: Waves }, // data 0.6: flooding + marine
+  { id: "mine", name: "My models", icon: BrainCircuit }, // models 0.7
 ];
 
 function catOf(d: GridLayerDef): Cat {
+  if ((d.source as string) === "mlpred" || d.id.startsWith("mlpred/")) return "mine"; // models 0.7
   if (isWaterDef(d)) return "water"; // data 0.6
   if (d.source === "nowcast") return "future"; // data 0.6
-  return ({ mrms: "mrms", goes: "sat", model: "models", ndfd: "ndfd", metar: "obs", future: "future", opera: "world", cwa: "world" } as const)[d.source] ?? (d.group === "International radar" ? "world" : "mrms");
+  return ({ mrms: "mrms", goes: "sat", model: "models", ndfd: "ndfd", metar: "obs", future: "future", opera: "world", cwa: "world" } as const)[d.source as "mrms"] ?? (d.group === "International radar" ? "world" : "mrms");
 }
 
 function currentCat(): Cat {
@@ -100,6 +105,7 @@ export function LayerPicker() {
                 {(cat === "mrms" || cat === "ndfd" || cat === "obs") && <GroupedList cat={cat} pick={pick} />}
                 {cat === "future" && <FutureList pick={pick} />}
                 {cat === "water" && <WaterList pick={pick} />}
+                {cat === "mine" && <MineList pick={pick} />}
               </div>
             </div>
           )}
@@ -183,6 +189,48 @@ function FutureList({ pick }: { pick: Pick }) {
     </>
   );
 }
+
+/* ---------- models 0.7: "My models" — prediction grids from my models (mlpred/*) ---------- */
+function MineList({ pick }: { pick: Pick }) {
+  useEffect(() => {
+    refreshGridCatalog();
+    loadRun();
+  }, []);
+  const defs = predLayers.value;
+  const times = new Map<string, number[]>();
+  for (const st of Object.values(runState.value)) for (const l of st?.layers ?? []) times.set(l.layer_id, l.valid_times);
+  const byModel = new Map<string, GridLayerDef[]>();
+  for (const d of defs) {
+    const k = predModelId(d.id);
+    if (!byModel.has(k)) byModel.set(k, []);
+    byModel.get(k)!.push(d);
+  }
+  const span = (id: string) => {
+    const t = times.get(id) ?? [];
+    if (!t.length) return "Prediction frames";
+    const a = Math.min(...t), b = Math.max(...t);
+    return a === b ? `Valid ${fmtTime(a, true)}` : `${t.length} valid times · ${fmtTime(a, true)} → ${fmtTime(b, true)}`;
+  };
+  return (
+    <>
+      {[...byModel.entries()].map(([mid, ds]) => (
+        <div key={mid}>
+          <label class="lbl">{mlModels.value.find((m) => m.id === mid)?.name ?? ds[0].group.replace(/^My models( · )?/, "") ?? mid}</label>
+          {ds.map((d) => (
+            <Item key={d.id} on={isGrid(d.id)} name={d.name} sub={span(d.id)} onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />
+          ))}
+        </div>
+      ))}
+      {!defs.length && (
+        <div class="muted small lp-note">
+          No predictions yet. Run a temperature, precipitation, storm, instability, tropical or flood model (
+          <a onClick={() => pick(() => ((mlTab.value = "run"), (mlOpen.value = true)))}>Detection models → Run</a>) and its forecast appears here as a weather layer.
+        </div>
+      )}
+    </>
+  );
+}
+/* ---------- end models 0.7 ---------- */
 
 /* ---------- data 0.6: flooding & marine ---------- */
 function WaterList({ pick }: { pick: Pick }) {

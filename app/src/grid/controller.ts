@@ -198,7 +198,7 @@ export async function loadGridFrames(keepIndex = false) {
   gridError.value = null;
   try {
     const d0 = gridDef(w.id);
-    const obs0 = d0?.source !== "model" && d0?.source !== "ndfd" && d0?.source !== "future";
+    const obs0 = d0?.source !== "model" && d0?.source !== "ndfd" && d0?.source !== "future" && d0?.source !== "mlpred" && !w.id.startsWith("mlpred/"); // models 0.7: predictions are forecasts
     const q = new URLSearchParams({ layer: w.id, n: String(obs0 ? framesToRequest(settings.value.grid.frames, cadence(w.id)) : settings.value.grid.frames) });
     if (w.run) q.set("run", w.run);
     if (w.storm) q.set("storm", w.storm);
@@ -226,12 +226,12 @@ export async function loadGridFrames(keepIndex = false) {
       gridStorms.value = res.storms ?? [];
       frameCount.value = fs.length;
       const def0 = gridDef(w.id);
-      const obs = def0?.source !== "model" && def0?.source !== "ndfd" && def0?.source !== "future";
+      const obs = obs0; // models 0.7 (same test as above)
       const wasLatest = prevLen === 0 || frameIndex.value >= prevLen - 1;
       if (!keepIndex || frameIndex.value >= fs.length || (obs && wasLatest)) {
         // models start at the first forecast hour; observations at the latest
         const def = gridDef(w.id);
-        frameIndex.value = def?.source === "model" || def?.source === "ndfd" || def?.source === "future" ? 0 : Math.max(0, fs.length - 1);
+        frameIndex.value = !obs0 /* models 0.7 */ || def?.source === "model" || def?.source === "ndfd" || def?.source === "future" ? 0 : Math.max(0, fs.length - 1);
       }
       if (!fs.length) gridError.value = obs && histRange.value ? "No archived data for this layer in that window" : "No data available for this layer right now";
     });
@@ -332,7 +332,7 @@ setInterval(() => {
   const w = settings.value.weather;
   if (w.kind !== "grid" || playing.value || historyEnd.value) return;
   const d = gridDef(w.id);
-  if (d && d.source !== "model" && d.source !== "ndfd" && d.source !== "future") loadGridFrames(true);
+  if (d && d.source !== "model" && d.source !== "ndfd" && d.source !== "future") loadGridFrames(true); // models 0.7: mlpred refreshes too (new runs)
 }, 90_000);
 
 // future layers move forward with the clock and pick up new model runs
