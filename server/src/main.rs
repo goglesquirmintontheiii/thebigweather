@@ -22,6 +22,12 @@ mod intlradar;
 mod radar;
 mod recorder;
 mod s3;
+mod notify;
+mod radio;
+mod srules;
+mod timelapse;
+mod update;
+mod same;
 mod shake;
 mod sites;
 mod stats;
@@ -59,6 +65,15 @@ struct Cli {
     /// Folder of overlay fixtures ("<overlay id>.json") served instead of live feeds (testing)
     #[arg(long)]
     overlay_fixtures: Option<PathBuf>,
+    /// Listen address, overriding server.bind in the config (e.g. 127.0.0.1:8788)
+    #[arg(long, global = true)]
+    bind: Option<String>,
+    /// If the listen port is taken, listen on a free port of the same address instead
+    #[arg(long, global = true)]
+    bind_fallback: bool,
+    /// Write the address actually listened on ("127.0.0.1:8788") to this file
+    #[arg(long, global = true)]
+    port_file: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
@@ -132,6 +147,10 @@ fn main() -> anyhow::Result<()> {
     serve(cli, cfg!(windows))
 }
 
+fn is_service(cli: &Cli) -> bool {
+    matches!(cli.cmd, Some(Cmd::Service))
+}
+
 fn cfg_path(cli: &Cli) -> &std::path::Path {
     cli.config.as_deref().unwrap_or(std::path::Path::new("data/config.toml"))
 }
@@ -153,7 +172,12 @@ fn serve(cli: Cli, in_process: bool) -> anyhow::Result<()> {
         let res = rt.block_on(run(&cli, pre));
         rt.shutdown_timeout(std::time::Duration::from_secs(5));
         match res {
-            Ok(true) if in_process && !platform::stop_requested() => {
+            // the binary was replaced (self-update): the service manager restarts the new one
+            Ok(true) if admin::exec_required() && is_service(&cli) => {
+                tracing::info!("exiting so the service manager starts the updated server");
+                std::process::exit(3);
+            }
+            Ok(true) if in_process && !platform::stop_requested() && !admin::exec_required() => {
                 tracing::info!("restarting in this process");
                 admin::reset_restart();
                 continue;
@@ -198,6 +222,9 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
         }
         Cmd::Run | Cmd::Camdb | Cmd::Service => {}
     }
+    if let Some(b) = &cli.bind {
+        cfg.server.bind = b.clone();
+    }
 
     // Resolve paths relative to the config file's directory's parent (the server root)
     let root = cfg_path(cli).parent().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_default();
@@ -237,6 +264,7 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
         .build()?;
 
     let hub = hub::Hub::new();
+    let hub_for_state = hub.clone();
     let health = Arc::new(health::Health::new(hub.clone()));
 
     // disk cache cap
@@ -343,6 +371,10 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
         shares: share::Shares::new(&data_dir),
         collab: collab::Collab::new(&data_dir),
         rules: rules::Rules::new(&data_dir),
+        radio: radio::Radio::new(&data_dir, hub_for_state.clone()),
+        notify: notify::Notify::new(&data_dir, http.clone()),
+        srules: srules::ServerRules::new(&data_dir),
+        timelapse: timelapse::Timelapse::new(&data_dir),
         overlays: {
             let o = overlays::Overlays::new(http.clone(), health.clone(), &data_dir, grids, profile_full);
             *o.fixtures.write() = cli.overlay_fixtures.clone();
@@ -354,6 +386,10 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
     ml.spawn();
 
     recorder::spawn(state.clone());
+    srules::spawn(state.clone());
+    timelapse::spawn(state.clone());
+    state.radio.sync();
+    let radio = state.radio.clone();
     collab::spawn_janitor(state.collab.clone());
     share::spawn_janitor(state.shares.clone());
 
@@ -381,8 +417,27 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
 
     let collab = state.collab.clone();
     let app = api::router(state);
-    let listener = tokio::net::TcpListener::bind(&bind).await?;
-    tracing::info!("listening on http://{bind}");
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && cli.bind_fallback => {
+            let host = bind.rsplit_once(':').map(|(h, _)| h).unwrap_or("127.0.0.1");
+            tracing::warn!("{bind} is in use (another TheBigWeather server?); using a free port instead");
+            tokio::net::TcpListener::bind(format!("{host}:0")).await?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            radio.stop_all();
+            anyhow::bail!("can't listen on {bind}: the port is already in use (another server running? change server.bind or use --bind)");
+        }
+        Err(e) => {
+            radio.stop_all();
+            return Err(anyhow::anyhow!("can't listen on {bind}: {e}"));
+        }
+    };
+    let bound = listener.local_addr().map(|a| a.to_string()).unwrap_or(bind.clone());
+    if let Some(pf) = &cli.port_file {
+        let _ = std::fs::write(pf, &bound);
+    }
+    tracing::info!("listening on http://{bound}");
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
     let server = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).with_graceful_shutdown(async move {
         shutdown().await;
@@ -398,6 +453,7 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
     }
     // rooms are saved every 30 s; don't lose the last changes on shutdown/restart
     collab.save();
+    radio.stop_all();
     Ok(admin::restart_requested())
 }
 
