@@ -26,6 +26,8 @@ pub fn layers() -> Vec<LayerDef> {
         source,
         model: None,
         step_min: step,
+        params: None,
+        contour: None,
     };
     vec![
         l("opera_dbzh", "Europe · OPERA Reflectivity", "DBZH", "dBZ", "REF", "opera", 5, Some(-30.0)),

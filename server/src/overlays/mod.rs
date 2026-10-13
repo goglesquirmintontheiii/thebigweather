@@ -12,6 +12,7 @@ pub mod camdb;
 pub mod climate;
 pub mod damage;
 pub mod extra;
+pub mod hazards;
 pub mod misc;
 pub mod more;
 pub mod noaa;
@@ -20,6 +21,8 @@ pub mod outages;
 pub mod placefile;
 pub mod pws;
 pub mod roads;
+pub mod satobs;
+pub mod seismic;
 pub mod ships;
 pub mod sounding;
 pub mod space;
@@ -74,6 +77,8 @@ pub struct Overlays {
     pub pws: pws::Pws,
     /// utility outage maps (`outages`)
     pub outages: outages::Outages,
+    /// Raspberry Shake trigger detection (`shakeevents`)
+    pub seismic: seismic::Seismic,
 }
 
 /// Overlays and how long a fetched copy stays fresh (seconds).
@@ -149,6 +154,15 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("pws", 30),
     ("swpc", 120),
     ("outages", 60),
+    ("goesfire", 300),
+    ("ot", 120),
+    ("ljump", 60),
+    ("shakemap", 900),
+    ("tsunami", 120),
+    ("shelters", 600),
+    ("hospitals", 86400),
+    ("centers", 3600),
+    ("shakeevents", 60),
 ];
 
 pub fn ttl(id: &str) -> Option<u64> {
@@ -211,6 +225,7 @@ impl Overlays {
             tornadoes: damage::TornadoDb::default(),
             pws: pws::Pws::default(),
             outages: outages::Outages::default(),
+            seismic: seismic::Seismic::default(),
         })
     }
 
@@ -427,6 +442,15 @@ impl Overlays {
             "pws" => pws::pws(self, p("bbox"), p("minutes")).await,
             "swpc" => space::swpc(self).await,
             "outages" => outages::outages(self, p("bbox"), p("level")).await,
+            "goesfire" => satobs::goes_fire(self, p("sat"), p("sector"), p("min_frp"), p("conf")).await,
+            "ot" => satobs::overshooting(self, p("sat"), p("sector"), p("max_bt"), p("delta"), p("cool")).await,
+            "ljump" => satobs::ljump(self, p("radius_km"), p("min_rate"), p("sigma")).await,
+            "shakemap" => hazards::shakemap(self, p("event"), p("kind"), p("n"), p("min_mag")).await,
+            "tsunami" => hazards::tsunami(self, p("hours")).await,
+            "shelters" => hazards::shelters(self, p("bbox")).await,
+            "hospitals" => hazards::hospitals(self, p("bbox")).await,
+            "centers" => hazards::centers(self, p("bbox")).await,
+            "shakeevents" => seismic::shake_events(self, p("stations"), p("min_ml"), p("min_stations"), p("hours"), p("ratio")).await,
             _ => bail!("unknown overlay {id}"),
         }
     }
@@ -493,6 +517,15 @@ fn label(id: &str) -> String {
         "pws" => "Personal weather stations (CWOP / APRS-IS)",
         "swpc" => "SWPC space weather",
         "outages" => "Power outages (utility outage maps)",
+        "goesfire" => "GOES fire detections (ABI FDC)",
+        "ot" => "GOES overshooting tops / cloud-top cooling",
+        "ljump" => "Lightning jumps (GLM + storm cells)",
+        "shakemap" => "USGS ShakeMap",
+        "tsunami" => "NOAA tsunami messages (NTWC / PTWC)",
+        "shelters" => "FEMA open shelters",
+        "hospitals" => "Hospitals (HIFLD)",
+        "centers" => "Cooling / warming centres (OSM)",
+        "shakeevents" => "Raspberry Shake detections",
         _ => id,
     };
     n.to_string()

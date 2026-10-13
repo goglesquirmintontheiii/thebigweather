@@ -149,6 +149,11 @@ async fn fetch(o: &Overlays, url: &str) -> Result<Bytes> {
     Ok(b)
 }
 
+/// [`fetch`] for sibling modules (`overlays::seismic`), with the same spacing.
+pub(crate) async fn fetch_pub(o: &Overlays, url: &str) -> Result<Bytes> {
+    fetch(o, url).await
+}
+
 /// Channels of one station: `[{loc, cha, sr, start, end, scale, units, sensor}]` (all epochs).
 pub async fn channels(o: &Overlays, net: &str, sta: &str) -> Result<Value> {
     let key = format!("{net}.{sta}");

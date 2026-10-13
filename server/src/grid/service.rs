@@ -74,7 +74,7 @@ impl SizedLru {
 
 pub struct GridService {
     http: reqwest::Client,
-    health: Arc<Health>,
+    pub(super) health: Arc<Health>,
     pub layers: Vec<LayerDef>,
     cache_dir: PathBuf,
     grids: Mutex<SizedLru>,
@@ -341,6 +341,11 @@ impl GridService {
         true
     }
 
+    /// Put a computed grid into the decoded-grid cache (ensemble siblings).
+    pub(super) fn cache_grid(&self, key: String, g: Arc<Grid>) {
+        self.grids.lock().put(key, g);
+    }
+
     pub fn layer(&self, id: &str) -> Result<LayerDef> {
         if let Some(l) = self.layers.iter().find(|l| l.id == id) {
             return Ok(l.clone());
@@ -361,6 +366,7 @@ impl GridService {
         serde_json::json!({
             "layers": layers,
             "models": sources::MODELS.iter().filter(|m| m.group != "Hidden").collect::<Vec<_>>(),
+            "composites": super::severe::composites(),
         })
     }
 
@@ -383,6 +389,8 @@ impl GridService {
             source: "mlpred",
             model: None,
             step_min,
+            params: None,
+            contour: None,
         };
         let mut frames: Vec<Arc<Grid>> = frames.into_iter().map(Arc::new).collect();
         frames.sort_by_key(|g| g.valid_ms);
@@ -421,7 +429,7 @@ impl GridService {
 
     // ---------- fetch helpers ----------
 
-    async fn list_cached(&self, bucket: &str, prefix: &str, ttl: u64) -> Result<Arc<Vec<s3::Object>>> {
+    pub(super) async fn list_cached(&self, bucket: &str, prefix: &str, ttl: u64) -> Result<Arc<Vec<s3::Object>>> {
         self.list_cached_at(&format!("https://{bucket}.s3.amazonaws.com"), prefix, ttl).await
     }
 
@@ -443,7 +451,7 @@ impl GridService {
         Ok(v)
     }
 
-    async fn text_cached(&self, url: &str, ttl: u64) -> Result<Arc<String>> {
+    pub(super) async fn text_cached(&self, url: &str, ttl: u64) -> Result<Arc<String>> {
         if let Some((t, v)) = self.texts.lock().get(url) {
             if t.elapsed() < Duration::from_secs(ttl) {
                 return Ok(v.clone());
@@ -463,7 +471,7 @@ impl GridService {
     }
 
     /// GET (optionally a byte range) with an on-disk cache for immutable objects.
-    async fn fetch(&self, url: &str, range: Option<(u64, Option<u64>)>, cache: bool) -> Result<Bytes> {
+    pub(super) async fn fetch(&self, url: &str, range: Option<(u64, Option<u64>)>, cache: bool) -> Result<Bytes> {
         let ck = match range {
             Some((a, b)) => format!("{url}#{a}-{}", b.map(|x| x.to_string()).unwrap_or_default()),
             None => url.to_string(),
@@ -499,6 +507,11 @@ impl GridService {
     // ---------- frames ----------
 
     pub async fn frames(&self, layer_id: &str, n: usize, run: Option<&str>, storm: Option<&str>, end: Option<i64>) -> Result<FramesResp> {
+        self.frames_thr(layer_id, n, run, storm, end, None).await
+    }
+
+    /// [`frames`] with a threshold for ensemble probability layers (`thr`, user units).
+    pub async fn frames_thr(&self, layer_id: &str, n: usize, run: Option<&str>, storm: Option<&str>, end: Option<i64>, thr: Option<f64>) -> Result<FramesResp> {
         if layer_id.starts_with("mlpred/") {
             return self.pred_frames(layer_id);
         }
@@ -520,6 +533,14 @@ impl GridService {
             "nowcast" => self.nowcast_frames(&l).await,
             "opera" => self.opera_frames(&l, n, end).await,
             "cwa" => self.cwa_frames(&l, n, end).await,
+            "ens" => self.ens_frames(&l, run, thr).await,
+            "svr" => self.svr_frames(&l, run).await,
+            "goesfog" => self.goes_frames(&l, n, end).await.map(|mut r| {
+                for f in r.frames.iter_mut() {
+                    f.key = f.key.replacen("goes|", "goesfog|", 1);
+                }
+                r
+            }),
             _ => bail!("unknown source"),
         };
         let name = match l.source {
@@ -531,6 +552,9 @@ impl GridService {
             "metar" => "METAR analysis",
             "future" => "Future radar / snow",
             "nowcast" => "Radar nowcast",
+            "ens" => "Ensembles (GEFS / ECMWF ENS)",
+            "svr" => "Severe parameters (HRRR / RAP)",
+            "goesfog" => "GOES fog / low cloud",
             _ => "GOES satellite",
         };
         match &res {
@@ -669,7 +693,7 @@ impl GridService {
     }
 
     /// Recent runs of a model restricted to `cycles`, newest first: (id, run time, forecast hours, storms).
-    async fn runs_for(&self, m: &sources::ModelDef, cycles: &[u32], max: usize) -> Result<Vec<(String, i64, Vec<u32>, Vec<String>)>> {
+    pub(super) async fn runs_for(&self, m: &sources::ModelDef, cycles: &[u32], max: usize) -> Result<Vec<(String, i64, Vec<u32>, Vec<String>)>> {
         let now = Utc::now();
         let mut out = vec![];
         let mut tried = 0;
@@ -701,7 +725,7 @@ impl GridService {
                 let mut fhs: Vec<u32> = html
                     .split("href=\"")
                     .filter_map(|s| s.split('"').next())
-                    .filter(|h| h.ends_with("-oper-fc.grib2"))
+                    .filter(|h| h.ends_with(if m.id == "ecmwfens" { "-enfo-ef.grib2" } else { "-oper-fc.grib2" }))
                     .filter_map(|h| h.rsplit('/').next()?.split('-').nth(1)?.trim_end_matches('h').parse().ok())
                     .collect();
                 fhs.sort_unstable();
@@ -1113,6 +1137,10 @@ impl GridService {
                 })
                 .await
             }
+            Some("ens") if parts.len() == 7 => self.ens_load(&parts).await,
+            Some("svr") if parts.len() == 5 => self.svr_load(parts[1], parts[2], parts[3].parse()?, parts[4]).await,
+            Some("svrf") if parts.len() == 5 => self.svrf_load(parts[1], parts[2], parts[3].parse()?, parts[4]).await,
+            Some("goesfog") if parts.len() == 4 => self.fog_load(parts[1], parts[2], parts[3]).await,
             Some("wcomp") if parts.len() == 6 => self.load_component(parts[1], parts[2], parts[3].parse()?, parts[4], parts[5]).await,
             Some("model") if parts.len() >= 5 => self.load_model(parts[1], parts[2], parts[3].parse()?, parts[4], parts.get(5).copied().unwrap_or("")).await,
             Some("ndfd") if parts.len() == 5 => {
@@ -1409,6 +1437,32 @@ impl GridService {
         let t = time.unwrap_or_else(|| Utc::now().timestamp_millis());
         let (run, _, fh) = nearest_step(&runs, t).ok_or_else(|| anyhow!("no {} forecast hours available", m.name))?;
         Ok((run, fh))
+    }
+
+    /// Freezing level (km MSL) at a point and time from HRRR, then RAP, then GFS
+    /// (`HGT:0C isotherm`, nearest forecast step). Returns (km, "model run Fhh").
+    pub async fn freezing_level(&self, lat: f64, lon: f64, time: Option<i64>) -> Result<(f32, String)> {
+        let t = time.unwrap_or_else(|| Utc::now().timestamp_millis());
+        let mut errs = vec![];
+        for id in ["hrrr", "rap", "gfs"] {
+            let Some(m) = sources::model_def(id) else { continue };
+            let r = async {
+                let runs = self.model_runs(m).await?;
+                let (run, _, fh) = nearest_step(&runs, t).ok_or_else(|| anyhow!("no steps"))?;
+                if (runs.iter().find(|x| x.0 == run).map(|x| x.1).unwrap_or(0) + fh as i64 * 3_600_000 - t).abs() > 6 * 3_600_000 {
+                    bail!("no forecast near that time");
+                }
+                let g = self.grid(&format!("model|{id}|{run}|{fh}|hgt0c|")).await?;
+                let v = g.sample(lat, lon).ok_or_else(|| anyhow!("outside the {} domain", m.name))?;
+                Ok::<_, anyhow::Error>((v / 1000.0, format!("{} {run} F{fh:03}", m.name)))
+            }
+            .await;
+            match r {
+                Ok(x) => return Ok(x),
+                Err(e) => errs.push(format!("{}: {e}", m.name)),
+            }
+        }
+        bail!("freezing level unavailable ({})", errs.join("; "))
     }
 
     /// U and V grids (as published; check `grid_rel`) for a model level nearest `time`.
@@ -1797,6 +1851,11 @@ impl Clone for MessageInfo {
     }
 }
 impl Copy for MessageInfo {}
+
+/// Run time (ms) of "YYYYMMDD" + cycle hour.
+pub fn run_time_ms_pub(d: &str, hh: u32) -> Result<i64> {
+    run_time_ms(d, hh)
+}
 
 fn run_time_ms(d: &str, hh: u32) -> Result<i64> {
     Utc.with_ymd_and_hms(d.get(..4).unwrap_or("").parse()?, d.get(4..6).unwrap_or("").parse()?, d.get(6..8).unwrap_or("").parse()?, hh, 0, 0).single().map(|t| t.timestamp_millis()).ok_or_else(|| anyhow!("bad run time"))

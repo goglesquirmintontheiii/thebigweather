@@ -3,7 +3,7 @@
 use super::decode::Transform;
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct LayerDef {
     /// stable id used by apps, e.g. "mrms/cref", "model/hrrr/t2m"
     pub id: String,
@@ -27,6 +27,12 @@ pub struct LayerDef {
     pub model: Option<String>,
     /// minutes between frames (for UI hints)
     pub step_min: u32,
+    /// request parameters the layer takes, e.g. `{"thr": {"units": "in", "presets": [..], "default": 1}}`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
+    /// contour hint for `/api/grid/contours`: `{"interval": x, "base": y}`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contour: Option<serde_json::Value>,
 }
 
 // ---------------- MRMS ----------------
@@ -99,6 +105,8 @@ pub fn mrms_layers() -> Vec<LayerDef> {
         min_valid: Some(0.0),
         source: "mrms",
         model: None,
+        params: None,
+        contour: None,
         step_min: 10,
     });
     MRMS.iter()
@@ -120,6 +128,8 @@ pub fn mrms_layers() -> Vec<LayerDef> {
             },
             source: "mrms",
             model: None,
+            params: None,
+            contour: None,
             step_min: 2,
         })
         .chain(flash)
@@ -174,6 +184,10 @@ pub const MODELS: &[ModelDef] = &[
     // Each cycle directory holds only that cycle's latest run; files are .bz2.
     // GFS-Wave (WAVEWATCH III) global 0.25°: hourly to 120 h, then 3-hourly
     ModelDef { id: "gfswave", name: "GFS-Wave", group: "Marine", bucket: "noaa-gfs-bdp-pds", file: "gfs.{ymd}/{hh}/wave/gridded/gfswave.t{hh}z.global.0p25.f{fh3}.grib2", run_prefix: "gfs.{ymd}/{hh}/wave/gridded/gfswave.t{hh}z.global.0p25.f", cycles: &[0, 6, 12, 18], index: "ncep", resolution: "0.25°" },
+    // Ensemble members (hidden; used by the ens/… probability layers). GEFS: "{mem}" = gec00 | gep01…gep30
+    // (runs listed from gep30 so every member is out); ECMWF open-data ENS: all 51 members per step file.
+    ModelDef { id: "gefsens", name: "GEFS", group: "Hidden", bucket: "noaa-gefs-pds", file: "gefs.{ymd}/{hh}/atmos/pgrb2ap5/{mem}.t{hh}z.pgrb2a.0p50.f{fh3}", run_prefix: "gefs.{ymd}/{hh}/atmos/pgrb2ap5/gep30.t{hh}z.pgrb2a.0p50.f", cycles: &[0, 6, 12, 18], index: "ncep", resolution: "0.5°" },
+    ModelDef { id: "ecmwfens", name: "ECMWF ENS", group: "Hidden", bucket: "https://data.ecmwf.int/forecasts", file: "{ymd}/{hh}z/ifs/0p25/enfo/{ymd}{hh}0000-{fh}h-enfo-ef.grib2", run_prefix: "{ymd}/{hh}z/ifs/0p25/enfo/", cycles: &[0, 12], index: "ecmwf", resolution: "0.25°" },
     ModelDef { id: "iconeu", name: "ICON-EU", group: "Regional", bucket: "https://opendata.dwd.de/weather/nwp/icon-eu/grib", file: "{hh}/{dir}/icon-eu_europe_regular-lat-lon_{kind}_{ymd}{hh}_{fh3}_{name}.grib2.bz2", run_prefix: "{hh}/t_2m/", cycles: &[0, 3, 6, 9, 12, 15, 18, 21], index: "dwd", resolution: "0.0625°" },
 ];
 
@@ -181,6 +195,7 @@ pub const MODELS: &[ModelDef] = &[
 pub fn model_step_min(id: &str) -> u32 {
     match id {
         "gefs" => 180,
+        "gefsens" | "ecmwfens" => 360,
         _ => 60,
     }
 }
@@ -247,6 +262,7 @@ pub const VARS: &[VarDef] = &[
     VarDef { id: "swell1", name: "Primary Swell Height", group: "Waves", units: "m", cmap: "WAVE", transform: Transform::None, ncep: Match::Ncep(&["SWELL:1 in sequence"]), ecmwf: None, accum: false },
     VarDef { id: "perpw", name: "Peak Wave Period", group: "Waves", units: "s", cmap: "WAVEPER", transform: Transform::None, ncep: Match::Ncep(&["PERPW:surface"]), ecmwf: None, accum: false },
     VarDef { id: "dirpw", name: "Peak Wave Direction", group: "Waves", units: "°", cmap: "WAVEDIR", transform: Transform::None, ncep: Match::Ncep(&["DIRPW:surface"]), ecmwf: None, accum: false },
+    VarDef { id: "hgt0c", name: "Freezing Level", group: "Upper air", units: "m", cmap: "HGTFZL", transform: Transform::None, ncep: Match::Ncep(&["HGT:0C isotherm"]), ecmwf: None, accum: false },
     // GEFS: precipitation comes in 6-hour (3-hour early on) buckets, not run totals
     VarDef { id: "apcp6", name: "6-hr Precipitation", group: "Precip", units: "mm", cmap: "PRECIPMM", transform: Transform::None, ncep: Match::Ncep(&["APCP:surface"]), ecmwf: None, accum: true },
 ];
@@ -314,11 +330,11 @@ pub fn wind_match(index: &str, level: &str) -> Option<(Match, Match)> {
 /// Variables offered for each model (others aren't in that model's files).
 pub fn model_vars(model: &str) -> Vec<&'static VarDef> {
     let ids: &[&str] = match model {
-        "hrrr" => &["refc", "refd1", "apcp", "snow", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "srh01", "uh25", "pwat", "t850", "hgt500", "wind250", "smoke", "colsmoke"],
+        "hrrr" => &["refc", "refd1", "apcp", "snow", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "srh01", "uh25", "pwat", "t850", "hgt500", "wind250", "smoke", "colsmoke", "hgt0c"],
         "rrfs" => &["refc", "refd1", "apcp", "snow", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "srh01", "uh25", "pwat", "t850", "hgt500", "wind250"],
         "nam3" => &["refc", "refd1", "apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "srh01", "uh25", "pwat", "t850", "hgt500", "wind250"],
-        "nam12" | "rap" => &["refc", "apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "pwat", "t850", "hgt500", "wind250"],
-        "gfs" => &["refc", "apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mucape", "srh03", "pwat", "t850", "hgt500", "wind250"],
+        "nam12" | "rap" => &["refc", "apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mlcape", "mucape", "srh03", "pwat", "t850", "hgt500", "wind250", "hgt0c"],
+        "gfs" => &["refc", "apcp", "t2m", "td2m", "rh2m", "wind10", "gust", "mslp", "vis", "tcc", "cape", "mucape", "srh03", "pwat", "t850", "hgt500", "wind250", "hgt0c"],
         "nbm" => &["apcp", "snow", "t2m", "td2m", "rh2m", "wind10", "gust", "vis", "tcc"],
         "ecmwf" => &["apcp", "t2m", "td2m", "wind10", "gust", "mslp", "tcc", "mucape", "pwat", "t850", "hgt500", "wind250"],
         "hafsa" | "hafsb" => &["refc", "apcp", "t2m", "wind10", "gust", "mslp", "pwat"],
@@ -464,6 +480,8 @@ pub fn ndfd_layers() -> Vec<LayerDef> {
             min_valid: None,
             source: "ndfd",
             model: None,
+            params: None,
+            contour: None,
             step_min: 180,
         })
         .collect()
@@ -484,6 +502,8 @@ pub fn metar_layers() -> Vec<LayerDef> {
         min_valid: None,
         source: "metar",
         model: None,
+        params: None,
+        contour: None,
         step_min: 10,
     };
     vec![
@@ -548,6 +568,8 @@ pub fn goes_layers() -> Vec<LayerDef> {
                 min_valid: None,
                 source: "goes",
                 model: None,
+                params: None,
+                contour: None,
                 step_min: if sector.starts_with("meso") { 1 } else if *sector == "full" { 10 } else { 5 },
             });
         }
@@ -565,6 +587,8 @@ pub fn goes_layers() -> Vec<LayerDef> {
                 min_valid: None,
                 source: "goes",
                 model: None,
+                params: None,
+                contour: None,
                 step_min: if sector.starts_with("meso") { 1 } else if *sector == "full" { 10 } else { 5 },
             });
         }
@@ -588,6 +612,8 @@ pub fn model_layers() -> Vec<LayerDef> {
                 min_valid: None,
                 source: "model",
                 model: Some(m.id.into()),
+                params: None,
+                contour: None,
                 step_min: model_step_min(m.id),
             });
         }
@@ -690,6 +716,8 @@ pub fn future_layers() -> Vec<LayerDef> {
                 min_valid: None,
                 source: "future",
                 model: None,
+                params: None,
+                contour: None,
                 step_min: f.chain[0].step_min,
             }
         })
@@ -741,6 +769,8 @@ pub fn nowcast_layers() -> Vec<LayerDef> {
             min_valid: None,
             source: "nowcast",
             model: None,
+            params: None,
+            contour: None,
             step_min: 10,
         })
         .collect()
@@ -755,6 +785,9 @@ pub fn all_layers() -> Vec<LayerDef> {
     v.extend(future_layers());
     v.extend(nowcast_layers());
     v.extend(super::intl::layers());
+    v.extend(super::satprod::fog_layers());
+    v.extend(super::ens::layers());
+    v.extend(super::severe::layers());
     v
 }
 

@@ -65,7 +65,13 @@ impl Overlays {
         use crate::caches::CacheInfo;
         let (tb, tn) = self.tornadoes.mem_bytes();
         let (pb, pn) = self.pws.mem_bytes();
-        vec![self.placefiles.stats(), CacheInfo::mem("tornado-db", "SPC tornado database", tb, tn, 0), CacheInfo::mem("pws-stations", "CWOP weather stations", pb, pn, 0)]
+        let (sb, sn) = self.seismic.mem_bytes();
+        vec![
+            self.placefiles.stats(),
+            CacheInfo::mem("tornado-db", "SPC tornado database", tb, tn, 0),
+            CacheInfo::mem("pws-stations", "CWOP weather stations", pb, pn, 0),
+            CacheInfo::mem("shake-triggers", "Raspberry Shake triggers (watched nodes)", sb, sn, 0),
+        ]
     }
     /// Clear one of the caches above (true if the id is one of them).
     pub fn clear_extra(&self, id: &str) -> bool {
@@ -73,6 +79,7 @@ impl Overlays {
             "placefiles" => self.placefiles.clear(),
             "tornado-db" => self.tornadoes.clear(),
             "pws-stations" => self.pws.stations.write().clear(),
+            "shake-triggers" => self.seismic.clear(),
             _ => return false,
         }
         true
@@ -341,6 +348,24 @@ impl Glm {
         let cutoff = chrono::Utc::now().timestamp_millis() - keep_ms;
         o.glm.files.write().retain(|f| f.0 > cutoff);
         Ok(())
+    }
+
+    /// Flashes newer than `cutoff_ms`: (file start ms, GLM satellite number, [lon, lat, energy fJ]).
+    pub fn flashes_since(&self, cutoff_ms: i64) -> Vec<(i64, u32, [f32; 3])> {
+        let files = self.files.read();
+        let mut out = vec![];
+        for (t, k, fl) in files.iter().filter(|f| f.0 >= cutoff_ms) {
+            let sat = if k.contains("_G18_") { 18 } else if k.contains("_G19_") { 19 } else if k.contains("_G16_") { 16 } else { 0 };
+            out.extend(fl.iter().map(|f| (*t, sat, *f)));
+        }
+        out
+    }
+
+    /// (oldest, newest) file start times held, or None while nothing is loaded.
+    pub fn span(&self) -> Option<(i64, i64)> {
+        let files = self.files.read();
+        let lo = files.iter().map(|f| f.0).min()?;
+        Some((lo, files.iter().map(|f| f.0).max()?))
     }
 
     pub fn geojson(&self, minutes: i64) -> Value {

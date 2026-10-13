@@ -42,7 +42,8 @@ pub struct VolMeta {
     pub end: i64,
     pub complete: bool,
     pub tilts: Vec<TiltMeta>,
-    /// volume-derived pseudo-moments for `/radar/sweep` (any tilt index): CREF, ET, VIL
+    /// volume-derived pseudo-moments for `/radar/sweep`: CREF, ET, VIL, ZDRCOL (any tilt index);
+    /// REFQC, BIO, DREF, DVEL (per tilt; DREF/DVEL need an earlier volume of the site)
     pub derived: Vec<String>,
     /// "ODIM_H5" for European volumes, the Archive II version string otherwise
     pub format: String,
@@ -72,7 +73,11 @@ pub fn vol_meta(key: &str, v: &Volume) -> VolMeta {
                 }
             })
             .collect(),
-        derived: super::derived::available(v),
+        derived: {
+            let mut d = super::derived::available(v);
+            d.extend(super::qc::available(v));
+            d
+        },
         format: if v.version == "ODIM_H5" { "ODIM_H5".into() } else { "L2".into() },
     }
 }
@@ -533,6 +538,90 @@ impl RadarService {
         let b = Bytes::from(bytes);
         self.encoded.lock().put(ck, b.clone(), b.len());
         Ok(b)
+    }
+
+    /// The volume before `key` (same site; aws / local keys), for DREF / DVEL.
+    pub async fn prev_key(&self, key: &str) -> Result<String> {
+        let v = self.volume(key).await?;
+        let t = v.start_ms();
+        let site = v.site.clone();
+        let day = chrono::DateTime::from_timestamp_millis(t).ok_or_else(|| anyhow!("bad volume time"))?;
+        for back in 0..2 {
+            let d = day - chrono::Duration::days(back);
+            let list = self.list_day(&site, d.year(), d.month(), d.day()).await.unwrap_or_default();
+            // entry times come from file names (scan start, ±1 min of the decoded start)
+            if let Some(e) = list.iter().filter(|e| e.time < t - 60_000 && e.key != key).max_by_key(|e| e.time) {
+                if t - e.time > 30 * 60_000 {
+                    bail!("previous {site} volume is more than 30 minutes older");
+                }
+                return Ok(e.key.clone());
+            }
+        }
+        bail!("no earlier {site} volume found")
+    }
+
+    /// zstd-compressed TBWS sweep of a QC product (`super::qc`): REFQC, BIO, DREF, DVEL, ZDRCOL.
+    /// `prev` = the earlier volume key for DREF/DVEL (default: the site's previous volume).
+    pub async fn sweep_qc(&self, key: &str, tilt: usize, moment: &str, opts: &super::qc::Opts, prev: Option<&str>) -> Result<(Bytes, Option<String>)> {
+        let m = moment.to_ascii_uppercase();
+        let tilt = if m == "ZDRCOL" { 0 } else { tilt };
+        let prev_key = if super::qc::needs_prev(&m) {
+            Some(match prev {
+                Some(p) if !p.is_empty() => p.to_string(),
+                _ => self.prev_key(key).await?,
+            })
+        } else {
+            None
+        };
+        let (id, odim) = self.cache_id(key).await?;
+        let ck = format!("{id}|{tilt}|{m}|{}|{}", opts.key(&m), prev_key.as_deref().unwrap_or(""));
+        if let Some(b) = self.encoded.lock().get(&ck) {
+            return Ok((b, prev_key));
+        }
+        let v = self.volume_id(key, &id, odim).await?;
+        let pv = match &prev_key {
+            Some(p) => Some(self.volume(p).await?),
+            None => None,
+        };
+        let _permit = self.decode.sem.clone().acquire_owned().await?;
+        let o = opts.clone();
+        let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> { Ok(encode::zstd(&super::qc::encode(&v, pv.as_deref(), tilt, &m, &o)?)) }).await??;
+        let b = Bytes::from(bytes);
+        self.encoded.lock().put(ck, b.clone(), b.len());
+        Ok((b, prev_key))
+    }
+
+    /// One sweep (any moment, derived or QC) as CF/Radial-style netCDF-3.
+    pub async fn sweep_nc(&self, key: &str, tilt: usize, moment: &str, opts: &super::qc::Opts, prev: Option<&str>) -> Result<Vec<u8>> {
+        let m = moment.to_ascii_uppercase();
+        let v = self.volume(key).await?;
+        let pv = if super::qc::needs_prev(&m) {
+            let p = match prev {
+                Some(p) if !p.is_empty() => p.to_string(),
+                _ => self.prev_key(key).await?,
+            };
+            Some(self.volume(&p).await?)
+        } else {
+            None
+        };
+        let _permit = self.decode.sem.clone().acquire_owned().await?;
+        let o = opts.clone();
+        tokio::task::spawn_blocking(move || {
+            let (s, mm) = super::export::sweep_for(&v, pv.as_deref(), tilt, &m, &o)?;
+            super::export::sweep_nc(&v, &s, mm, &m)
+        })
+        .await?
+    }
+
+    /// Beam blockage (% per radial/gate; see `super::blockage`), disk cached per site / tilt.
+    pub async fn blockage(&self, site: &str, lat: f64, lon: f64, ground_m: f64, tower: f64, elev: f64) -> Result<Vec<u8>> {
+        let cache = self.cache_dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| self.cache_dir.clone());
+        let r = super::blockage::blockage(&self.http, &cache, site, lat, lon, ground_m, tower, elev).await;
+        match &r {
+            Ok(_) => self.health.ok("radar-blockage", "Beam blockage (AWS terrain tiles)", ""),
+            Err(e) => self.health.err("radar-blockage", "Beam blockage (AWS terrain tiles)", e),
+        }
+        r
     }
 
     /// 3D grid of one moment (see `volume3d` for the format). Not compressed here: the HTTP

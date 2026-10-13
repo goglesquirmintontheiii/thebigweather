@@ -174,6 +174,8 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/radar/{site}/day/{date}", get(radar_day))
         .route("/radar/meta", get(radar_meta))
         .route("/radar/sweep", get(radar_sweep))
+        .route("/radar/sweep.nc", get(radar_sweep_nc))
+        .route("/radar/blockage", get(radar_blockage))
         .route("/radar/upload", post(radar_upload))
         .route("/radar/rotation", get(radar_rotation))
         .route("/radar/volume3d", get(radar_volume3d))
@@ -189,6 +191,7 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/grid/frames", get(grid_frames))
         .route("/grid/render", get(grid_render))
         .route("/grid/value", get(grid_value))
+        .route("/grid/export", get(grid_export))
         .route("/grid/volume3d", get(grid_volume3d))
         .route("/grid/wind", get(grid_wind))
         .route("/sounding", get(sounding))
@@ -395,15 +398,133 @@ struct SweepQ {
     key: String,
     tilt: usize,
     moment: String,
+    /// ZDRCOL: freezing level km MSL (default: HRRR / RAP / GFS at the radar)
+    fzl: Option<f32>,
+    /// REFQC / BIO: correlation-coefficient threshold (default 0.88)
+    cc_min: Option<f32>,
+    /// REFQC / BIO: reflectivity texture threshold, dB (default 8)
+    texture: Option<f32>,
+    /// DREF / DVEL: earlier volume key (default: the site's previous volume)
+    prev: Option<String>,
+}
+
+/// QC options for a sweep request (freezing level looked up when ZDRCOL needs it).
+async fn qc_opts(st: &AppState, q: &SweepQ) -> Result<(crate::radar::qc::Opts, Option<String>), ApiError> {
+    let mut o = crate::radar::qc::Opts::default();
+    if let Some(c) = q.cc_min {
+        o.cc_min = c.clamp(0.3, 0.99);
+    }
+    if let Some(t) = q.texture {
+        o.texture = t.clamp(1.0, 50.0);
+    }
+    let mut src = None;
+    if q.moment.eq_ignore_ascii_case("ZDRCOL") {
+        match q.fzl {
+            Some(f) => {
+                o.fzl_km = f.clamp(0.0, 8.0);
+                src = Some("request".to_string());
+            }
+            None => {
+                let v = st.radar.volume(&q.key).await?;
+                match st.grids.freezing_level(v.lat as f64, v.lon as f64, Some(v.start_ms())).await {
+                    Ok((km, s)) => {
+                        o.fzl_km = km.max(0.0);
+                        src = Some(s);
+                    }
+                    Err(e) => {
+                        tracing::debug!("freezing level: {e:#}");
+                        src = Some("default 4.0 km".to_string());
+                    }
+                }
+            }
+        }
+    }
+    Ok((o, src))
 }
 
 async fn radar_sweep(State(st): St, headers: HeaderMap, Query(q): Query<SweepQ>) -> Result<Response, ApiError> {
+    if crate::radar::qc::is_qc(&q.moment) {
+        if q.key.starts_with("live:") {
+            return Err(bad("QC / difference products are not available for live streams; use an archived volume key"));
+        }
+        let (o, fzl_src) = qc_opts(&st, &q).await?;
+        let (b, prev) = st.radar.sweep_qc(&q.key, q.tilt, &q.moment, &o, q.prev.as_deref()).await.map_err(input_err)?;
+        let mut r = sweep_response(&headers, b, crate::radar::odim_src::settled(&q.key));
+        if let Some(p) = prev.and_then(|p| HeaderValue::from_str(&p).ok()) {
+            r.headers_mut().insert("x-tbw-prev-key", p);
+        }
+        if q.moment.eq_ignore_ascii_case("ZDRCOL") {
+            if let Ok(h) = HeaderValue::from_str(&format!("{:.2}", o.fzl_km)) {
+                r.headers_mut().insert("x-tbw-fzl-km", h);
+            }
+            if let Some(h) = fzl_src.and_then(|s| HeaderValue::from_str(&s).ok()) {
+                r.headers_mut().insert("x-tbw-fzl-source", h);
+            }
+        }
+        return Ok(r);
+    }
     if q.key.starts_with("live:") {
         let b = st.live.sweep(&q.key, q.tilt, &q.moment)?;
         return Ok(sweep_response(&headers, b, false));
     }
     let b = st.radar.sweep(&q.key, q.tilt, &q.moment).await?;
     Ok(sweep_response(&headers, b, crate::radar::odim_src::settled(&q.key)))
+}
+
+/// One sweep (any moment incl. derived / QC) as CF/Radial-style netCDF-3.
+async fn radar_sweep_nc(State(st): St, Query(q): Query<SweepQ>) -> Result<Response, ApiError> {
+    if q.key.starts_with("live:") {
+        return Err(bad("netCDF export needs an archived volume key"));
+    }
+    let (o, _) = qc_opts(&st, &q).await?;
+    let b = st.radar.sweep_nc(&q.key, q.tilt, &q.moment, &o, q.prev.as_deref()).await.map_err(input_err)?;
+    let name = format!("{}_{}_t{}.nc", q.key.rsplit(['/', ':']).next().unwrap_or("sweep").replace(|c: char| !c.is_ascii_alphanumeric() && c != '_', "_"), q.moment.to_ascii_uppercase(), q.tilt);
+    let mut r = Response::new(Body::from(b));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/x-netcdf"));
+    if let Ok(h) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
+        r.headers_mut().insert(header::CONTENT_DISPOSITION, h);
+    }
+    Ok(r)
+}
+
+/// Terrain beam blockage for a radar site: `site`, `tilt` (deg, 0.5), `tower` (m, 20),
+/// `format=sweep|png|geojson` (sweep: TBWS "BLK" %, png: RGBA with `X-TBW-Bounds: w,s,e,n`,
+/// geojson: coverage polygon where blockage first reaches `pct`, default 50).
+async fn radar_blockage(State(st): St, headers: HeaderMap, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+    let site = valid_site(q.get("site").map(|s| s.as_str()).unwrap_or(""))?;
+    let s = st.sites.read().iter().find(|x| x.id.eq_ignore_ascii_case(&site)).cloned().ok_or_else(|| bad("unknown site"))?;
+    let tilt: f64 = q.get("tilt").and_then(|t| t.parse().ok()).unwrap_or(0.5f64).clamp(0.0, 20.0);
+    let tower: f64 = q.get("tower").and_then(|t| t.parse().ok()).unwrap_or(20.0f64).clamp(0.0, 200.0);
+    let cbb = st.radar.blockage(&s.id, s.lat, s.lon, s.elev_m, tower, tilt).await?;
+    let fmt = q.get("format").map(|s| s.as_str()).unwrap_or("sweep");
+    let cache = HeaderValue::from_static("private, max-age=86400");
+    match fmt {
+        "sweep" => {
+            let raw = crate::radar::blockage::encode_sweep(&s.id, s.lat, s.lon, s.elev_m + tower, tilt, &cbb)?;
+            let mut r = sweep_response(&headers, Bytes::from(crate::radar::encode::zstd(&raw)), false);
+            r.headers_mut().insert(header::CACHE_CONTROL, cache);
+            Ok(r)
+        }
+        "png" => {
+            let size = q.get("size").and_then(|t| t.parse::<usize>().ok()).unwrap_or(512).clamp(64, 2048);
+            let (png, b) = crate::radar::blockage::png(s.lat, s.lon, &cbb, size)?;
+            let mut r = Response::new(Body::from(png));
+            r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+            r.headers_mut().insert(header::CACHE_CONTROL, cache);
+            if let Ok(h) = HeaderValue::from_str(&format!("{:.5},{:.5},{:.5},{:.5}", b[0], b[1], b[2], b[3])) {
+                r.headers_mut().insert("x-tbw-bounds", h);
+            }
+            Ok(r)
+        }
+        "geojson" => {
+            let pct = q.get("pct").and_then(|t| t.parse::<u8>().ok()).unwrap_or(50).clamp(1, 100);
+            let mut v = crate::radar::blockage::geojson(s.lat, s.lon, &cbb, pct);
+            v["site"] = json!(s.id);
+            v["tilt"] = json!(tilt);
+            Ok(Json(v).into_response())
+        }
+        _ => Err(bad("format must be sweep, png or geojson")),
+    }
 }
 
 #[derive(Deserialize)]
@@ -607,8 +728,26 @@ async fn local_check(State(st): St, req: Request) -> Json<Value> {
 async fn overlay(State(st): St, Path(id): Path<String>, Query(q): Query<std::collections::BTreeMap<String, String>>) -> Result<Response, ApiError> {
     let mut q = q;
     q.remove("token");
+    let format = q.remove("format").unwrap_or_default();
     let keys = st.cfg.read().keys.clone();
     let b = st.overlays.get(&id, &q, &keys).await.map_err(input_err)?;
+    if format == "csv" || format == "kml" {
+        let v: Value = serde_json::from_slice(&b).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("overlay is not JSON: {e}")))?;
+        if v["type"] != "FeatureCollection" {
+            return Err(bad("this overlay is not a GeoJSON FeatureCollection"));
+        }
+        let (body, ct, ext) = if format == "csv" { (crate::export::geojson_to_csv(&v), "text/csv", "csv") } else { (crate::export::geojson_to_kml(&v, &id), "application/vnd.google-earth.kml+xml", "kml") };
+        let mut r = Response::new(Body::from(body));
+        r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(ct));
+        if let Ok(h) = HeaderValue::from_str(&format!("attachment; filename=\"{id}.{ext}\"")) {
+            r.headers_mut().insert(header::CONTENT_DISPOSITION, h);
+        }
+        r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        return Ok(r);
+    }
+    if !format.is_empty() && format != "geojson" && format != "json" {
+        return Err(bad("format must be geojson, csv or kml"));
+    }
     let mut r = Response::new(Body::from(b));
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -774,10 +913,12 @@ struct FramesQ {
     storm: Option<String>,
     /// history: newest frame time (unix ms) for observation layers
     end: Option<i64>,
+    /// ensemble probability threshold (layer `params.thr.units`)
+    thr: Option<f64>,
 }
 
 async fn grid_frames(State(st): St, Query(q): Query<FramesQ>) -> Result<Json<Value>, ApiError> {
-    let r = st.grids.frames(&q.layer, q.n.unwrap_or(12).clamp(1, 240), q.run.as_deref(), q.storm.as_deref(), q.end).await?;
+    let r = st.grids.frames_thr(&q.layer, q.n.unwrap_or(12).clamp(1, 240), q.run.as_deref(), q.storm.as_deref(), q.end, q.thr).await?;
     Ok(Json(json!(r)))
 }
 
@@ -787,6 +928,8 @@ struct RenderQ {
     bbox: String,
     w: usize,
     h: usize,
+    /// ensemble probability threshold (replaces the one in the key)
+    thr: Option<f64>,
 }
 
 async fn grid_render(State(st): St, headers: HeaderMap, Query(q): Query<RenderQ>) -> Result<Response, ApiError> {
@@ -794,7 +937,8 @@ async fn grid_render(State(st): St, headers: HeaderMap, Query(q): Query<RenderQ>
     if b.len() != 4 || q.w == 0 || q.h == 0 || q.w > 4096 || q.h > 4096 {
         return Err(bad("bad bbox or size"));
     }
-    let bytes = st.grids.render(&q.key, (b[0], b[1], b[2], b[3]), q.w, q.h).await?;
+    let key = crate::grid::ens_key_thr(&q.key, q.thr);
+    let bytes = st.grids.render(&key, (b[0], b[1], b[2], b[3]), q.w, q.h).await?;
     Ok(sweep_response(&headers, bytes, !q.key.starts_with("metar|")))
 }
 
@@ -803,10 +947,23 @@ struct ValueQ {
     key: String,
     lat: f64,
     lon: f64,
+    thr: Option<f64>,
 }
 
 async fn grid_value(State(st): St, Query(q): Query<ValueQ>) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!({"value": st.grids.value(&q.key, q.lat, q.lon).await?})))
+    let key = crate::grid::ens_key_thr(&q.key, q.thr);
+    Ok(Json(json!({"value": st.grids.value(&key, q.lat, q.lon).await?})))
+}
+
+/// A grid frame over a bbox as csv | geojson | nc (see `grid::export`).
+async fn grid_export(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Response, ApiError> {
+    let e = crate::grid::export::export(&st.grids, &q).await.map_err(input_err)?;
+    let mut r = Response::new(Body::from(e.body));
+    r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(e.content_type));
+    if let Ok(h) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", e.filename)) {
+        r.headers_mut().insert(header::CONTENT_DISPOSITION, h);
+    }
+    Ok(r)
 }
 
 #[derive(Deserialize)]
@@ -918,7 +1075,7 @@ fn input_err(e: anyhow::Error) -> ApiError {
     let msg = format!("{e:#}");
     if msg.starts_with("blocked") {
         ApiError(StatusCode::FORBIDDEN, msg)
-    } else if ["bad url", "url must", "required", "must be", "too large", "not an image", "not a placefile", "bbox", "out of range", "unknown layer", "unknown model", "level must", "interval", "no frame"].iter().any(|k| msg.contains(k)) {
+    } else if ["bad url", "url must", "required", "must be", "too large", "not an image", "not a placefile", "bbox", "out of range", "unknown layer", "unknown model", "level must", "interval", "no frame", "bad station", "at most", "unknown station", "stations required", "sat must", "sector must", "kind must", "format must", "bad event id", "bad thr", "needs the previous volume", "no earlier", "more than 30 minutes"].iter().any(|k| msg.contains(k)) {
         bad(&msg)
     } else {
         ApiError::from(e)
