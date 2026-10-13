@@ -62,6 +62,10 @@ export interface TargetDef {
   /** e.g. outlook hazards, precip accumulation windows */
   subtargets?: (string | { id: string; name: string; help?: string })[];
   params?: OptDef[];
+  /** tasks the target can be trained for (storm_forecast: both) */
+  tasks?: Task[];
+  /** grid output: field / units / colour map of the layer */
+  layer?: { field?: string; units?: string; cmap?: string } | null;
   /** server: an array of label-source ids */
   default_labels_source?: string[] | string;
   description?: string;
@@ -107,6 +111,11 @@ export interface Catalog {
   run_params?: OptDef[];
   /** models 0.7: every data source group the server can train on */
   sources?: Partial<Record<"radar_products" | "mrms" | "satellite" | "model_vars" | "metar" | "other", (string | { id: string; name: string; unit?: string; group?: string; help?: string })[] | boolean>> & Record<string, any>;
+  /** global runner options (radars, interval_s, concurrency, enabled) */
+  run_globals?: OptDef[];
+  /** outlook categories / default probability levels per hazard */
+  outlook?: { categories?: { cat: string; label: string; color: string }[]; levels?: Record<string, { prob: number; cat: string }[]>; days?: string[] };
+  retrain?: { modes?: string[]; continue_algos?: string[] };
   /** TrainSpec defaults (server) */
   defaults?: Partial<TrainSpec>;
   server?: { enabled?: boolean; max_jobs?: number; cpu_threads?: number; profile?: string; version?: string };
@@ -125,7 +134,9 @@ export interface TrainSpec {
   neg_ratio: number;
   null_days: number;
   match: { radius_km: number; before_min: number; after_min: number };
-  sources: { radar_products: string[]; mrms: string[]; metar: boolean; model: string[]; satellite?: string[]; other?: string[] };
+  sources: { radar_products: string[]; mrms: string[]; metar: boolean; model: string[]; satellite?: string[]; other?: string[]; hrrr?: string[]; fcst?: string[]; fcst_model?: string; fcst_step_h?: number };
+  /** stratified cap on the number of samples (0 = none) */
+  max_samples?: number;
   /** models 0.7: values of the target's own params (catalog targets[].params) */
   target_params?: Record<string, any>;
   subtarget?: string;
@@ -162,6 +173,10 @@ export interface Job {
   resumable?: boolean;
   time_limit_min?: number | null;
   spec?: Partial<TrainSpec>;
+  /** train | retrain | continue */
+  kind?: string;
+  base_model?: string | null;
+  mode?: string | null;
 }
 
 export interface Metrics {
@@ -221,6 +236,11 @@ export interface Model {
   version?: number;
   history?: HistoryEntry[];
   imported?: boolean;
+  /** trained | imported | "retrained from <id>" … */
+  origin?: string;
+  /** quantile levels of extra learners (regression → P10 / P90 layers) */
+  quantiles?: number[];
+  layer_id?: string | null;
 }
 
 export interface RunState {
@@ -238,6 +258,8 @@ export interface RunState {
   concurrency?: number;
   /** per-model options as the runner has them */
   model_opts?: Record<string, ModelRunOpts>;
+  /** outlook keys "<model>|<valid_from>" the runner holds */
+  outlooks?: string[];
 }
 export interface PredLayer {
   model_id: string;
@@ -246,6 +268,10 @@ export interface PredLayer {
   valid_times: number[];
   name?: string;
   field?: string;
+  units?: string;
+  cmap?: string;
+  /** issue time of the run (ms) */
+  run?: number;
 }
 /** per-model run options (POST /api/ml/run models[]) */
 export interface ModelRunOpts {
@@ -260,7 +286,7 @@ export interface ModelRunOpts {
   leads?: number[];
   valid_from?: number;
   valid_to?: number;
-  day?: 1 | 2 | 3 | "4-7";
+  day?: 1 | 2 | 3 | "1" | "2" | "3" | "4-7";
   grid_res_deg?: number;
   smoothing_km?: number;
   ensemble?: boolean | string | number;
@@ -293,4 +319,6 @@ export interface Detection {
   kind?: "cell" | "area";
   valid_from?: number;
   valid_to?: number;
+  /** regression areas (e.g. storm_forecast dBZ): the max predicted value; prob is then 1 */
+  value?: number;
 }

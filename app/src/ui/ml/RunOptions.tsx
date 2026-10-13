@@ -51,10 +51,72 @@ const raw = (p: OptDef, v: string) => {
   return typeof x === "number" || (/^-?\d+(\.\d+)?$/.test(String(x)) && typeof p.default !== "string") ? +x : x;
 };
 
-/** generic input for an option (number / bool / choice / multi / string) */
+/** "1, 3, 6" ⇄ [1, 3, 6] (hours_list / days_list / float_list) */
+function ListInput({ p, value, onChange }: { p: OptDef; value: any; onChange: (v: any) => void }) {
+  const arr: number[] = (Array.isArray(value) ? value : Array.isArray(p.default) ? p.default : []).map(Number).filter(Number.isFinite);
+  const [txt, setTxt] = useState(arr.join(", "));
+  const unit = p.type === "hours_list" ? "h" : p.type === "days_list" ? "d" : "";
+  const ch = optChoices(p);
+  const parse = (t: string) => {
+    let xs = t.split(/[,\s;]+/).map((x) => +x).filter((x) => x !== 0 || /\b0\b/.test(t)).filter(Number.isFinite);
+    if (p.min != null) xs = xs.filter((x) => x >= p.min!);
+    if (p.max != null) xs = xs.filter((x) => x <= p.max!);
+    return [...new Set(xs)].sort((a, b) => a - b);
+  };
+  const put = (xs: number[]) => (setTxt(xs.join(", ")), onChange(xs.length ? xs : undefined));
+  return (
+    <span class="ml-olist">
+      {ch.length > 0 && (
+        <span class="ml-chips">
+          {ch.map(([k, l]) => {
+            const x = +k, on = arr.includes(x);
+            return (
+              <button key={k} class={`chip ${on ? "on" : ""}`} onClick={(e) => (e.preventDefault(), put(on ? arr.filter((y) => y !== x) : [...arr, x].sort((a, b) => a - b)))}>
+                {l}
+                {unit && !/[a-z]/i.test(l) ? ` ${unit}` : ""}
+              </button>
+            );
+          })}
+        </span>
+      )}
+      <input class="ml-olist-in" value={txt} placeholder={Array.isArray(p.default) ? p.default.join(", ") : "default"} onInput={(e) => setTxt((e.target as HTMLInputElement).value)} onChange={(e) => put(parse((e.target as HTMLInputElement).value))} />
+      {unit && <small class="muted">{unit === "h" ? "hours" : "days"}</small>}
+    </span>
+  );
+}
+/** JSON value (e.g. outlook_levels) edited as text; invalid JSON is not sent */
+function JsonInput({ p, value, onChange }: { p: OptDef; value: any; onChange: (v: any) => void }) {
+  const [txt, setTxt] = useState(value != null ? JSON.stringify(value) : "");
+  const [bad, setBad] = useState(false);
+  return (
+    <input
+      class={`ml-json ${bad ? "bad" : ""}`}
+      value={txt}
+      placeholder={p.id === "outlook_levels" ? '[{"prob":0.02,"cat":"TSTM"},{"prob":0.05,"cat":"MRGL"}, …]' : "JSON"}
+      onInput={(e) => setTxt((e.target as HTMLInputElement).value)}
+      onChange={(e) => {
+        const t = (e.target as HTMLInputElement).value.trim();
+        if (!t) return setBad(false), onChange(undefined);
+        try {
+          onChange(JSON.parse(t));
+          setBad(false);
+        } catch {
+          setBad(true);
+        }
+      }}
+    />
+  );
+}
+/** unix ms ⇄ datetime-local */
+const toLocalDT = (t?: number) => (t ? new Date(t - new Date(t).getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : "");
+
+/** generic input for an option (number / bool / choice / multi / lists / time / json / string) */
 export function OptInput({ p, value, onChange }: { p: OptDef; value: any; onChange: (v: any) => void }) {
   const v = value ?? p.default;
   if (p.type === "bool") return <input type="checkbox" checked={!!v} onChange={(e) => onChange((e.target as HTMLInputElement).checked)} />;
+  if (p.type === "hours_list" || p.type === "days_list" || p.type === "float_list") return <ListInput p={p} value={value} onChange={onChange} />;
+  if (p.type === "json") return <JsonInput p={p} value={value} onChange={onChange} />;
+  if (p.type === "time") return <input type="datetime-local" value={toLocalDT(value)} onChange={(e) => onChange(new Date((e.target as HTMLInputElement).value).getTime() || undefined)} />;
   const ch = optChoices(p);
   if (p.type === "multi" || p.type === "leads") {
     const arr: string[] = (Array.isArray(v) ? v : []).map(String);
@@ -71,8 +133,8 @@ export function OptInput({ p, value, onChange }: { p: OptDef; value: any; onChan
   }
   if (ch.length)
     return (
-      <select value={String(v ?? "")} onChange={(e) => onChange(raw(p, (e.target as HTMLSelectElement).value))}>
-        {v == null && <option value="">Default</option>}
+      <select value={String(v ?? "")} onChange={(e) => onChange((e.target as HTMLSelectElement).value === "" ? undefined : raw(p, (e.target as HTMLSelectElement).value))}>
+        {(v == null || p.default == null) && <option value="">{p.id === "ensemble" ? "Off" : "Default"}</option>}
         {ch.map(([k, l]) => (
           <option key={k} value={k}>
             {l}
@@ -120,15 +182,29 @@ export function runItem(m: Model): string | ({ id: string } & Record<string, any
   return Object.keys(o).length ? { id: m.id, ...o } : m.id;
 }
 
+/** the server's run_params carry no groups: sort them into sections here */
+const GROUP: Record<string, string> = {
+  threshold: "Probability", min_prob: "Probability", max_prob: "Probability", min_value: "Values", max_value: "Values",
+  persistence: "Detections", min_cell_dbz: "Detections", min_area_km2: "Detections", max_range_km: "Detections", max_detections: "Detections", notify: "Detections",
+  region: "Where & when", leads: "Where & when", valid_from: "Where & when", valid_to: "Where & when", day: "Where & when", cadence_min: "Where & when",
+  grid_res_deg: "Grid", smoothing_km: "Grid", ensemble: "Grid", quantiles: "Grid", outlook_levels: "Outlook",
+};
 export function paramsFor(m: Model): OptDef[] {
   const all = catalog.value?.run_params?.length ? catalog.value.run_params : DEFAULT_RUN_PARAMS;
   const out = outputOf(m.target, m.output);
+  const reg = taskOf(m.target, m.task) === "regression";
   const tags = new Set([m.target, out, m.candidate ?? "", taskOf(m.target, m.task), "*"]);
-  return all.filter((p) => {
+  const list = all.filter((p) => {
+    if (p.id === "threshold" && reg && m.target !== "storm_forecast") return false;
+    if ((p.id === "min_value" || p.id === "max_value" || p.id === "quantiles") && !reg) return false;
+    // regression layers are gated by value (min_value / max_value), not probability
+    if ((p.id === "min_prob" || p.id === "max_prob") && reg) return false;
+    // outlooks: the valid period is one control (day presets + custom range)
+    if ((p.id === "valid_from" || p.id === "valid_to") && out === "outlook") return false;
     if (!p.applies_to?.length) return true;
-    if (p.id === "threshold" && taskOf(m.target, m.task) === "regression") return false;
     return p.applies_to.some((a) => tags.has(a));
   });
+  return list.map((p) => (p.group ? p : { ...p, group: GROUP[p.id] ?? "Options" }));
 }
 
 // ---------- panel ----------
@@ -142,7 +218,9 @@ export function RunOptionsPanel({ m }: { m: Model }) {
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g)!.push(p);
   }
-  const n = Object.keys(o).length;
+  // only options that apply to this model count (the runner may hold others, e.g. adopted from another client)
+  const ids = new Set([...ps.map((p) => p.id), "valid_from", "valid_to"]);
+  const n = Object.keys(o).filter((k) => ids.has(k)).length;
   return (
     <div class="ml-ropts">
       <div class="ml-ropts-head">
@@ -162,6 +240,17 @@ export function RunOptionsPanel({ m }: { m: Model }) {
             {list.map((p) => {
               if (p.type === "region" || p.id === "region") return <RegionOpt key={p.id} p={p} value={o.region} onChange={(v) => set("region", v)} />;
               if (p.type === "day" || p.type === "range" || p.id === "day") return <DayOpt key={p.id} p={p} o={o} m={m} />;
+              if (p.type === "hours_list" && p.id === "leads") {
+                // the model's own trained leads (spec), else the target's defaults
+                const ml = (m.spec as any)?.target_params?.leads;
+                const tl: number[] | undefined = Array.isArray(ml) && ml.length ? ml : catalog.value?.targets.find((t) => t.id === m.target)?.leads ?? undefined;
+                const q: OptDef = { ...p, choices: p.choices?.length ? p.choices : tl?.length ? tl : [] };
+                return (
+                  <Field key={p.id} label={`${p.name} (h)`} help={`${p.help ?? ""}${tl?.length ? ` · trained: ${tl.join(", ")} h` : ""}`} wide>
+                    <OptInput p={q} value={o.leads} onChange={(v) => set("leads", v)} />
+                  </Field>
+                );
+              }
               if (p.type === "leads" || p.id === "leads") {
                 const tl = catalog.value?.targets.find((t) => t.id === m.target)?.leads;
                 const q: OptDef = { ...p, type: "leads", choices: p.choices?.length ? p.choices : tl?.length ? tl : DEFAULT_RUN_PARAMS.find((x) => x.id === "leads")!.choices };
@@ -173,7 +262,7 @@ export function RunOptionsPanel({ m }: { m: Model }) {
               }
               const pct = (p.id === "threshold" || p.id === "min_prob" || p.id === "max_prob") && (p.max ?? 1) <= 1;
               return (
-                <Field key={p.id} label={p.name} help={p.help} wide={p.type === "multi"}>
+                <Field key={p.id} label={p.name} help={p.help} wide={p.type === "multi" || p.type === "json" || p.type.endsWith("_list")}>
                   {pct ? <PctInput value={o[p.id]} def={p.id === "threshold" ? m.threshold : p.default} onChange={(v) => set(p.id, v)} /> : <OptInput p={p} value={o[p.id]} onChange={(v) => set(p.id, v)} />}
                 </Field>
               );

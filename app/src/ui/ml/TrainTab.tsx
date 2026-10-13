@@ -106,8 +106,9 @@ function defaults(cat: Catalog, target: string, prev?: Partial<TrainSpec>): Trai
     neg_ratio: base.neg_ratio ?? 3,
     null_days: base.null_days ?? (grid ? 20 : 10),
     match: base.match ?? { radius_km: grid ? 150 : 15, before_min: grid ? 0 : 20, after_min: grid ? 0 : 10 },
+    // the preset's resolved sources as they are (HRRR analyses, forecast-window fields, model / step too)
     sources: pre
-      ? { radar_products: base.sources?.radar_products ?? [], mrms: base.sources?.mrms ?? [], metar: !!base.sources?.metar, model: base.sources?.model ?? [], satellite: base.sources?.satellite ?? [], other: base.sources?.other ?? [] }
+      ? { ...base.sources, radar_products: base.sources?.radar_products ?? [], mrms: base.sources?.mrms ?? [], metar: !!base.sources?.metar, model: base.sources?.model ?? [], satellite: base.sources?.satellite ?? [], other: base.sources?.other ?? [], hrrr: base.sources?.hrrr ?? [], fcst: base.sources?.fcst ?? [], fcst_model: base.sources?.fcst_model || (base.sources?.fcst?.length ? "gfs" : ""), fcst_step_h: base.sources?.fcst_step_h ?? 0 }
       : {
           radar_products: grid ? [] : ids(cat.radar_products, DEF_RADAR),
           mrms: grid ? [] : ids(cat.mrms, DEF_MRMS).slice(0, 5),
@@ -115,11 +116,15 @@ function defaults(cat: Catalog, target: string, prev?: Partial<TrainSpec>): Trai
           model: grid ? ids(cat.model_fields, DEF_MODEL).slice(0, 12) : [],
           satellite: ids2(srcList(cat.sources?.satellite, DEF_SAT)).slice(0, 6),
           other: [],
+          hrrr: [],
+          fcst: [],
+          fcst_model: "",
+          fcst_step_h: 0,
         },
-    // models 0.7: the target's own parameters and sub-target
-    target_params: { ...Object.fromEntries((t?.params ?? []).map((p) => [p.id, p.default])), ...(base.target_params ?? {}), ...(t?.leads?.length && !base.target_params?.leads ? { leads: base.grid?.lead_hours?.length ? base.grid.lead_hours : t.leads } : {}) },
-    subtarget: base.subtarget ?? (t?.subtargets?.length ? (typeof t.subtargets[0] === "string" ? t.subtargets[0] : t.subtargets[0].id) : undefined),
-    task: taskOf(id, t?.task),
+    // models 0.7: the target's own parameters (leads, hazard, thresholds… — sub-targets live here too)
+    target_params: { ...Object.fromEntries((t?.params ?? []).filter((p) => p.default != null).map((p) => [p.id, p.default])), ...(base.target_params ?? {}) },
+    task: (base.task === "regression" || base.task === "classification" ? base.task : undefined) ?? taskOf(id, t?.task),
+    max_samples: base.max_samples ?? 0,
     features: base.features?.length ? base.features : undefined,
     algo: algo?.id ?? "gbdt",
     params: { ...Object.fromEntries((algo?.params ?? []).map((p) => [p.id, p.default])), ...(base.params ?? {}) },
@@ -328,42 +333,61 @@ function FilterInput({ f, value, onChange }: { f: FilterDef; value: any; onChang
   );
 }
 
-/** models 0.7: output summary, sub-target, leads and the target's own params (catalog targets[].params) */
+/** models 0.7: sub-targets (outlook hazard, storm threshold, tropical window) are target_params:
+ *  outlook → hazard; storm_forecast → dbz / truth "glm"; tropical_forecast → lead_days */
+function subOn(target: string, id: string, tp: Record<string, any>): boolean {
+  if (target === "outlook") return String(tp.hazard ?? "any") === id;
+  if (target === "storm_forecast") return id === "glm" ? tp.truth === "glm" : tp.truth !== "glm" && +tp.dbz === +id;
+  if (target === "tropical_forecast") return (Array.isArray(tp.lead_days) ? tp.lead_days : []).map(Number).includes(+id);
+  return tp.subtarget === id;
+}
+function subSet(target: string, id: string, tp: Record<string, any>): Record<string, any> {
+  if (target === "outlook") return { ...tp, hazard: id };
+  if (target === "storm_forecast") return id === "glm" ? { ...tp, truth: "glm" } : { ...tp, truth: "cref", dbz: +id };
+  if (target === "tropical_forecast") {
+    const cur: number[] = (Array.isArray(tp.lead_days) ? tp.lead_days : []).map(Number);
+    const next = cur.includes(+id) ? cur.filter((x) => x !== +id) : [...cur, +id].sort((a, b) => a - b);
+    return { ...tp, lead_days: next.length ? next : cur };
+  }
+  return { ...tp, subtarget: id };
+}
+/** models 0.7: task, sub-target and the target's own params (catalog targets[].params, incl. leads) */
 function TargetExtras({ cat, s, set }: { cat: Catalog; s: TrainSpec; set: (p: Partial<TrainSpec>) => void }) {
   const t = cat.targets.find((x) => x.id === s.target);
   if (!t) return null;
   const subs = (t.subtargets ?? []).map((x) => (typeof x === "string" ? { id: x, name: x.replace(/_/g, " ") } : x));
   const tp = s.target_params ?? {};
-  const leads: number[] = Array.isArray(tp.leads) ? tp.leads : [];
-  const params = (t.params ?? []).filter((p) => p.id !== "leads");
-  if (!subs.length && !t.leads?.length && !params.length) return null;
+  // the outlook's hazard chips are its `hazard` choice param: don't show it twice
+  const params = (t.params ?? []).filter((p) => !(s.target === "outlook" && p.id === "hazard" && subs.length));
+  const tasks = (t.tasks ?? []).filter((x) => x === "classification" || x === "regression");
+  if (!subs.length && !params.length && tasks.length < 2) return null;
   return (
     <div class="ml-grid ml-tx">
-      {subs.length > 0 && (
-        <Field label={t.output === "outlook" ? "Hazard" : "Predict"} wide>
+      {tasks.length > 1 && (
+        <Field label="Task" help="Classification predicts a probability (e.g. P(≥ 40 dBZ)); regression predicts the value itself (e.g. max reflectivity in dBZ)">
+          <div class="seg">
+            {tasks.map((k) => (
+              <button key={k} class={(s.task ?? t.task) === k ? "on" : ""} onClick={(e) => (e.preventDefault(), set({ task: k }))}>
+                {k === "regression" ? "Value" : "Probability"}
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
+      {subs.length > 0 && !(s.target === "storm_forecast" && s.task === "regression") && (
+        <Field label={t.output === "outlook" ? "Hazard" : s.target === "tropical_forecast" ? "Formation within" : "Predict"} wide>
           <div class="ml-chips">
             {subs.map((x) => (
-              <button key={x.id} class={`chip ${s.subtarget === x.id ? "on" : ""}`} title={(x as any).help} onClick={(e) => (e.preventDefault(), set({ subtarget: x.id }))}>
+              <button key={x.id} class={`chip ${subOn(s.target, x.id, tp) ? "on" : ""}`} title={(x as any).help} onClick={(e) => (e.preventDefault(), set({ target_params: subSet(s.target, x.id, tp) }))}>
                 {x.name}
               </button>
             ))}
           </div>
         </Field>
       )}
-      {!!t.leads?.length && (
-        <Field label="Forecast leads (h)" wide help="Lead times the model is trained for; it forecasts each when run (more leads = more samples, longer training)">
-          <div class="ml-chips">
-            {t.leads.map((h) => (
-              <button key={h} class={`chip ${leads.includes(h) ? "on" : ""}`} onClick={(e) => (e.preventDefault(), set({ target_params: { ...tp, leads: leads.includes(h) ? leads.filter((x) => x !== h) : [...leads, h].sort((a, b) => a - b) } }))}>
-                {h} h
-              </button>
-            ))}
-          </div>
-        </Field>
-      )}
       {params.map((p) => (
-        <Field key={p.id} label={`${p.name}${p.unit ? ` (${p.unit})` : ""}`} help={p.help} wide={p.type === "multi" || (optChoices(p).length > 4 && p.type !== "choice")}>
-          <OptInput p={p} value={tp[p.id]} onChange={(v) => set({ target_params: { ...tp, [p.id]: v } })} />
+        <Field key={p.id} label={`${p.name}${p.unit ? ` (${p.unit})` : ""}`} help={p.help} wide={p.type === "multi" || p.type.endsWith("_list") || (optChoices(p).length > 4 && p.type !== "choice")}>
+          <OptInput key={`${s.target}|${p.id}|${JSON.stringify(tp[p.id])}`} p={p} value={tp[p.id]} onChange={(v) => set({ target_params: { ...tp, [p.id]: v } })} />
         </Field>
       ))}
     </div>
@@ -379,6 +403,51 @@ function Checks({ all, sel, onChange, cols = 3 }: { all: [string, string][]; sel
           <span title={`${l} (${k})`}>{l}</span>
         </label>
       ))}
+    </div>
+  );
+}
+
+/** forecast field available from the chosen NWP model (catalog fcst_vars[].gfs / .hrrr) */
+function fcAvail(cat: Catalog, id: string, model: string): boolean {
+  const v: any = srcList(cat.sources?.fcst_vars, []).find((x) => typeof x !== "string" && x.id === id);
+  if (!v || typeof v === "string") return true;
+  if (model === "hrrr") return v.hrrr !== false;
+  if (model === "gfs") return v.gfs !== false;
+  return v.gfs !== false || v.hrrr !== false;
+}
+const AGG: Record<string, string> = { at: "at the lead", max: "window max", min: "window min", mean: "window mean", sum: "window total", tend: "tendency" };
+function FcstSources({ cat, s, set }: { cat: Catalog; s: TrainSpec; set: (p: Partial<TrainSpec>) => void }) {
+  const models: string[] = Array.isArray(cat.sources?.fcst_models) ? cat.sources!.fcst_models : ["gfs", "hrrr", "auto"];
+  const fm = s.sources.fcst_model || "gfs";
+  const all = srcList(cat.sources?.fcst_vars, []).filter((x) => typeof x === "string" || fcAvail(cat, x.id, fm));
+  const MN: Record<string, string> = { gfs: "GFS", hrrr: "HRRR (≤ 18 h)", auto: "Auto (HRRR ≤ 18 h, else GFS)" };
+  return (
+    <div class="ml-fcst">
+      <span class="ml-flabel">
+        Forecast window (NWP) <Help text="Model forecast fields valid over the target's window (MOS-like): the value at the lead, or the window's max / min / mean / total. Needed by temperature, precipitation, storm, tropical and outlook models." />
+      </span>
+      <div class="ml-fcst-opts">
+        <select value={fm} onChange={(e) => set({ sources: { ...s.sources, fcst_model: (e.target as HTMLSelectElement).value } })} title="Forecast model">
+          {models.map((m) => (
+            <option key={m} value={m}>
+              {MN[m] ?? m}
+            </option>
+          ))}
+        </select>
+        <label class="muted small" style={{ display: "inline-flex", alignItems: "center", gap: "4px", flexDirection: "row" }} title="Forecast-hour step when summarising a window (0 = automatic)">
+          step <input type="number" min={0} max={48} step={1} value={s.sources.fcst_step_h ?? 0} onChange={(e) => set({ sources: { ...s.sources, fcst_step_h: Math.max(0, Math.round(+(e.target as HTMLInputElement).value)) } })} style={{ width: "52px" }} /> h
+        </label>
+      </div>
+      <Checks
+        all={all.map((x) => {
+          const [k, l] = opt(x as any);
+          const agg = typeof x === "string" ? "" : AGG[(x as any).agg] ?? (x as any).agg ?? "";
+          return [k, agg ? `${l} · ${agg}` : l] as [string, string];
+        })}
+        sel={s.sources.fcst ?? []}
+        onChange={(v) => set({ sources: { ...s.sources, fcst: v, fcst_model: v.length ? fm : s.sources.fcst_model } })}
+        cols={2}
+      />
     </div>
   );
 }
@@ -546,6 +615,9 @@ function Custom({ cat }: { cat: Catalog }) {
             <Field label="Lead before (min)" help="Scans up to this long BEFORE the event are labelled positive (lets the model warn early)">
               <input type="number" min={0} max={360} step={5} value={s.match.before_min} onChange={(e) => set({ match: { ...s.match, before_min: +(e.target as HTMLInputElement).value } })} />
             </Field>
+            <Field label="Max samples" help="Stratified cap on the training samples (0 = no cap); grid targets sample many points per case">
+              <input type="number" min={0} max={5000000} step={5000} value={s.max_samples ?? 0} onChange={(e) => set({ max_samples: Math.max(0, Math.round(+(e.target as HTMLInputElement).value)) })} />
+            </Field>
             <Field label="After (min)">
               <input type="number" min={0} max={360} step={5} value={s.match.after_min} onChange={(e) => set({ match: { ...s.match, after_min: +(e.target as HTMLInputElement).value } })} />
             </Field>
@@ -569,6 +641,10 @@ function Custom({ cat }: { cat: Catalog }) {
                     metar: true,
                     satellite: ids2(srcList(c.satellite, DEF_SAT)),
                     other: ids2(srcList(c.other, DEF_OTHER)),
+                    hrrr: ids2(srcList(c.hrrr_vars, [])),
+                    fcst: ids2(srcList(c.fcst_vars, [])).filter((id) => fcAvail(cat, id, s.sources.fcst_model || "gfs")),
+                    fcst_model: s.sources.fcst_model || "gfs",
+                    fcst_step_h: s.sources.fcst_step_h ?? 0,
                   },
                 });
               }}
@@ -592,6 +668,18 @@ function Custom({ cat }: { cat: Catalog }) {
                 <input type="checkbox" checked={s.sources.metar} onChange={(e) => set({ sources: { ...s.sources, metar: (e.target as HTMLInputElement).checked } })} /> Nearby METARs (surface obs)
               </label>
             </div>
+            {/* models 0.7: HRRR analyses and NWP forecast fields over the target window */}
+            {!!srcList(cat.sources?.hrrr_vars, []).length && (
+              <div>
+                <span class="ml-flabel">
+                  HRRR analysis <Help text="3 km HRRR analysis fields at the case time (CONUS, 2014+). Cell and grid models." />
+                </span>
+                <Checks all={srcList(cat.sources?.hrrr_vars, []).map((x) => opt(x as any))} sel={s.sources.hrrr ?? []} onChange={(v) => set({ sources: { ...s.sources, hrrr: v } })} cols={2} />
+              </div>
+            )}
+            {!!srcList(cat.sources?.fcst_vars, []).length && (
+              <FcstSources cat={cat} s={s} set={set} />
+            )}
             {/* models 0.7: satellite (GOES ABI bands, cooling rate, GLM) and every other source group */}
             <div>
               <span class="ml-flabel">
@@ -714,7 +802,7 @@ function Custom({ cat }: { cat: Catalog }) {
             const o = outputOf(s.target, tdef?.output);
             return (
               <div class="ml-go-out muted small">
-                {taskOf(s.target, tdef?.task) === "regression" ? "Regression (predicts a value)" : "Classification (predicts a probability)"} · when run: {o === "grid" ? "a weather layer (forecast grid)" : o === "outlook" ? "an SPC-style outlook layer" : "detections on the map"}
+                {(s.task ?? taskOf(s.target, tdef?.task)) === "regression" ? "Regression (predicts a value)" : "Classification (predicts a probability)"} · when run: {o === "grid" ? "a weather layer (forecast grid)" : o === "outlook" ? "an SPC-style outlook layer" : "detections on the map"}
               </div>
             );
           })()}
@@ -726,15 +814,18 @@ function Custom({ cat }: { cat: Catalog }) {
           </div>
           <button
             class="btn ml-start"
-            disabled={busy || !s.target || !s.label_source.length || (!s.sources.radar_products.length && !s.sources.mrms.length && !s.sources.model.length && !s.sources.metar && !s.sources.satellite?.length && !s.sources.other?.length)}
+            disabled={busy || !s.target || !s.label_source.length || (!s.sources.radar_products.length && !s.sources.mrms.length && !s.sources.model.length && !s.sources.metar && !s.sources.satellite?.length && !s.sources.other?.length && !s.sources.hrrr?.length && !s.sources.fcst?.length)}
             onClick={async () => {
               setBusy(true);
               const body: TrainSpec = { ...s, name: s.name.trim() || `${tmeta(s.target).name} model` };
               delete (body as any).__retrain;
-              // the server's grid options take the leads too
-              if (Array.isArray(body.target_params?.leads)) body.grid = { ...(body.grid ?? {}), lead_hours: body.target_params!.leads };
+              // sub-targets and leads travel in target_params (the server has no `subtarget` / uses grid.lead_hours only for genesis)
+              delete (body as any).subtarget;
+              if (!body.sources.fcst?.length) body.sources = { ...body.sources, fcst_model: "" };
+              if (!body.max_samples) delete body.max_samples;
               let id: string | null = null;
               if (rt) {
+                delete (body as any).preset; // the model's spec already holds what the preset gave
                 const m = models.value.find((x) => x.ep === rt.ep && x.id === rt.id);
                 id = m ? await retrainModel(m, body, rtMode) : null;
               } else id = await startTraining(where, body);

@@ -502,12 +502,21 @@ function SpecSummary({ m }: { m: Model }) {
     ["MRMS", src.mrms?.length ? src.mrms.join(", ") : "—"],
     ["METARs", src.metar ? "yes" : "no"],
     ["Model fields", src.model?.length ? src.model.join(", ") : "—"],
+    ["HRRR analysis", src.hrrr?.length ? src.hrrr.join(", ") : "—"], // models 0.7
+    ["Forecast window", src.fcst?.length ? `${src.fcst.join(", ")} (${String(src.fcst_model || "gfs").toUpperCase()}${src.fcst_step_h ? `, every ${src.fcst_step_h} h` : ""})` : "—"],
     ["Satellite", src.satellite?.length ? src.satellite.join(", ") : "—"], // models 0.7
     ["Other sources", src.other?.length ? src.other.join(", ") : "—"],
     ["Features", s.features?.length ? `${s.features.length} selected` : m.feature_schema?.length ? `${m.feature_schema.length} (all)` : "all"],
     ["Algorithm", `${cat?.algos.find((a) => a.id === (s.algo ?? m.algo))?.name ?? s.algo ?? m.algo ?? "—"}${m.params || s.params ? ` (${Object.entries(m.params ?? s.params ?? {}).slice(0, 4).map(([k, v]) => `${k} ${v}`).join(", ")})` : ""}`],
     ["Validation", s.cv_folds >= 2 ? `${s.cv_folds}-fold CV` : "held-out days"],
   ];
+  // models 0.7: task and the target's own settings (leads, hazard, day, radius…)
+  const tp = Object.entries(s.target_params ?? {}).filter(([, v]) => v != null && !(Array.isArray(v) && !v.length));
+  if (s.task || m.task) rows.splice(1, 0, ["Task", (s.task ?? m.task) === "regression" ? "regression (value)" : "classification (probability)"]);
+  if (tp.length) rows.splice(2, 0, ["Target settings", tp.map(([k, v]) => `${k} ${Array.isArray(v) ? v.join("/") : typeof v === "object" ? JSON.stringify(v) : v}`).join(", ")]);
+  if (s.max_samples) rows.push(["Max samples", Number(s.max_samples).toLocaleString()]);
+  if (m.quantiles?.length) rows.push(["Quantile layers", m.quantiles.map((q) => `P${Math.round(q * 100)}`).join(", ")]);
+  if (m.origin && m.origin !== "trained") rows.push(["Origin", m.origin]);
   const fl = Object.entries(s.filters ?? {}).filter(([, v]) => v != null && !(Array.isArray(v) && !v.length));
   if (fl.length) rows.splice(2, 0, ["Filters", fl.map(([k, v]) => `${k} ${Array.isArray(v) ? v.join("/") : v}`).join(", ")]);
   return (

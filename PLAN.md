@@ -197,6 +197,7 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
   - Training runs on the server or on this computer, has no time limit unless set, and can be stopped early.
   - Models run on one, several or all US radars (TDWRs included). Detections are drawn with icons, probability rings and cell boxes.
   - Models can be exported and imported.
+- **More model types:** storm intensification, instability, temperature/precipitation/storm forecasts (served as weather layers), tropical development, SPC-style outlooks (Day 1/2/3/4–7), flood prediction. Satellite (GOES ABI/GLM), HRRR and forecast-window features, regression, a probability gate, many run options, retrain and continue-training (also for imported models).
 - **Power outages layer:** utility outage maps (KUBRA Storm Center utilities, Duke Energy, Hydro-Québec) as a county choropleth plus outage points.
 - **Better laptop support in 3D:** on-screen orbit controls, keyboard, Shift/Alt+drag, Orbit-drag mode and auto-rotate.
 - **Radio player size switch:** small ↔ big media player without interrupting playback.

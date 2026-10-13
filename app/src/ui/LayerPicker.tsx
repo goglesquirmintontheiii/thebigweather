@@ -8,7 +8,7 @@ import { Layers, ChevronDown, Search, Radar, Satellite, Grid3x3, CloudSun, Therm
 import { intlSources, intlErrors, intlListLoading, loadIntlList, selectIntl, flyForGrid, intlRegion, INTL_REGIONS, INTL_NAMES, groupOf, allIdOf, groupName, errKey, curPrecip, setIntlPrecip, type IntlSource, type Precip } from "../intl/radar"; // intl & forecast tools
 import { noLevel3 } from "../intl/sites";
 import { BrainCircuit } from "lucide-preact"; // models 0.7
-import { predLayers, predModelId, runState, models as mlModels, mlOpen, mlTab, refreshGridCatalog, loadRun } from "../ml/client"; // models 0.7
+import { predLayers, predModelId, predModelName, runState, mlOpen, mlTab, refreshGridCatalog, loadRun } from "../ml/client"; // models 0.7
 import { fmtTime } from "../util"; // models 0.7
 
 type Cat = "radar" | "world" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs" | "water" /* data 0.6 */ | "mine" /* models 0.7 */;
@@ -215,7 +215,7 @@ function MineList({ pick }: { pick: Pick }) {
     <>
       {[...byModel.entries()].map(([mid, ds]) => (
         <div key={mid}>
-          <label class="lbl">{mlModels.value.find((m) => m.id === mid)?.name ?? ds[0].group.replace(/^My models( · )?/, "") ?? mid}</label>
+          <label class="lbl">{predModelName(ds[0].id)}</label>
           {ds.map((d) => (
             <Item key={d.id} on={isGrid(d.id)} name={d.name} sub={span(d.id)} onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />
           ))}

@@ -326,6 +326,11 @@ effect(() => {
 api.on("connected", () => {
   if (settings.value.weather.kind === "grid") loadGridFrames(true);
 });
+// models 0.7: a model run replaced a prediction layer (frame keys carry the run time) → reload it
+api.on("ml_layer", (m) => {
+  const w = settings.value.weather;
+  if (w.kind === "grid" && typeof m?.layer_id === "string" && (w.id === m.layer_id || w.id.startsWith(`${m.layer_id}/`)) && !playing.value) setTimeout(() => loadGridFrames(true), 300);
+});
 
 // refresh observation layers periodically (new MRMS / satellite / METAR frames)
 setInterval(() => {

@@ -48,7 +48,7 @@ export function RunTab() {
   const [states, setStates] = useState<string[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [interval, setIntv] = useState(60);
-  const [test, setTest] = useState<{ busy?: boolean; text?: string }>({});
+  const [test, setTest] = useState<{ busy?: boolean; text?: string; errs?: string[] }>({});
   const [busy, setBusy] = useState(false);
   const [optFor, setOptFor] = useState<string>(""); // models 0.7: model whose options are open
   const [conc, setConc] = useState<number>(mlPrefs().concurrency ?? 4);
@@ -118,7 +118,11 @@ export function RunTab() {
     const r = await testRun(where, site, testItems);
     loadRun();
     if (r) enableDetectionLayer();
-    setTest({ text: !r ? "" : r.error ? `${site}: ${r.error}` : `${site}: ${r.cells ?? "?"} cells, ${r.n} detection${r.n === 1 ? "" : "s"}${r.ms != null ? ` · ${r.ms} ms` : ""}${r.n ? " · shown on the map" : ""}` });
+    // per-model errors (grid / outlook models that couldn't fetch their inputs, …)
+    const errs = Object.entries(r?.errors ?? {}).map(([id, e]) => `${mine.find((m) => m.id === id)?.name ?? id}: ${e}`);
+    const cellTxt = !r ? "" : cellModels.length ? (r.error ? `${site}: ${r.error}` : `${site}: ${r.cells ?? "?"} cells, ${r.n} detection${r.n === 1 ? "" : "s"}${r.ms != null ? ` · ${r.ms} ms` : ""}`) : `${r.n} detection${r.n === 1 ? "" : "s"}`;
+    const extra = r ? [r.layers ? `${r.layers} forecast layer${r.layers > 1 ? "s" : ""}` : "", r.outlooks ? `${r.outlooks} outlook${r.outlooks > 1 ? "s" : ""}` : ""].filter(Boolean).join(", ") : "";
+    setTest({ text: !r ? "" : `${cellTxt}${extra ? ` · ${extra}` : ""}${r.n || extra ? " · shown on the map / in My models" : ""}`, errs });
   };
   const per = Object.entries(st?.per_radar ?? {}).sort((a, b) => +!!b[1].error - +!!a[1].error || (b[1].detections ?? 0) - (a[1].detections ?? 0) || a[0].localeCompare(b[0]));
   const c = mapRef.value?.getCenter();
@@ -171,7 +175,7 @@ export function RunTab() {
                     {nOpt > 0 && <small>{nOpt}</small>}
                   </button>
                 </div>
-                <Produced m={m} layers={(st?.layers ?? []).filter((l) => l.model_id === m.id)} err={st?.models_state?.[m.id]?.error} />
+                <Produced m={m} layers={(st?.layers ?? []).filter((l) => l.model_id === m.id || (l.model_id.startsWith(`ensemble:${m.target}:`) && runOptsOf(m).ensemble != null))} err={st?.models_state?.[m.id]?.error} />
                 {optFor === mkey(m) && <RunOptionsPanel m={m} />}
               </div>
             );
@@ -257,6 +261,15 @@ export function RunTab() {
           </div>
         </div>
         {test.text && <div class="muted small ml-test-res">{test.text}</div>}
+        {!!test.errs?.length && (
+          <div class="ml-test-errs">
+            {test.errs.map((e) => (
+              <small key={e} class="ml-prod-err">
+                <AlertTriangle size={11} /> {e}
+              </small>
+            ))}
+          </div>
+        )}
       </div>
 
       <div class="ml-run-out">
@@ -357,20 +370,23 @@ function Produced({ m, layers, err }: { m: Model; layers: PredLayer[]; err?: str
   const span = (l: PredLayer) => (l.valid_times.length ? `${l.valid_times.length} time${l.valid_times.length > 1 ? "s" : ""} · ${fmtTime(Math.min(...l.valid_times), true)} → ${fmtTime(Math.max(...l.valid_times), true)}` : "no frames yet");
   return (
     <div class="ml-prod">
-      {layers
-        .filter((l) => l.kind !== "outlook")
-        .map((l) => (
+      {layers.map((l) => {
+        // main layer: "mlpred/<id>"; quantiles "/p10", "/p90"; ensembles "mlpred/ensemble/<target>"; outlook models' probability grid
+        const q = l.layer_id.match(/\/p(\d+)$/)?.[1];
+        const what = l.kind === "outlook" ? "Probability grid" : l.model_id.startsWith("ensemble:") ? l.name ?? "Ensemble" : q ? `P${+q}` : "";
+        return (
           <button key={l.layer_id} class="btn xs" title={`Show ${l.layer_id} as the main weather layer (${span(l)})`} onClick={() => open(l)}>
-            <Layers size={12} /> Open as weather layer{l.field || l.layer_id.split("/")[2] ? ` · ${l.name ?? l.field ?? l.layer_id.split("/")[2]}` : ""}
+            <Layers size={12} /> {l.kind === "outlook" ? "Open probability grid" : "Open as weather layer"}{what && l.kind !== "outlook" ? ` · ${what}` : ""}
             <small>{span(l)}</small>
           </button>
-        ))}
+        );
+      })}
       {out === "outlook" && (
         <button class="btn xs" title="Add the model's outlook to the map (Day 1 by default; change day / hazard on the map card)" onClick={() => (showOutlook(m, String(runOptsOf(m).day ?? "1")), (mlOpen.value = false))}>
           <MapIcon size={12} /> Show outlook
         </button>
       )}
-      {out !== "detections" && !layers.some((l) => l.kind !== "outlook") && out !== "outlook" && <small class="muted">The forecast layer appears here after the first run.</small>}
+      {out !== "detections" && !layers.length && out !== "outlook" && <small class="muted">The forecast layer appears here after the first run.</small>}
       {err && <small class="ml-prod-err">{err}</small>}
     </div>
   );

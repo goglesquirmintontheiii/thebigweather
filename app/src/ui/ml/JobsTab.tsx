@@ -96,6 +96,11 @@ function JobCard({ j, open, toggle }: { j: Job; open: boolean; toggle: () => voi
             <span class={`ml-state ${cls}`}>{st}</span>
             {live && j.phase && <span>{PHASE[j.phase] ?? j.phase}</span>}
             <EpBadge ep={j.ep} />
+            {j.kind && j.kind !== "train" && (
+              <span class="ml-ver" title={`${j.kind === "continue" ? "Training further" : "Retraining"} model ${j.base_model ?? ""}${j.mode === "new" ? " · saved as a new model" : " · replaces it (new version)"}`}>
+                {j.kind === "continue" ? "train further" : "retrain"} · {models.value.find((m) => m.id === j.base_model && m.ep === j.ep)?.name ?? j.base_model ?? "model"} · {j.mode === "new" ? "new model" : "replace"}
+              </span>
+            )}
             {j.started && <span class="muted">{j.state === "queued" ? "queued" : "started"} {new Date(j.started).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>}
             {j.time_limit_min ? <span class="muted">limit {fmtDur(j.time_limit_min * 60)}</span> : null}
           </div>

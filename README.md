@@ -35,7 +35,7 @@ The UI also works in a browser at the server URL (phones too, until the Android 
 
 ## Phase 7 features (0.7.0)
 
-- **Detection models:** train your own detectors for tornadoes, supercells, hail, wind, debris, flash floods, tropical genesis and wildfires on historical radar, MRMS, METAR and GFS data, then run them on any or all US radars. Training and running work on the server or this computer, and models can be exported and imported.
+- **Detection models:** train your own detectors and forecast models (tornadoes, supercells, hail, wind, debris, storm intensification, instability, temperature/precipitation/storm forecasts that become weather layers, tropical development, SPC-style outlooks, floods, wildfires) on historical radar, satellite (GOES/GLM), MRMS, METAR, HRRR and GFS data, with a probability gate, retraining and further training, then run them on any or all US radars. Training and running work on the server or this computer, and models can be exported and imported.
 - **Power outages:** utility outage maps by county, plus outage points.
 - **3D on laptops:** on-screen orbit controls, keys and Shift+drag.
 - **Radio:** small ↔ big player switch.

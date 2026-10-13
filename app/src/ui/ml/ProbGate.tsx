@@ -12,7 +12,7 @@ import { gateDrag, type Gate } from "../../gate";
 import { isOn } from "../../overlays/manager";
 import { probGate, setProbGate, pgKey, scrub, PG_DET, PG_OUT } from "../../ml/probgate";
 import { detProbs } from "../../overlays/mldefs";
-import { outProbs, outOpts, setOutOpt, CATS, CAT_FILL, CAT_LINE, CAT_NAME, HAZARDS, DAYS, outlookData, probGridOn, toggleProbGrid, outlookModels } from "../../ml/outlook";
+import { outProbs, outOpts, setOutOpt, CATS, CAT_FILL, CAT_LINE, CAT_NAME, HAZARDS, DAYS, outlookData, probGridOn, toggleProbGrid, outlookModels, hazardOf } from "../../ml/outlook";
 import { LEVEL_COLOR } from "../../ml/targets";
 import { mkey } from "../../ml/client";
 import { fmtTime } from "../../util";
@@ -260,7 +260,7 @@ function OutlookCard() {
         <div class="mlo-more">
           <div class="seg mlo-haz">
             {HAZARDS.map(([k, l]) => (
-              <button key={k} class={o.hazard === k ? "on" : ""} onClick={() => setOutOpt("hazard", k)}>
+              <button key={k} class={(o.want || o.hazard) === k ? "on" : ""} title={models.some((m) => hazardOf(m) === k) ? "" : "No outlook model for this hazard yet"} onClick={() => setOutOpt("hazard", k)}>
                 {l.replace(" severe", "")}
               </button>
             ))}
@@ -283,7 +283,7 @@ function OutlookCard() {
         ))}
       </div>
       <div class="mlo-valid muted">
-        {d.loading ? "Loading…" : d.err ? <span class="mlo-err">{d.err}</span> : d.valid_from ? `Valid ${fmtTime(d.valid_from, true)}${d.valid_to ? ` → ${fmtTime(d.valid_to, true)}` : ""} · ${o.hazard === "any" ? "any severe" : o.hazard}` : feats.length ? "" : "No risk areas"}
+        {d.loading ? "Loading…" : d.err ? <span class="mlo-err">{d.err}</span> : d.valid_from ? `Valid ${fmtTime(d.valid_from, true)}${d.valid_to ? ` → ${fmtTime(d.valid_to, true)}` : ""} · ${o.hazard === "any" ? "any severe" : o.hazard}${d.issued ? ` · issued ${fmtTime(d.issued, true)}${d.computed_now ? " (just now)" : ""}` : ""}` : feats.length ? "" : "No risk areas"}
       </div>
       <GateBar layer={PG_OUT} title="Probability" probs={outProbs.value} unit="areas" compact />
     </div>

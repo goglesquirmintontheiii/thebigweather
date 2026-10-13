@@ -10,7 +10,7 @@ import { OVERLAYS, overlayDef, type OverlayDef, type OptionDef, type Popup } fro
 import { setData, isOn } from "../overlays/manager";
 import { settings, update, type WeatherSel } from "../store";
 import { fmtTime } from "../util";
-import { models, mlReq, ensureModels, refreshGridCatalog, mkey } from "./client";
+import { models, mlReq, ensureModels, refreshGridCatalog, mkey, loadModel } from "./client";
 import { gated, PG_OUT } from "./probgate";
 import type { Ep, Model } from "./types";
 
@@ -23,23 +23,46 @@ export const CAT_LINE: Record<Cat, string> = { TSTM: "#55bb55", MRGL: "#005500",
 export const HAZARDS: [string, string][] = [["any", "Any severe"], ["tornado", "Tornado"], ["wind", "Wind"], ["hail", "Hail"]];
 export const DAYS: [string, string][] = [["1", "Day 1"], ["2", "Day 2"], ["3", "Day 3"], ["4-7", "Day 4–7"], ["custom", "Custom range"]];
 const rank = (c: string) => Math.max(0, CATS.indexOf(String(c).toUpperCase() as Cat));
-const fillExpr: any = ["match", ["get", "cat"], ...CATS.flatMap((c) => [c, CAT_FILL[c]]), "#888"];
+// the server sends each category's SPC colour (`color`); the table is the fallback
+const fillExpr: any = ["coalesce", ["get", "color"], ["match", ["get", "cat"], ...CATS.flatMap((c) => [c, CAT_FILL[c]]), "#888"]];
 const lineExpr: any = ["match", ["get", "cat"], ...CATS.flatMap((c) => [c, CAT_LINE[c]]), "#555"];
 
 export const outlookModels = computed(() => models.value.filter((m) => m.output === "outlook" || m.target === "outlook"));
-/** what the overlay shows: "ep|id" of the model, day, hazard, custom range */
+/** an outlook model predicts one hazard (spec.target_params.hazard); the server refuses another */
+export function hazardOf(m: Model): string {
+  const h = (m.spec as any)?.target_params?.hazard;
+  if (typeof h === "string" && h) return h;
+  const ls: string[] = Array.isArray(m.spec?.label_source) ? (m.spec!.label_source as string[]) : [];
+  if (ls.length === 1) return ls[0].replace(/^spc_/, "");
+  return /tornado/i.test(m.name) ? "tornado" : /\bwind/i.test(m.name) ? "wind" : /\bhail/i.test(m.name) ? "hail" : "any";
+}
+/** what the overlay shows: "ep|id" of the model, day, hazard, custom range. The hazard switch picks
+ *  among the outlook models of that hazard (a model only answers for its own hazard). */
 export function outOpts() {
   const o = settings.value.ovl[OUT_ID]?.opts ?? {};
   const list = outlookModels.value;
-  const mk = o.model && list.some((m) => mkey(m) === o.model || m.id === o.model) ? o.model : list[0] ? mkey(list[0]) : "";
-  return { model: mk, day: o.day ?? "1", hazard: o.hazard ?? "any", from: o.from ? +o.from : undefined, to: o.to ? +o.to : undefined, labels: (o.labels ?? "1") === "1" };
+  const hz: string | undefined = o.hazard;
+  const cur = o.model ? list.find((m) => mkey(m) === o.model || m.id === o.model) : undefined;
+  const pick = cur && (!hz || hazardOf(cur) === hz) ? cur : hz ? list.find((m) => hazardOf(m) === hz) : list[0];
+  const mk = pick ? mkey(pick) : "";
+  return { model: mk, day: o.day ?? "1", hazard: pick ? hazardOf(pick) : hz ?? "any", want: hz ?? "", from: o.from ? +o.from : undefined, to: o.to ? +o.to : undefined, labels: (o.labels ?? "1") === "1" };
 }
+// the model list has no specs: fetch outlook models' details once so their hazard is known
+const specAsked = new Set<string>();
+effect(() => {
+  for (const m of outlookModels.value) if (!m.spec && !specAsked.has(mkey(m))) (specAsked.add(mkey(m)), loadModel(m.ep, m.id));
+});
 export function setOutOpt(k: string, v: string | undefined) {
   update((s) => {
     const cur = s.ovl[OUT_ID] ?? { on: false };
     const opts = { ...(cur.opts ?? {}) };
     if (v === undefined) delete opts[k];
     else opts[k] = v;
+    // choosing a model also chooses its hazard (and vice versa, see outOpts)
+    if (k === "model" && v) {
+      const m = outlookModels.peek().find((x) => mkey(x) === v);
+      if (m) opts.hazard = hazardOf(m);
+    }
     s.ovl[OUT_ID] = { ...cur, opts };
   });
 }
@@ -86,7 +109,7 @@ const def: OverlayDef = {
     const c = String(p.cat).toUpperCase() as Cat;
     const rows: [string, string][] = [
       ["Category", `${CAT_NAME[c] ?? c} (${c})`],
-      ["Probability", p.prob != null && p.prob !== "" ? `${Math.round(+p.prob * (+p.prob <= 1 ? 100 : 1))}%` : "—"],
+      ["Probability", p.prob != null && p.prob !== "" ? `≥ ${Math.round(+p.prob * (+p.prob <= 1 ? 100 : 1))}%${p.max_prob != null && p.max_prob !== "" ? ` (max ${Math.round(+p.max_prob * 100)}%)` : ""}` : "—"],
       ["Hazard", HAZARDS.find(([k]) => k === p.hazard)?.[1] ?? p.hazard ?? "Any"],
       ["Day", String(p.day ?? "—")],
     ];
@@ -103,7 +126,7 @@ if (!overlayDef(OUT_ID)) {
 }
 
 // ---------- data ----------
-export const outlookData = signal<{ fc: any; prob_layer?: string; err?: string; loading?: boolean; t?: number; valid_from?: number; valid_to?: number }>({ fc: { type: "FeatureCollection", features: [] } });
+export const outlookData = signal<{ fc: any; prob_layer?: string; err?: string; loading?: boolean; t?: number; valid_from?: number; valid_to?: number; issued?: number; computed_now?: boolean; hazard?: string; levels?: { prob: number; cat: string }[] }>({ fc: { type: "FeatureCollection", features: [] } });
 export const outProbs = computed(() => (outlookData.value.fc?.features ?? []).map((f: any) => +f.properties?.prob || 0));
 const tms = (v: any) => (v == null || v === "" ? undefined : typeof v === "number" ? (v < 1e11 ? v * 1000 : v) : Date.parse(v) || undefined);
 
@@ -111,12 +134,14 @@ let seq = 0;
 export async function loadOutlook() {
   const o = outOpts();
   if (!o.model) {
-    outlookData.value = { fc: { type: "FeatureCollection", features: [] }, err: "No outlook model yet — train one (Train → Outlook)" };
+    const hz = HAZARDS.find(([k]) => k === o.want)?.[1];
+    outlookData.value = { fc: { type: "FeatureCollection", features: [] }, err: outlookModels.value.length && hz ? `No ${hz.toLowerCase()} outlook model — train one (Train → Outlook, hazard ${hz})` : "No outlook model yet — train one (Train → Outlook)" };
     if (isOn(OUT_ID)) setData(OUT_ID, outlookData.value.fc);
     return;
   }
   const [ep, id] = o.model.includes("|") ? (o.model.split("|") as [Ep, string]) : (["main", o.model] as [Ep, string]);
-  const q = new URLSearchParams({ model: id, hazard: o.hazard });
+  // the model decides the hazard; sending another one is refused (400)
+  const q = new URLSearchParams({ model: id });
   if (o.day === "custom") {
     if (o.from) q.set("from", String(o.from));
     if (o.to) q.set("to", String(o.to));
@@ -141,7 +166,7 @@ export async function loadOutlook() {
     const fc = { type: "FeatureCollection", features: feats };
     const vf = feats.map((f: any) => f.properties.valid_from).filter(Boolean);
     const vt = feats.map((f: any) => f.properties.valid_to).filter(Boolean);
-    outlookData.value = { fc, prob_layer: r?.prob_layer || undefined, t: Date.now(), valid_from: vf.length ? Math.min(...vf) : tms(r?.valid_from), valid_to: vt.length ? Math.max(...vt) : tms(r?.valid_to) };
+    outlookData.value = { fc, prob_layer: r?.prob_layer || undefined, t: Date.now(), valid_from: tms(r?.valid_from) ?? (vf.length ? Math.min(...vf) : undefined), valid_to: tms(r?.valid_to) ?? (vt.length ? Math.max(...vt) : undefined), issued: tms(r?.issued), computed_now: !!r?.computed_now, hazard: r?.hazard, levels: Array.isArray(r?.levels) ? r.levels : undefined };
     if (r?.prob_layer) refreshGridCatalog();
   } catch (e: any) {
     if (my !== seq) return;

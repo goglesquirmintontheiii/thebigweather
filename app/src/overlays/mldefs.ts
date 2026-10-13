@@ -41,6 +41,8 @@ function featName(id: string): [string, string] {
   }
   return [id, ""];
 }
+/** units of a regression detection's value */
+const unitOf = (t: string) => (t === "temp_forecast" ? "°C" : t === "precip_forecast" ? "mm" : t === "storm_forecast" ? "dBZ" : "");
 const fmtV = (v: number) => (!Number.isFinite(v) ? "—" : Math.abs(v) >= 100 ? Math.round(v).toString() : Math.abs(v) >= 10 ? v.toFixed(1) : Math.abs(v) >= 1 || v === 0 ? v.toFixed(2) : v.toPrecision(2));
 
 const def: OverlayDef = {
@@ -96,7 +98,7 @@ const def: OverlayDef = {
         "icon-ignore-placement": true,
         ...(st.labels
           ? {
-              "text-field": ["step", ["zoom"], "", 6, ["concat", ["get", "code"], " ", ["to-string", ["round", ["*", 100, ["get", "prob"]]]], "%"]],
+              "text-field": ["step", ["zoom"], "", 6, ["concat", ["get", "code"], " ", ["get", "vtxt"]]],
               "text-font": bold,
               "text-size": 11,
               "text-offset": ["match", ["get", "slot"], -1, ["literal", [-1.6, 1.9]], 1, ["literal", [1.6, 1.9]], ["literal", [0, 1.9]]],
@@ -112,6 +114,7 @@ const def: OverlayDef = {
     ensureModels();
     const t = tmeta(p.target);
     const pct = Math.round(+p.prob * 100);
+    const hasVal = p.value != null && p.value !== "" && Number.isFinite(+p.value);
     let tf: { id: string; value: number; contribution: number }[] = [];
     try {
       tf = JSON.parse(p._tf || "[]");
@@ -120,7 +123,7 @@ const def: OverlayDef = {
     }
     const rows: [string, string][] = [
       ["Model", String(p.model_name)],
-      ["Probability", `${pct}% · ${LEVEL_NAME[p.level as "low"] ?? p.level}`],
+      hasVal ? ["Max forecast value", `${fmtV(+p.value)} ${unitOf(p.target)}`] : ["Probability", `${pct}% · ${LEVEL_NAME[p.level as "low"] ?? p.level}`],
       ["Radar", p.site || "—"],
       ["Time", `${fmtTime(+p.t, true)} (${fmtAge(+p.t)})`],
     ];
@@ -135,8 +138,8 @@ const def: OverlayDef = {
       rows.push([n, `${fmtV(+f.value)}${u ? ` ${u}` : ""}  ${Number.isFinite(c) ? `(${c >= 0 ? "+" : "−"}${Math.abs(c).toFixed(2)})` : ""}`]);
     }
     return {
-      title: `${t.name} · ${pct}%`,
-      sub: `${p.model_name}${p.site ? ` · ${p.site}` : ""}${tf.length ? " · top factors (contribution) below" : ""}`,
+      title: `${t.name} · ${hasVal ? `${fmtV(+p.value)} ${unitOf(p.target)}` : `${pct}%`}`,
+      sub: `${p.model_name}${String(p.model_id ?? "").startsWith("ensemble:") ? " (ensemble)" : ""}${p.site ? ` · ${p.site}` : ""}${tf.length ? " · top factors (contribution) below" : ""}`,
       color: t.color,
       rows,
     };
@@ -175,6 +178,9 @@ function build(list: Detection[], all = false) {
       _tf: JSON.stringify(d.top_features ?? []),
       _key: d.key,
       area: d.kind === "area" ? 1 : 0,
+      // regression areas (storm dBZ…) carry a value instead of a probability
+      value: d.value,
+      vtxt: d.value != null ? `${Math.round(d.value)}${unitOf(d.target)}` : `${Math.round(d.prob * 100)}%`,
       vf: d.valid_from,
       vt: d.valid_to,
     };

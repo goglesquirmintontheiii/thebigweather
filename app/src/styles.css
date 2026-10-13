@@ -9933,6 +9933,48 @@ html[data-theme="light"] .same-foot .same-hide.on {
   align-items: center;
   gap: 5px;
 }
+/* models 0.7 (reconciled): list / json run & target options, forecast-window sources, test errors */
+.ml-olist {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ml-olist .ml-chips {
+  flex-basis: 100%;
+}
+.ml-olist-in {
+  flex: 1;
+  min-width: 90px;
+}
+.ml-json {
+  width: 100%;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+}
+.ml-json.bad {
+  border-color: #f87171 !important;
+}
+.ml-fcst-opts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 6px;
+}
+.ml-fcst-opts input {
+  margin: 0 3px;
+}
+.ml-test-errs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.ml-test-errs small {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 .ml-num input {
   flex: 1;
   min-width: 0;

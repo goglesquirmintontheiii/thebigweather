@@ -69,6 +69,42 @@ Update the server (`./start.sh` on Linux, `start.cmd` on Windows) and the app.
 - [ ] **Map:** detections show with an icon per type, a probability ring, a cell box and a motion arrow. High-probability ones pulse. The popup lists the top contributing features.
 - [ ] **Rules:** a new condition, "Detection model hit nearby", in Notification rules.
 
+### More model types (added after your request)
+- [ ] **Storm intensification:** flags storms likely to grow (VIL / reflectivity jump) within a set lead (default 30 min). Learned from how tracked cells actually changed in past radar loops, optionally plus storm reports.
+- [ ] **Instability:** a probability map of where strong storms (reports or ≥ 50 dBZ) are likely in the next few hours.
+- [ ] **Temperature / precipitation / storm forecasts:** when run, they become weather layers (layer menu → My models). Forecast leads play on the timeline.
+  - Temperature is checked against URMA/RTMA analyses.
+  - Precipitation is checked against MRMS QPE.
+  - Storms: probability of ≥ 40 dBZ or lightning, or maximum dBZ.
+  - The thorough temperature preset adds P10/P90 range layers.
+- [ ] **Tropical development:** chance of a tropical cyclone forming within 2, 5 or 7 days. Shown as a map plus outlined areas with %.
+- [ ] **Outlooks:** SPC-style categories (TSTM → HIGH) for any severe, tornado, wind or hail.
+  - Presets for Day 1, Day 2, Day 3 and Day 4–7, or a custom date range.
+  - Show it with Run → "Show outlook". The map card switches day and hazard.
+- [ ] **Flood:** areas likely to flood in the next hours, from current rainfall (MRMS QPE, FLASH), soil moisture and forecast rain.
+- [ ] **More training data:**
+  - **Satellite (GOES):** IR cloud-top temperature, cold-cloud fraction, cloud-top cooling, water vapour bands, visible.
+  - **Lightning (GLM):** flash rates and lightning jumps.
+  - **Analyses:** HRRR analysis fields, and GFS/HRRR forecast fields over the target window.
+  - **More fields:** many more MRMS fields, METAR tendencies, Drought Monitor.
+  - "Use every source" in the Custom form turns them all on.
+- [ ] **Probability gate:** a two-handle bar (bottom-right) for model detections and outlooks.
+  - Cut off low and/or high confidence; the map updates as you drag.
+  - Scrub mode sweeps a fixed window through the probabilities, and ▶ sweeps it automatically.
+  - Prediction weather layers use the normal legend gate.
+- [ ] **Run options per model:**
+  - threshold, min/max probability or value, persistence
+  - cell filters, region (states or a box), leads
+  - valid period / day, grid resolution, smoothing
+  - ensemble, cadence, max detections, notify
+  - outlook category levels
+  - plus how many radars to run at once
+- [ ] **Retrain / Train further** (model detail):
+  - Retrain rebuilds the training data from the model's settings (which you can change) and trains from scratch.
+  - Train further adds trees or epochs on more data.
+  - Either one can replace the model (new version) or save a new one.
+  - Works after restarts and for imported models. A Versions table shows each version's scores.
+
 ### Other Phase 7 items
 - [ ] **Power outages (Layers → Hazards):**
   - Counties coloured by % of customers out, plus outage points.
