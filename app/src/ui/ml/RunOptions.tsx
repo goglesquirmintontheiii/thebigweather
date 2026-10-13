@@ -37,6 +37,7 @@ export const DEFAULT_RUN_PARAMS: OptDef[] = [
   { id: "grid_res_deg", name: "Grid resolution", type: "choice", choices: [[0.05, "0.05°"], [0.1, "0.1°"], [0.25, "0.25°"], [0.5, "0.5°"], [1, "1°"]], help: "Spacing of the prediction grid (finer = slower)", applies_to: GRID, group: "Grid" },
   { id: "smoothing_km", name: "Smoothing", type: "float", min: 0, max: 300, step: 5, unit: "km", help: "Gaussian smoothing of the probability field before drawing areas / outlooks", applies_to: GRID, group: "Grid" },
   { id: "ensemble", name: "Ensemble", type: "choice", choices: [["", "Off"], ["gefs", "GEFS members"], ["time_lagged", "Time-lagged runs"], ["both", "Both"]], help: "Run the model on several inputs and average (smoother, more reliable probabilities)", applies_to: GRID, group: "Grid" },
+  { id: "frame_step_h", name: "Frame step", type: "choice", choices: [[1, "1 h"], [2, "2 h"], [3, "3 h"], [6, "6 h"], [12, "12 h"], [24, "24 h"]], default: 1, help: "Time between the frames the model produces (they animate on the timeline)", applies_to: ["grid"], group: "Grid" }, // models 0.8
   { id: "cadence_min", name: "Run every", type: "int", min: 5, max: 1440, step: 5, unit: "min", help: "How often the model runs (grid / outlook models)", applies_to: GRID, group: "Grid" },
   { id: "notify", name: "Notify", type: "bool", help: "Desktop / push notification for new high-probability detections", applies_to: [], group: "Detections" },
 ];
@@ -188,6 +189,7 @@ const GROUP: Record<string, string> = {
   persistence: "Detections", min_cell_dbz: "Detections", min_area_km2: "Detections", max_range_km: "Detections", max_detections: "Detections", notify: "Detections",
   region: "Where & when", leads: "Where & when", valid_from: "Where & when", valid_to: "Where & when", day: "Where & when", cadence_min: "Where & when",
   grid_res_deg: "Grid", smoothing_km: "Grid", ensemble: "Grid", quantiles: "Grid", outlook_levels: "Outlook",
+  frame_step_h: "Grid", // models 0.8
 };
 export function paramsFor(m: Model): OptDef[] {
   const all = catalog.value?.run_params?.length ? catalog.value.run_params : DEFAULT_RUN_PARAMS;
@@ -204,6 +206,8 @@ export function paramsFor(m: Model): OptDef[] {
     if (!p.applies_to?.length) return true;
     return p.applies_to.some((a) => tags.has(a));
   });
+  // models 0.8: flood / precip / forecast models produce frames: the step is always offered (default 1 h)
+  if (out === "grid" && !list.some((p) => p.id === "frame_step_h")) list.push(DEFAULT_RUN_PARAMS.find((p) => p.id === "frame_step_h")!);
   return list.map((p) => (p.group ? p : { ...p, group: GROUP[p.id] ?? "Options" }));
 }
 

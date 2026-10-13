@@ -75,9 +75,77 @@ const upTxt = (sec: number) => {
 type PanelKey = "stats" | "appstats";
 
 /** draggable glass box whose position lives in settings.panels[key] */
-function Floater({ pk, title, icon, onClose, children, w = 220, cls = "", extra }: { pk: PanelKey; title: ComponentChildren; icon: ComponentChildren; onClose: () => void; children: ComponentChildren; w?: number; cls?: string; extra?: ComponentChildren }) {
+/* radio/dash 0.8: resizable stats panels — the corner handle scales the whole panel (content
+ * included); the scale is remembered per panel (and per mini/full variant). */
+const SCALE_KEY = "tbw.stats.scale";
+const scales = signal<Record<string, number>>((() => {
+  try {
+    return JSON.parse(localStorage.getItem(SCALE_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+})());
+function setScale(k: string, v: number | null) {
+  const n = { ...scales.value };
+  if (v == null) delete n[k];
+  else n[k] = Math.round(v * 100) / 100;
+  scales.value = n;
+  try {
+    localStorage.setItem(SCALE_KEY, JSON.stringify(n));
+  } catch {
+    /* ignore */
+  }
+}
+const MIN_SCALE = 0.75;
+const MAX_SCALE = 2.5;
+
+function Floater({ pk, title, icon, onClose, children, w: w0 = 220, cls = "", extra }: { pk: PanelKey; title: ComponentChildren; icon: ComponentChildren; onClose: () => void; children: ComponentChildren; w?: number; cls?: string; extra?: ComponentChildren }) {
   const p = settings.value.panels[pk] ?? { open: true, x: -1, y: 300 };
   const ref = useRef<HTMLDivElement>(null);
+  const sk = `${pk}${cls.includes("stats-mini") ? ".mini" : cls.includes("stats-dense") ? ".dense" : ""}`;
+  const sc = scales.value[sk] ?? 1;
+  const w = Math.round(w0 * sc);
+  const onResize = (e: PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const el = ref.current!;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const h0 = el.offsetHeight;
+    const s0 = sc;
+    let last = s0;
+    (el.firstElementChild as HTMLElement).style.width = `${w0}px`;
+    const move = (ev: PointerEvent) => {
+      // drag along the panel's diagonal: project the pointer move onto it (short, wide panels
+      // scale mostly with horizontal moves)
+      const W = w0 * s0;
+      const f = 1 + ((ev.clientX - x0) * W + (ev.clientY - y0) * h0) / (W * W + h0 * h0);
+      last = Math.max(MIN_SCALE, Math.min(MAX_SCALE, s0 * f));
+      const inner = el.firstElementChild as HTMLElement;
+      el.style.width = `${w0 * last}px`;
+      el.style.height = `${inner.offsetHeight * last}px`;
+      inner.style.transform = `scale(${last})`;
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setScale(sk, Math.abs(last - 1) < 0.03 ? null : last);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  // the scaled content doesn't take layout space: size the frame from the content's own height
+  useEffect(() => {
+    const el = ref.current;
+    const inner = el?.firstElementChild as HTMLElement | null;
+    if (!el || !inner) return;
+    const fit = () => (el.style.height = sc === 1 ? "" : `${inner.offsetHeight * sc}px`);
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [sc]);
+  /* end radio/dash 0.8 */
   const setPos = (x: number, y: number) => update((st) => (st.panels[pk] = { ...(st.panels[pk] ?? { open: true }), x, y } as any));
   useEffect(() => {
     const fix = () => {
@@ -108,17 +176,21 @@ function Floater({ pk, title, icon, onClose, children, w = 220, cls = "", extra 
     window.addEventListener("pointerup", up);
   };
   return (
-    <div ref={ref} class={`stats glass stats-${pk} ${cls}`} style={{ left: `${x}px`, top: `${y}px`, width: `${w}px` }}>
-      <div class="stats-head" onPointerDown={onDown as any}>
-        <GripVertical size={12} />
-        {icon}
-        <span>{title}</span>
-        {extra}
-        <button class="icon-btn" onPointerDown={(e) => e.stopPropagation()} onClick={onClose}>
-          <X size={12} />
-        </button>
+    <div ref={ref} class={`stats glass stats-${pk} ${cls} ${sc !== 1 ? "scaled" : ""}`} style={{ left: `${x}px`, top: `${y}px`, width: `${w}px` }}>
+      <div class="stats-zoom" style={sc === 1 ? undefined : { width: `${w0}px`, transform: `scale(${sc})` }}>
+        <div class="stats-head" onPointerDown={onDown as any}>
+          <GripVertical size={12} />
+          {icon}
+          <span>{title}</span>
+          {extra}
+          <button class="icon-btn" onPointerDown={(e) => e.stopPropagation()} onClick={onClose}>
+            <X size={12} />
+          </button>
+        </div>
+        {children}
       </div>
-      {children}
+      {/* radio/dash 0.8: resize handle (double-click: original size) */}
+      <span class="stats-resize" role="separator" aria-label="Resize panel" title={`Drag to resize (${Math.round(sc * 100)}%) · double-click to reset`} onPointerDown={onResize as any} onDblClick={() => setScale(sk, null)} />
     </div>
   );
 }

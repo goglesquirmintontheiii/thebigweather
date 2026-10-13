@@ -172,6 +172,30 @@ pub struct RadarService {
     pub l3_catalog: Vec<serde_json::Value>,
     /// European ODIM_H5 single-site volumes
     pub odim: Arc<super::odim_src::OdimService>,
+    /// buckets answering 403 / 503: skipped until the instant (backoff)
+    denied: Mutex<std::collections::HashMap<String, std::time::Instant>>,
+    /// day listings: (site/day) → (fetched, entries)
+    list_cache: Mutex<lru::LruCache<String, (std::time::Instant, Arc<Vec<VolEntry>>)>>,
+}
+
+/// Current buckets first: NOAA moved the Level II archive to `unidata-nexrad-level2` (the
+/// legacy `noaa-nexrad-level2` stopped updating on 2025-09-01 and answers 403 to listings).
+fn order_buckets(mut v: Vec<String>) -> Vec<String> {
+    v.sort_by_key(|b| if b.starts_with("unidata-") { 0 } else if b.starts_with("noaa-") { 2 } else { 1 });
+    v.dedup();
+    v
+}
+
+/// Backoff for a failed S3 request: 403 (bucket gone / private) 1 h, 503 / throttling 2 min.
+fn backoff_for(e: &anyhow::Error) -> Option<std::time::Duration> {
+    let m = format!("{e:#}");
+    if m.contains("HTTP 403") {
+        Some(std::time::Duration::from_secs(3600))
+    } else if m.contains("HTTP 503") || m.contains("HTTP 429") || m.contains("SlowDown") {
+        Some(std::time::Duration::from_secs(120))
+    } else {
+        None
+    }
 }
 
 type OdimFiles = (super::odim_src::Src, String, Vec<super::odim_src::FileRef>);
@@ -227,8 +251,8 @@ impl RadarService {
         Self {
             odim,
             http,
-            l2_buckets: cfg.level2_buckets.clone(),
-            l3_buckets: cfg.level3_buckets.clone(),
+            l2_buckets: order_buckets(cfg.level2_buckets.clone()),
+            l3_buckets: order_buckets(cfg.level3_buckets.clone()),
             l2_bucket_idx: AtomicUsize::new(0),
             l3_bucket_idx: AtomicUsize::new(0),
             tgftp_base: cfg.tgftp_base.clone(),
@@ -243,6 +267,8 @@ impl RadarService {
             decode: crate::caches::Limiter::new(threads),
             health,
             l3_catalog,
+            denied: Mutex::new(std::collections::HashMap::new()),
+            list_cache: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(4096).unwrap())),
         }
         .with_budget(memory_mb)
     }
@@ -345,25 +371,62 @@ impl RadarService {
         out
     }
 
-    /// Volumes for a site on a UTC day.
+    /// Is a bucket in its backoff window?
+    fn is_denied(&self, bucket: &str) -> bool {
+        let mut g = self.denied.lock();
+        match g.get(bucket) {
+            Some(t) if *t > std::time::Instant::now() => true,
+            Some(_) => {
+                g.remove(bucket);
+                false
+            }
+            None => false,
+        }
+    }
+
+    fn note_error(&self, bucket: &str, e: &anyhow::Error) {
+        if let Some(d) = backoff_for(e) {
+            let first = self.denied.lock().insert(bucket.to_string(), std::time::Instant::now() + d).is_none();
+            if first {
+                tracing::info!("radar: s3://{bucket} answered {e:#}; skipping it for {} s", d.as_secs());
+            }
+        }
+    }
+
+    /// Volumes for a site on a UTC day. Listings are cached (past days for a day, the last two
+    /// days for 45 s); buckets answering 403 / 503 back off instead of being retried on every call.
     pub async fn list_day(&self, site: &str, y: i32, m: u32, d: u32) -> Result<Vec<VolEntry>> {
         let site = site.to_ascii_uppercase();
+        let ck = format!("{site}/{y:04}{m:02}{d:02}");
+        let day = chrono::NaiveDate::from_ymd_opt(y, m, d).ok_or_else(|| anyhow!("bad date"))?;
+        let recent = Utc::now().date_naive() - day <= chrono::Duration::days(1);
+        let ttl = std::time::Duration::from_secs(if recent { 45 } else { 86_400 });
+        if let Some((t, v)) = self.list_cache.lock().get(&ck) {
+            if t.elapsed() < ttl {
+                return Ok((**v).clone());
+            }
+        }
         let prefix = format!("{y:04}/{m:02}/{d:02}/{site}/");
         let mut out = self.local_entries(&site, Some((y, m, d)));
         let n = self.l2_buckets.len();
-        let start = self.l2_bucket_idx.load(Ordering::Relaxed);
+        let start = self.l2_bucket_idx.load(Ordering::Relaxed).min(n.saturating_sub(1));
         let mut last_err = None;
+        let mut answered = false;
+        let all_denied = self.l2_buckets.iter().all(|b| self.is_denied(b));
         for i in 0..n {
             let bi = (start + i) % n;
             let bucket = &self.l2_buckets[bi];
+            if !all_denied && self.is_denied(bucket) {
+                continue;
+            }
             match s3::list(&self.http, bucket, &prefix, None, None, 5).await {
                 Ok(l) => {
+                    answered = true;
                     if l.objects.is_empty() && i + 1 < n {
                         // maybe the other bucket has this date
                         continue;
                     }
                     self.l2_bucket_idx.store(bi, Ordering::Relaxed);
-                    self.health.ok("nexrad-l2", "NEXRAD Level II archive", format!("s3://{bucket}"));
                     for o in l.objects {
                         if o.key.ends_with("_MDM") || o.key.ends_with(".tar") {
                             continue;
@@ -372,13 +435,17 @@ impl RadarService {
                             out.push(VolEntry { key: format!("aws:{bucket}/{}", o.key), time: t, size: o.size, source: "aws" });
                         }
                     }
-                    last_err = None;
                     break;
                 }
-                Err(e) => last_err = Some(e),
+                Err(e) => {
+                    self.note_error(bucket, &e);
+                    last_err = Some(e);
+                }
             }
         }
-        if let Some(e) = last_err {
+        if answered {
+            self.health.ok("nexrad-l2", "NEXRAD Level II archive", format!("s3://{}", self.l2_buckets[self.l2_bucket_idx.load(Ordering::Relaxed).min(n.saturating_sub(1))]));
+        } else if let Some(e) = last_err {
             self.health.err("nexrad-l2", "NEXRAD Level II archive", &e);
             if out.is_empty() {
                 return Err(e);
@@ -386,7 +453,21 @@ impl RadarService {
         }
         out.sort_by_key(|e| e.time);
         out.dedup_by_key(|e| e.time);
+        if answered {
+            self.list_cache.lock().put(ck, (std::time::Instant::now(), Arc::new(out.clone())));
+        }
         Ok(out)
+    }
+
+    /// Drop the cached listing of a site's recent days (recordings poll for new volumes).
+    pub fn forget_recent_listing(&self, site: &str) {
+        let site = site.to_ascii_uppercase();
+        let now = Utc::now();
+        let mut g = self.list_cache.lock();
+        for back in 0..2 {
+            let d = now - chrono::Duration::days(back);
+            g.pop(&format!("{site}/{:04}{:02}{:02}", d.year(), d.month(), d.day()));
+        }
     }
 
     /// Most recent `n` volumes (looks back up to 2 days).
@@ -422,6 +503,7 @@ impl RadarService {
             return Ok(Bytes::from(b));
         }
         let b = s3::get(&self.http, bucket, key).await?;
+        crate::ml::jobs::add_net(b.len() as u64);
         let tmp = path.with_extension("part");
         if tokio::fs::write(&tmp, &b).await.is_ok() {
             let _ = tokio::fs::rename(&tmp, &path).await;
@@ -610,9 +692,13 @@ impl RadarService {
         let nb = self.l3_buckets.len();
         let start = self.l3_bucket_idx.load(Ordering::Relaxed);
         let mut last_err = None;
+        let all_denied = self.l3_buckets.iter().all(|b| self.is_denied(b));
         'outer: for i in 0..nb {
             let bi = (start + i) % nb;
             let bucket = &self.l3_buckets[bi];
+            if !all_denied && self.is_denied(bucket) {
+                continue;
+            }
             all.clear();
             for back in 0..2 {
                 let d = now - chrono::Duration::days(back);
@@ -633,6 +719,7 @@ impl RadarService {
                         }
                     }
                     Err(e) => {
+                        self.note_error(bucket, &e);
                         last_err = Some(e);
                         continue 'outer;
                     }
@@ -749,6 +836,19 @@ fn evict(dir: &std::path::Path, cap: u64) {
         if std::fs::remove_file(&p).is_ok() {
             total -= len;
         }
+    }
+}
+
+#[cfg(test)]
+mod bucket_tests {
+    use super::*;
+    #[test]
+    fn current_buckets_first_and_backoff() {
+        assert_eq!(order_buckets(vec!["noaa-nexrad-level2".into(), "unidata-nexrad-level2".into()]), vec!["unidata-nexrad-level2", "noaa-nexrad-level2"]);
+        assert_eq!(order_buckets(vec!["my-mirror".into(), "noaa-nexrad-level2".into()]), vec!["my-mirror", "noaa-nexrad-level2"]);
+        assert!(backoff_for(&anyhow!("S3 list noaa-nexrad-level2.s3.amazonaws.com: HTTP 403 Forbidden")).unwrap().as_secs() >= 3600);
+        assert!(backoff_for(&anyhow!("S3 list x: HTTP 503 Service Unavailable")).is_some());
+        assert!(backoff_for(&anyhow!("timeout")).is_none());
     }
 }
 

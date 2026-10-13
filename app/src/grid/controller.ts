@@ -8,6 +8,7 @@ import { frameIndex, playing, frameCount, setFrameReady } from "../anim";
 import { parseRaster, type Raster } from "./raster";
 import { GridLayer } from "./GridLayer";
 import { gridDef, gridTable } from "../weather";
+import { gridExtraQ, ensThr } from "../weather"; // data 0.8: ensemble threshold
 import { tableById } from "../radar/controller";
 import type { Map as MLMap } from "maplibre-gl";
 
@@ -118,7 +119,7 @@ async function fetchRaster(key: string, v: View): Promise<void> {
   if (existing) return existing;
   const p = (async () => {
     try {
-      const buf = await api.bin(`/api/grid/render?key=${encodeURIComponent(key)}&bbox=${v.bbox.join(",")}&w=${v.w}&h=${v.h}&sv=${lastHello.value?.version ?? ""}`);
+      const buf = await api.bin(`/api/grid/render?key=${encodeURIComponent(key)}&bbox=${v.bbox.join(",")}&w=${v.w}&h=${v.h}&sv=${lastHello.value?.version ?? ""}${gridExtraQ() /* data 0.8 */}`);
       const r = parseRaster(buf, key);
       storeRaster(key, r, v.sig);
       if (view?.sig === v.sig) {
@@ -202,6 +203,7 @@ export async function loadGridFrames(keepIndex = false) {
     const q = new URLSearchParams({ layer: w.id, n: String(obs0 ? framesToRequest(settings.value.grid.frames, cadence(w.id)) : settings.value.grid.frames) });
     if (w.run) q.set("run", w.run);
     if (w.storm) q.set("storm", w.storm);
+    if (ensThr(w) != null) q.set("thr", String(ensThr(w))); // data 0.8
     if (obs0 && historyEnd.value) q.set("end", String(historyEnd.value));
     const res = await api.get(`/api/grid/frames?${q}`);
     // history window longer than one request: page back with earlier `end`s
@@ -278,7 +280,7 @@ effect(() => {
   const h = histRange.value;
   void api.base;
   const hs = settings.value.hist; // history 0.6: loop settings when live, history's frame step / max when not
-  const sig = w.kind === "grid" ? `${w.id}|${w.run ?? ""}|${w.storm ?? ""}|${h ? `${h.start}-${h.end}|${hs.step}|${hs.maxFrames}` : `${n}|${a.mode}|${a.minutes}|${settings.value.saver}`}` : ""; // saver caps frames
+  const sig = w.kind === "grid" ? `${w.id}${ensThr(w) != null ? `#${ensThr(w)}` /* data 0.8 */ : ""}|${w.run ?? ""}|${w.storm ?? ""}|${h ? `${h.start}-${h.end}|${hs.step}|${hs.maxFrames}` : `${n}|${a.mode}|${a.minutes}|${settings.value.saver}`}` : ""; // saver caps frames
   if (sig === lastSig) return;
   const layerChanged = lastSig.split("|")[0] !== sig.split("|")[0];
   lastSig = sig;

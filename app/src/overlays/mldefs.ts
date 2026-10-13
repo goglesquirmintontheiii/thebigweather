@@ -11,10 +11,11 @@ import { OVERLAYS, overlayDef, type OverlayDef, type OptionDef, type Popup } fro
 import { setData, isOn, popup } from "./manager";
 import { settings, update } from "../store";
 import { mapRef } from "../map/mapview";
-import { destination, fmtTime, fmtAge, compass } from "../util";
+import { destination, fmtTime, fmtAge, compass, bearing } from "../util";
 import { detections, startDetections, ensureModels, detMaxAgeMin, models, catalog, loadRun, runState, mlOpen, mlTab, selModel, detEnd } from "../ml/client";
 import { gated } from "../ml/probgate"; // models 0.7: probability gate
-import { tmeta, LEVEL_COLOR, LEVEL_NAME, TARGETS } from "../ml/targets";
+import { tmeta, LEVEL_COLOR, LEVEL_NAME, TARGETS, strengthColor } from "../ml/targets";
+import { stoppedModels, detTime, detsAt, timeSync, timeDets } from "../ml/m8"; // models 0.8
 import type { Detection } from "../ml/types";
 
 const ID = "mldetect";
@@ -24,8 +25,15 @@ const POLY: ExpressionSpecification = ["==", ["geometry-type"], "Polygon"];
 const LINE: ExpressionSpecification = ["==", ["geometry-type"], "LineString"];
 const BOX: ExpressionSpecification = ["all", POLY, ["==", ["get", "kind"], "box"]];
 const AREA: ExpressionSpecification = ["all", POLY, ["==", ["get", "kind"], "area"]];
+/* models 0.8: storm-track cone / path / lead-time ticks */
+const CONE: ExpressionSpecification = ["all", POLY, ["==", ["get", "kind"], "cone"]];
+const TRK: ExpressionSpecification = ["all", LINE, ["==", ["get", "kind"], "trk"]];
+const MVL: ExpressionSpecification = ["all", LINE, ["!=", ["get", "kind"], "trk"]];
+const TICK: ExpressionSpecification = ["all", POINT, ["==", ["get", "kind"], "tick"]];
 /** models 0.7: probabilities of the features currently drawn (before the gate), for the gate's counts */
 export const detProbs = signal<number[]>([]);
+/** models 0.8: the same per model (for the per-model gates) */
+export const detProbsBy = signal<{ model_id: string; name: string; target: string; probs: number[] }[]>([]);
 /** side-by-side slots when several models flag the same cell */
 const OFF = (px: number): ExpressionSpecification => ["match", ["get", "slot"], -1, ["literal", [-px, 0]], 1, ["literal", [px, 0]], ["literal", [0, 0]]];
 const LVL: ExpressionSpecification = ["match", ["get", "level"], "high", LEVEL_COLOR.high, "med", LEVEL_COLOR.med, LEVEL_COLOR.low];
@@ -60,6 +68,8 @@ const def: OverlayDef = {
       { key: "age", label: "Show last", choices: [["15", "15 min"], ["30", "30 min"], ["60", "1 hour"], ["120", "2 hours"], ["360", "6 hours"]], def: "60" },
       { key: "pulse", label: "Pulse high", choices: [["1", "On"], ["0", "Off"]], def: "1" },
       { key: "areas", label: "Forecast areas", choices: [["1", "Show"], ["0", "Hide"]], def: "1" },
+      { key: "sync", label: "Follow the timeline", choices: [["1", "On (animate)"], ["0", "Off (newest)"]], def: "1" }, // models 0.8
+      { key: "tracks", label: "Storm tracks", choices: [["1", "Track + cone"], ["2", "Track only"], ["0", "Hide"]], def: "1" },
     ];
   },
   style: { opacity: 1, size: 1, labels: true },
@@ -67,11 +77,18 @@ const def: OverlayDef = {
     // models 0.7: grid models' areas (flood / tropical / instability), coloured by probability
     { id: `${s}-area`, type: "fill", source: s, filter: AREA, layout: { "fill-sort-key": ["get", "prob"] }, paint: { "fill-color": ["get", "color"], "fill-opacity": ["*", st.opacity, ["interpolate", ["linear"], ["get", "prob"], 0, 0.08, 1, 0.38]] } } as LayerSpecification,
     { id: `${s}-arealine`, type: "line", source: s, filter: AREA, layout: { "line-join": "round" }, paint: { "line-color": LVL, "line-width": ["match", ["get", "level"], "high", 2.6, "med", 2, 1.4], "line-opacity": st.opacity, "line-dasharray": ["case", ["==", ["get", "level"], "low"], ["literal", [3, 2]], ["literal", [1, 0]]] } } as LayerSpecification,
+    // models 0.8: storm-track cone and path coloured by predicted strength
+    { id: `${s}-cone`, type: "fill", source: s, filter: CONE, paint: { "fill-color": ["get", "color"], "fill-opacity": 0.16 * st.opacity } } as LayerSpecification,
+    { id: `${s}-coneline`, type: "line", source: s, filter: CONE, layout: { "line-join": "round" }, paint: { "line-color": ["get", "color"], "line-width": 1.2, "line-opacity": 0.75 * st.opacity, "line-dasharray": [3, 2] } } as LayerSpecification,
+    { id: `${s}-trkcase`, type: "line", source: s, filter: TRK, layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#000", "line-width": 5.5 * st.size, "line-opacity": 0.6 * st.opacity } } as LayerSpecification,
+    { id: `${s}-trk`, type: "line", source: s, filter: TRK, layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": ["get", "scol"], "line-width": 3 * st.size, "line-opacity": st.opacity } } as LayerSpecification,
+    { id: `${s}-tick`, type: "circle", source: s, filter: TICK, paint: { "circle-radius": 4.5 * st.size, "circle-color": ["get", "scol"], "circle-stroke-color": "#000", "circle-stroke-width": 1.5, "circle-opacity": st.opacity } } as LayerSpecification,
+    { id: `${s}-ticklbl`, type: "symbol", source: s, filter: TICK, minzoom: 5.5, layout: { "text-field": ["get", "tl"], "text-font": bold, "text-size": 10.5, "text-anchor": "left", "text-offset": [0.9, 0], "text-optional": true, "text-allow-overlap": false }, paint: { "text-color": ["get", "scol"], "text-halo-color": "#000", "text-halo-width": 1.5, "text-opacity": st.opacity } } as LayerSpecification,
     { id: `${s}-box`, type: "fill", source: s, filter: BOX, paint: { "fill-color": ["get", "color"], "fill-opacity": 0.1 * st.opacity } } as LayerSpecification,
     { id: `${s}-boxcase`, type: "line", source: s, filter: BOX, layout: { "line-join": "round" }, paint: { "line-color": "#000", "line-width": 4 * st.size, "line-opacity": 0.55 * st.opacity, "line-blur": 1 } } as LayerSpecification,
     { id: `${s}-boxline`, type: "line", source: s, filter: BOX, layout: { "line-join": "round" }, paint: { "line-color": LVL, "line-width": ["match", ["get", "level"], "high", 2.4, "med", 2, 1.5], "line-opacity": st.opacity, "line-dasharray": ["case", ["==", ["get", "level"], "low"], ["literal", [2, 1.5]], ["literal", [1, 0]]] } } as LayerSpecification,
-    { id: `${s}-mvcase`, type: "line", source: s, filter: LINE, minzoom: 6, layout: { "line-cap": "round" }, paint: { "line-color": "#000", "line-width": 4 * st.size, "line-opacity": 0.6 * st.opacity } } as LayerSpecification,
-    { id: `${s}-mv`, type: "line", source: s, filter: LINE, minzoom: 6, layout: { "line-cap": "round" }, paint: { "line-color": "#fff", "line-width": 1.8 * st.size, "line-opacity": 0.9 * st.opacity, "line-dasharray": [2, 1.4] } } as LayerSpecification,
+    { id: `${s}-mvcase`, type: "line", source: s, filter: MVL, minzoom: 6, layout: { "line-cap": "round" }, paint: { "line-color": "#000", "line-width": 4 * st.size, "line-opacity": 0.6 * st.opacity } } as LayerSpecification,
+    { id: `${s}-mv`, type: "line", source: s, filter: MVL, minzoom: 6, layout: { "line-cap": "round" }, paint: { "line-color": "#fff", "line-width": 1.8 * st.size, "line-opacity": 0.9 * st.opacity, "line-dasharray": [2, 1.4] } } as LayerSpecification,
     { id: `${s}-mvhead`, type: "symbol", source: s, filter: ["all", POINT, ["==", ["get", "kind"], "head"]], minzoom: 6, layout: { "icon-image": "ml-arrow", "icon-rotate": ["get", "dir"], "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-size": st.size }, paint: { "icon-opacity": st.opacity } } as LayerSpecification,
     // animated ring for "high" (paint driven by the pulse loop below)
     { id: `${s}-pulse`, type: "circle", source: s, filter: ["all", POINT, ["==", ["get", "kind"], "det"], ["==", ["get", "level"], "high"]], paint: { "circle-radius": 18 * st.size, "circle-color": "rgba(0,0,0,0)", "circle-stroke-color": LEVEL_COLOR.high, "circle-stroke-width": 2, "circle-stroke-opacity": 0 } } as LayerSpecification,
@@ -131,6 +148,14 @@ const def: OverlayDef = {
       rows.splice(2, 1);
       if (p.vf) rows.push(["Valid", `${fmtTime(+p.vf, true)}${p.vt ? ` → ${fmtTime(+p.vt, true)}` : ""}`]);
     }
+    // models 0.8: storm track forecast
+    let trk: any[] = [];
+    try {
+      trk = JSON.parse(p._trk || "[]");
+    } catch {
+      /* none */
+    }
+    for (const x of trk) rows.push([`+${Math.round(x.lead_min)} min`, `${x.speed_kt != null ? `${Math.round(x.speed_kt)} kt` : ""}${x.strength != null ? ` · ${fmtStr(x.strength, x.strength_units)}` : ""}${x.cone_km ? ` · ±${Math.round(x.cone_km)} km` : ""}`]);
     if (p.mdir !== undefined && p.mdir !== null && p.mdir !== "") rows.push(["Motion", `${compass(+p.mdir)} (${Math.round(+p.mdir)}°) at ${Math.round(+p.mkt)} kt`]);
     for (const f of tf.slice(0, 6)) {
       const [n, u] = featName(f.id);
@@ -144,13 +169,52 @@ const def: OverlayDef = {
       rows,
     };
   },
-  note: "Detections from your detection models (Detection models → Run). Icon = what the model detects; ring = probability (yellow low, orange moderate, red high; the arc fills with the probability); box = the cell outline; arrow = 30-minute motion. High-probability detections pulse.",
+  note: "Detections from your detection models (Detection models → a model → Run). Follows the timeline: scrub or play to see detections at each frame (history mode: Run on this range). Icon = what the model detects; ring = probability (yellow low, orange moderate, red high; the arc fills with the probability); box = the cell outline; arrow = 30-minute motion. High-probability detections pulse.",
 };
 
 // ---------- data ----------
 function opts() {
   const o = settings.value.ovl[ID]?.opts ?? {};
-  return { model: o.model ?? "", target: o.target ?? "", minp: +(o.minp ?? "0") / 100, age: +(o.age ?? "60"), pulse: (o.pulse ?? "1") === "1", areas: (o.areas ?? "1") === "1" };
+  return { model: o.model ?? "", target: o.target ?? "", minp: +(o.minp ?? "0") / 100, age: +(o.age ?? "60"), pulse: (o.pulse ?? "1") === "1", areas: (o.areas ?? "1") === "1", sync: (o.sync ?? "1") === "1", tracks: o.tracks ?? "1" };
+}
+/** models 0.8: "EF2", "62 kt", "55 dBZ", "70%" */
+export function fmtStr(v: number, u?: string): string {
+  const uu = (u ?? "").trim();
+  if (/^ef$/i.test(uu)) return `EF${Math.round(v)}`;
+  if (uu === "%" || /^prob/i.test(uu)) return `${Math.round(v > 1 ? v : v * 100)}%`;
+  return `${Math.abs(v) >= 10 ? Math.round(v) : v.toFixed(1)}${uu ? ` ${uu}` : ""}`;
+}
+/** models 0.8: storm-track features: path segments coloured by strength, the cone, lead-time ticks */
+function trackFeats(d: Detection, props: any, mode: string): any[] {
+  const pts = [{ lead_min: 0, lat: d.lat, lon: d.lon, cone_km: 0, speed_kt: d.motion?.kt, strength: d.track![0]?.strength, strength_units: d.track![0]?.strength_units }, ...d.track!.filter((x) => x.lead_min > 0)];
+  if (pts.length < 2) return [];
+  const out: any[] = [];
+  const base = { prob: d.prob, level: d.level, model_id: d.model_id };
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    out.push({ type: "Feature", geometry: { type: "LineString", coordinates: [[a.lon, a.lat], [b.lon, b.lat]] }, properties: { ...base, kind: "trk", scol: strengthColor(b.strength, b.strength_units) } });
+    if ([15, 30, 45, 60].includes(Math.round(b.lead_min)) || i === pts.length - 1) {
+      const tl = `+${Math.round(b.lead_min)}′${b.speed_kt != null ? ` ${Math.round(b.speed_kt)} kt` : ""}${b.strength != null ? ` · ${fmtStr(b.strength, b.strength_units)}` : ""}`;
+      out.push({ type: "Feature", geometry: { type: "Point", coordinates: [b.lon, b.lat] }, properties: { ...base, kind: "tick", tl, scol: strengthColor(b.strength, b.strength_units) } });
+    }
+  }
+  if (mode === "1" && pts.some((p) => (p.cone_km ?? 0) > 0)) {
+    const L: [number, number][] = [], Rr: [number, number][] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const q = pts[Math.min(i + 1, pts.length - 1)], o = pts[Math.max(i - 1, 0)];
+      const brg = i < pts.length - 1 ? bearing(p.lat, p.lon, q.lat, q.lon) : bearing(o.lat, o.lon, p.lat, p.lon);
+      const r = Math.max(1.5, p.cone_km ?? 0) * 1000;
+      L.push(destination(p.lat, p.lon, brg - 90, r));
+      Rr.push(destination(p.lat, p.lon, brg + 90, r));
+      if (i === pts.length - 1) for (let k = -80; k <= 80; k += 20) L.push(destination(p.lat, p.lon, brg + k, r));
+    }
+    const ring = [...L, ...Rr.reverse()];
+    ring.push(ring[0]);
+    const last = pts[pts.length - 1];
+    out.unshift({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: { ...props, kind: "cone", color: strengthColor(last.strength, last.strength_units) } });
+  }
+  return out;
 }
 let hasHigh = false;
 function build(list: Detection[], all = false) {
@@ -158,8 +222,12 @@ function build(list: Detection[], all = false) {
   const cut = Date.now() - o.age * 60_000;
   const feats: any[] = [];
   hasHigh = false;
+  // models 0.8: hide stopped / disabled models (their test runs still show)
+  const stopped = all ? new Set<string>() : stoppedModels.value;
+  const T = all ? null : detTime.value;
   for (const d of list) {
-    if (!all && (detEnd(d) < cut || d.prob < o.minp || (o.model && d.model_id !== o.model) || (o.target && d.target !== o.target) || (d.kind === "area" && !o.areas))) continue;
+    if (!all && !d.test && !d.hist && stopped.has(`${d.ep}|${d.model_id}`)) continue;
+    if (!all && ((T == null && detEnd(d) < cut) || d.prob < o.minp || (o.model && d.model_id !== o.model) || (o.target && d.target !== o.target) || (d.kind === "area" && !o.areas))) continue;
     const t = tmeta(d.target);
     const props = {
       kind: "det",
@@ -183,15 +251,17 @@ function build(list: Detection[], all = false) {
       vtxt: d.value != null ? `${Math.round(d.value)}${unitOf(d.target)}` : `${Math.round(d.prob * 100)}%`,
       vf: d.valid_from,
       vt: d.valid_to,
+      _trk: d.track?.length ? JSON.stringify(d.track) : undefined, // models 0.8
     };
     if (d.level === "high") hasHigh = true;
     feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [d.lon, d.lat] }, properties: props });
     if (d.poly?.length) feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: d.poly }, properties: { ...props, kind: d.kind === "area" ? "area" : "box" } });
-    if (d.motion && d.motion.kt > 2) {
+    if (d.track?.length && o.tracks !== "0") feats.push(...trackFeats(d, props, o.tracks));
+    else if (d.motion && d.motion.kt > 2) {
       const km = d.motion.kt * 1.852 * 0.5; // 30 minutes
       const end = destination(d.lat, d.lon, d.motion.dir, km * 1000);
-      feats.push({ type: "Feature", geometry: { type: "LineString", coordinates: [[d.lon, d.lat], end] }, properties: { kind: "mv", level: d.level, prob: d.prob } });
-      feats.push({ type: "Feature", geometry: { type: "Point", coordinates: end }, properties: { kind: "head", dir: d.motion.dir, level: d.level, prob: d.prob } });
+      feats.push({ type: "Feature", geometry: { type: "LineString", coordinates: [[d.lon, d.lat], end] }, properties: { kind: "mv", level: d.level, prob: d.prob, model_id: d.model_id } });
+      feats.push({ type: "Feature", geometry: { type: "Point", coordinates: end }, properties: { kind: "head", dir: d.motion.dir, level: d.level, prob: d.prob, model_id: d.model_id } });
     }
   }
   const groups = new Map<string, any[]>();
@@ -244,16 +314,33 @@ effect(() => {
     stopPoll = null;
   }
 });
+let lastSig = "";
 effect(() => {
   void settings.value.ovl[ID];
   detMaxAgeMin.value = Math.max(detMaxAgeMin.value, opts().age);
-  const fc = build(detections.value);
+  timeSync.value = opts().sync; // models 0.8
+  // models 0.8: follow the timeline: detections at the frame time (history runs, the live loop)
+  const T = detTime.value;
+  void timeDets.value;
+  const src = T == null ? detections.value : [...detsAt(T), ...detections.value.filter((d) => d.test)];
+  const sig = T == null ? "" : `${JSON.stringify(settings.value.ovl[ID] ?? {})}|${[...stoppedModels.value].join(",")}|${src.map((d) => d.key).sort().join(",")}`;
+  if (T != null && sig === lastSig && isOn(ID)) return;
+  lastSig = sig;
+  const fc = build(src);
   if (isOn(ID)) setData(ID, fc);
   detProbs.value = fc.features.filter((f: any) => f.properties.kind === "det").map((f: any) => f.properties.prob);
+  const by = new Map<string, { model_id: string; name: string; target: string; probs: number[] }>();
+  for (const f of fc.features as any[]) {
+    if (f.properties.kind !== "det") continue;
+    const id = String(f.properties.model_id);
+    if (!by.has(id)) by.set(id, { model_id: id, name: f.properties.model_name, target: f.properties.target, probs: [] });
+    by.get(id)!.probs.push(f.properties.prob);
+  }
+  detProbsBy.value = [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
   kickPulse();
 });
 // re-filter ageing detections once a minute
-setInterval(() => isOn(ID) && setData(ID, build(detections.value)), 60_000);
+setInterval(() => isOn(ID) && detTime.peek() == null && setData(ID, build(detections.value)), 60_000);
 
 // ---------- pulse (only while there is something to pulse and the window is visible) ----------
 let raf = 0;

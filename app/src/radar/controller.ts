@@ -67,10 +67,25 @@ export const L2_MOMENTS = [
   { id: "CREF", name: "Composite Refl." },
   { id: "ET", name: "Echo Tops" },
   { id: "VIL", name: "VIL" },
+  /* data 0.8: derived moments (server) */
+  { id: "DREF", name: "Refl. change (ΔREF)" },
+  { id: "ZDRCOL", name: "ZDR columns" },
+  { id: "REFQC", name: "QC reflectivity" },
+  { id: "BIO", name: "Bio / clutter mask" },
 ];
 
 /** Products the server computes from the whole volume (one picture per volume, no tilt). */
-export const DERIVED = new Set(["CREF", "ET", "VIL"]);
+export const DERIVED = new Set(["CREF", "ET", "VIL", "ZDRCOL" /* data 0.8 */]);
+/* ---------- data 0.8: per-tilt derived moments (tilt picked by their base moment) + QC filter ---------- */
+export const DERIVED_TILT: Record<string, string> = { DREF: "REF", REFQC: "REF", BIO: "REF" };
+export const P8_MOMENTS = new Set(["DREF", "ZDRCOL", "REFQC", "BIO"]);
+/** moment actually requested + extra query (QC filter turns REF into REFQC with a CC threshold) */
+export function p8Moment(moment: string): { m: string; q: string } {
+  const p = settings.value.p8;
+  if ((moment === "REF" && p?.qc) || moment === "REFQC") return { m: "REFQC", q: `&cc=${(p?.cc ?? 0.85).toFixed(2)}${p?.bio ? "&bio=1" : ""}` };
+  return { m: moment, q: "" };
+}
+/* ---------- end data 0.8 ---------- */
 
 export const sites = signal<Site[]>([]);
 export const l3Products = signal<L3Product[]>([]);
@@ -250,16 +265,17 @@ async function getMeta(key: string, fresh = false): Promise<VolMeta> {
   return m;
 }
 
-async function loadL2Sweep(key: string, moment: string, angle: number, fresh = false): Promise<Sweep | undefined> {
+async function loadL2Sweep(key: string, moment0: string, angle: number, fresh = false): Promise<Sweep | undefined> {
   const meta = await getMeta(key, fresh);
-  const t = DERIVED.has(moment) ? { index: 0 } : pickTilt(meta, moment, angle);
+  const { m: moment, q: p8q } = p8Moment(moment0); // data 0.8
+  const t = DERIVED.has(moment) ? { index: 0 } : pickTilt(meta, DERIVED_TILT[moment] ?? moment, angle);
   if (!t) return undefined;
-  const ck = `${key}|${t.index}|${moment}`;
+  const ck = `${key}|${t.index}|${moment}${p8q}`;
   if (!fresh) {
     const c = sweepCache.get(ck);
     if (c) return c;
   }
-  const buf = await api.bin(`/api/radar/sweep?key=${encodeURIComponent(key)}&tilt=${t.index}&moment=${moment}`);
+  const buf = await api.bin(`/api/radar/sweep?key=${encodeURIComponent(key)}&tilt=${t.index}&moment=${moment}${p8q}`);
   const s = parseSweep(buf, ck);
   if (!key.startsWith("live:")) cacheSweep(ck, s);
   return s;
@@ -570,7 +586,7 @@ effect(() => {
   const a = settings.value.anim;
   const h = histRange.value;
   const hs = settings.value.hist; // history 0.6: live loop settings only matter when live, history's own when not
-  const sig = `${r.site}|${r.source}|${r.product}|${r.tiltAngle}|${h ? "" : r.frames}|${r.live}|${pinned.value?.map((p) => p.key).join(",") ?? ""}|${settings.value.weather.kind === "radar"}|${h ? `${h.start}-${h.end}|${hs.step}|${hs.maxFrames}` : `${a.mode}|${a.minutes}|${settings.value.saver}`}`;
+  const sig = `${r.site}|${r.source}|${r.product}${r.source === "L2" ? p8Moment(r.product).q /* data 0.8 */ : ""}|${r.tiltAngle}|${h ? "" : r.frames}|${r.live}|${pinned.value?.map((p) => p.key).join(",") ?? ""}|${settings.value.weather.kind === "radar"}|${h ? `${h.start}-${h.end}|${hs.step}|${hs.maxFrames}` : `${a.mode}|${a.minutes}|${settings.value.saver}`}`;
   void api.base;
   if (sig === lastSig) return;
   const siteChanged = lastSig.split("|")[0] !== r.site;

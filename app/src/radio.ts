@@ -7,6 +7,7 @@ import { AudioTap } from "./audio/tap";
 import { SameMonitor } from "./same/monitor";
 import { TranscriptCtl } from "./transcribe/client";
 import { popoutSpec } from "./popout"; // p7
+import { LevelTrack } from "./audio/levels"; // radio/dash 0.8
 
 export interface Stream {
   id: string;
@@ -21,9 +22,9 @@ export const nowPlaying = signal<Stream | null>(null);
 export const radioState = signal<"idle" | "loading" | "playing" | "error">("idle");
 let audio: HTMLAudioElement | null = null;
 
-export function playStream(s: Stream) {
-  // p7: stations last used in the big player open there again
-  if (sizePref(s.url) === "big" && popoutSpec?.kind !== "radio") return openPlayer(s);
+export function playStream(s: Stream, o: { small?: boolean } = {}) {
+  // p7: stations last used in the big player open there again (radio/dash 0.8: not for the scanner)
+  if (!o.small && sizePref(s.url) === "big" && popoutSpec?.kind !== "radio") return openPlayer(s);
   stopStream();
   audio = new Audio();
   audio.preload = "none";
@@ -148,6 +149,11 @@ export class LivePlayer {
   private tapP: Promise<AudioTap | null> | null = null;
   readonly same: SameMonitor;
   readonly tx: TranscriptCtl;
+  /** radio/dash 0.8: per-0.25 s peak/RMS for the waveform seek bar and the live meter */
+  readonly levels = new LevelTrack();
+  private levelsUnsub: (() => void) | null = null;
+  /** radio/dash 0.8: headless (scanner fallback decoders): never auto-tap for levels */
+  headless = false;
 
   /** p7: taking over from the simple player: stay silent until our audio plays, then stop it */
   private handing = false;
@@ -175,7 +181,10 @@ export class LivePlayer {
     this.tx = new TranscriptCtl(label, () => this.ensureTap());
     this.audio.preload = "auto";
     this.audio.volume = settings.value.radio.volume;
-    this.audio.onplaying = () => this.set({ status: "playing" });
+    this.audio.onplaying = () => {
+      this.set({ status: "playing" });
+      setTimeout(() => this.startLevels(), 2500); // radio/dash 0.8 (after an early decoder fallback would have happened)
+    };
     this.audio.onpause = () => !this.stopped && this.set({ status: "paused" });
     this.audio.onwaiting = () => this.set({ status: this.snap.value.status === "reconnecting" ? "reconnecting" : "buffering" });
     this.audio.onerror = () => {
@@ -204,6 +213,7 @@ export class LivePlayer {
     const st = b.length ? b.start(0) : 0;
     const en = b.length ? b.end(b.length - 1) : 0;
     if (this.snap.value.mode === "dvr" && en && a.currentTime < st) a.currentTime = st + 0.1;
+    if (st > 0) this.levels.prune(st); // radio/dash 0.8
     // bitrate from what's buffered (the connect burst would inflate a bytes-per-second figure)
     const kept = this.kept.length ? (this.kept[this.kept.length - 1].t - this.kept[0].t) / 1000 : 0;
     const dur = this.snap.value.mode === "dvr" && en - st > 5 ? en - st : Math.max(1, kept);
@@ -427,6 +437,19 @@ export class LivePlayer {
     else this.audio.muted = m;
   }
 
+  /** radio/dash 0.8: feed the level track from the tap (not for plain streams: no CORS = silence) */
+  startLevels(force = false) {
+    if (this.levelsUnsub || (this.headless && !force) || this.snap.value.mode === "plain" || this.snap.value.mode === null) return;
+    this.levelsUnsub = () => {};
+    this.ensureTap().then((t) => {
+      if (!t || this.stopped) return (this.levelsUnsub = null);
+      this.levelsUnsub = t.subscribe(8000, (x) => {
+        const a = this.audio;
+        if (!a.paused && !a.seeking) this.levels.feed(x, a.currentTime);
+      });
+    });
+  }
+
   ensureTap(): Promise<AudioTap | null> {
     this.tapP ??= AudioTap.create(this.audio).then(
       (t) => {
@@ -513,6 +536,7 @@ export class LivePlayer {
     this.stopped = true;
     this.same.stop();
     this.tx.disable();
+    this.levelsUnsub?.();
     this.tap?.close();
     clearInterval(this.timer);
     this.ac?.abort();

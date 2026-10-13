@@ -12,6 +12,9 @@ import { CenterModal } from "./CenterModal";
 import { NowPlaying } from "./panels/RadioPanel";
 import { Toggle } from "./panels/RadarPanel";
 import { Search, Play, Square, Star, Plus, Trash2, Radio, PictureInPicture2, PanelLeft, MapPin, AudioLines, Loader, Copy, X } from "lucide-preact";
+import { ScanLine } from "lucide-preact"; // radio/dash 0.8
+import { ScannerPanel, ScanRowBtn, scanView } from "./Scanner"; // radio/dash 0.8
+import { scanOn } from "../same/scanner"; // radio/dash 0.8
 
 export const radioOpen = signal(false);
 
@@ -87,6 +90,7 @@ function RadioBody({ popped }: { popped: boolean }) {
         <button class="btn sm ghost rc-pl" title="Open in a player (seek, record)" onClick={(e) => (e.stopPropagation(), openPlayer(s))}>
           <AudioLines size={12} /> Player
         </button>
+        {(scanView.value || scanOn.value) && <ScanRowBtn s={s} /> /* radio/dash 0.8 */}
         {!s.id.startsWith("custom:") && (
           <button class={`icon-btn ${r.favorites.includes(s.id) ? "fav" : ""}`} title="Favorite" onClick={(e) => (e.stopPropagation(), fav(s.id))}>
             <Star size={12} />
@@ -105,7 +109,12 @@ function RadioBody({ popped }: { popped: boolean }) {
       sub={streams ? `${all.length} NOAA Weather Radio streams` : "Loading…"}
       onClose={close}
       actions={
-        !popped && (
+        <>
+          {/* radio/dash 0.8: scanner */}
+          <button class={`btn sm ${scanView.value ? "" : "ghost"} rc-scanbtn ${scanOn.value ? "live" : ""}`} aria-pressed={scanView.value} title="Scanner: monitor several stations for alerts, cycle or hold the audio" onClick={() => (scanView.value = !scanView.value)}>
+            <ScanLine size={13} /> Scanner{scanOn.value ? " · on" : ""}
+          </button>
+          {!popped && (
           <>
             <button class="icon-btn" title="Pop out to its own window" onClick={() => (popout({ kind: "radiocenter", title: "Weather radio", width: 1040, height: 720 }), close())}>
               <PictureInPicture2 size={15} />
@@ -114,10 +123,11 @@ function RadioBody({ popped }: { popped: boolean }) {
               <PanelLeft size={15} />
             </button>
           </>
-        )
+          )}
+        </>
       }
     >
-      <div class="rc-grid">
+      <div class={`rc-grid ${scanView.value ? "scanning" : ""}`}>
         <div class="rc-left">
           <div class="rc-filters">
             <div class="search">
@@ -156,6 +166,11 @@ function RadioBody({ popped }: { popped: boolean }) {
             {streams && !list.length && <div class="muted small">No stations match.</div>}
           </div>
         </div>
+        {scanView.value ? (
+          <div class="rc-right rc-scanner">
+            <ScannerPanel />
+          </div>
+        ) : (
         <div class="rc-right">
           <section class="rc-card">
             {sel ? (
@@ -278,6 +293,7 @@ function RadioBody({ popped }: { popped: boolean }) {
           </section>
           <p class="muted small">Streams by wxradio.org (volunteer-run). Please keep to one or two streams at a time. Expect up to 30 s delay. Not for protection of life or property.</p>
         </div>
+        )}
       </div>
     </CenterModal>
   );

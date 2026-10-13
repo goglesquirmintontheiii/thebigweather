@@ -571,7 +571,7 @@ pub async fn build(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_roo
             let (fetch, cache, tindex, tp, ids) = (fetch.clone(), cache.clone(), tindex.clone(), tp.clone(), &ids);
             let (done, errs) = (&done, &errs);
             async move {
-                if ctl.stopping() {
+                if ctl.stopping() || !ctl.gate().await {
                     return vec![];
                 }
                 let res = case_samples(fetch.as_ref(), spec, &tp, &case, &tindex, ids, &cache).await;
@@ -589,7 +589,7 @@ pub async fn build(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_roo
                 }
             }
         })
-        .buffer_unordered(concurrency.clamp(1, 3))
+        .buffer_unordered(concurrency.max(1))
         .collect()
         .await;
     if ctl.cancelled() {
@@ -638,7 +638,7 @@ pub async fn build(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_roo
         bail!("no samples could be built (all cases failed: is the data archive reachable?)");
     }
     let stats = serde_json::json!({"cases": total, "cases_failed": errs.load(Ordering::Relaxed), "candidates": n_all, "samples": samples.len(), "positives": if reg { serde_json::Value::Null } else { npos.into() }, "label_mean": (label_mean * 1000.0).round() / 1000.0});
-    Ok(Built { ids, samples, stats })
+    Ok(Built { ids, samples, stats, event_times: HashMap::new() })
 }
 
 async fn case_samples(fetch: &dyn Fetch, spec: &TrainSpec, tp: &TParams, case: &Case, events: &TimeIndex, ids: &[String], cache: &CellCache) -> Result<Vec<Sample>> {
@@ -678,7 +678,7 @@ async fn case_samples(fetch: &dyn Fetch, spec: &TrainSpec, tp: &TParams, case: &
                 continue;
             }
             let p = &case.pts[k];
-            out.push(Sample { features: fm.vector(ids), label: lab[k], weight: 1.0, group: p.group.clone(), meta: SampleMeta { lat: p.lat, lon: p.lon, t: case.t, site: None, cell_id: None, event: p.event.clone() } });
+            out.push(Sample { features: fm.vector(ids), label: lab[k], weight: 1.0, group: p.group.clone(), meta: SampleMeta { lat: p.lat, lon: p.lon, t: case.t, site: None, cell_id: None, event: p.event.clone() }, targets: vec![] });
         }
     }
     if out.is_empty() {
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn caps_keep_strata() {
-        let mk = |l: f32| Sample { features: vec![], label: l, weight: 1.0, group: String::new(), meta: SampleMeta::default() };
+        let mk = |l: f32| Sample { features: vec![], label: l, weight: 1.0, group: String::new(), meta: SampleMeta::default(), targets: vec![] };
         let v: Vec<Sample> = (0..1000).map(|i| mk(if i < 50 { 1.0 } else { 0.0 })).collect();
         let c = cap_samples(v, 200, false, 1);
         assert_eq!(c.len(), 200);

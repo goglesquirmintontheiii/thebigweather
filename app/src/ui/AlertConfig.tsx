@@ -2,6 +2,7 @@
 // and flashing for new alerts.
 
 import { useState, useMemo } from "preact/hooks";
+import { VoiceSettings } from "./VoiceSettings"; // radio/dash 0.8
 import { settings, update, type AlertTypeCfg } from "../store";
 import { ALERT_COLORS, alerts } from "../alerts";
 import { ALERT_CATS, alertCategory, alertStyle } from "../alertstyle";
@@ -305,6 +306,7 @@ export function AlertConfig() {
             <input type="checkbox" checked={settings.value.speak} onChange={(e) => update((s) => (s.speak = (e.target as HTMLInputElement).checked))} />
             <i />
           </label>
+          {settings.value.speak && <VoiceSettings /> /* radio/dash 0.8 */}
           <div class="row">
             <span>Volume</span>
             <input type="range" min={0} max={1} step={0.05} value={settings.value.audio.volume} onInput={(e) => update((s) => (s.audio.volume = +(e.target as HTMLInputElement).value))} />

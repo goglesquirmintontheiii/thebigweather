@@ -9,6 +9,7 @@ import { pointInGeometry, compass } from "./util";
 import { nearestCell, nextArrival, echoTrend, forecastAt, spcLevel, SPC_NAME, nearestStrike, fmtMi, fmtTempF, hhmm, dbzWords } from "./wf6data";
 import { cellFlags } from "./overlays/stormcells";
 import { fix } from "./gps";
+import { say, stopTts } from "./tts"; // radio/dash 0.8
 
 export interface Briefing {
   title: string;
@@ -91,22 +92,14 @@ export async function buildBriefing(target: { lat: number; lon: number; name: st
 }
 
 export function speak(b: Briefing) {
-  if (!("speechSynthesis" in window)) return toast("Speech isn't available here", "warn");
-  speechSynthesis.cancel();
-  const cfg = settings.value.wf6.briefing;
-  const voice = cfg.voice ? speechSynthesis.getVoices().find((v) => v.name === cfg.voice) ?? null : null;
-  const text = b.lines.map((l) => l.text).join(" ").replace(/°F/g, " degrees").replace(/ mi\b/g, " miles").replace(/ km\b/g, " kilometers");
-  const u = new SpeechSynthesisUtterance(text);
-  u.voice = voice;
-  u.rate = Math.max(0.5, Math.min(2, cfg.rate || 1));
-  u.volume = settings.value.audio.volume;
-  u.onend = u.onerror = () => briefing.value && (briefing.value = { ...briefing.value, speaking: false });
+  // radio/dash 0.8: system speech when it works, else the bundled offline voice (tts.ts)
+  const text = b.lines.map((l) => l.text).join(" ");
   briefing.value = { ...b, speaking: true };
-  speechSynthesis.speak(u);
+  say(text).finally(() => briefing.value && briefing.value.t === b.t && (briefing.value = { ...briefing.value, speaking: false }));
 }
 
 export function stopSpeaking() {
-  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  stopTts();
   if (briefing.value) briefing.value = { ...briefing.value, speaking: false };
 }
 

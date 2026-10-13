@@ -72,6 +72,18 @@ pub trait Fetch: Send + Sync {
     fn truth<'a>(&'a self, req: &'a TruthReq, _pts: &'a [(f64, f64)]) -> Bf<'a, Vec<f32>> {
         Box::pin(async move { bail!("no gridded truth ({}) in this data source", req.kind) })
     }
+    /// Warm the raw-download cache of a volume (pipelining: the next volume downloads while the
+    /// current one is extracted).
+    fn prefetch<'a>(&'a self, _key: &'a str) -> Bf<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+    /// Raw bytes of a volume key (archive or real-time chunks, concatenated into one Level II
+    /// file) — used by radar recordings.
+    fn raw<'a>(&'a self, key: &'a str) -> Bf<'a, Bytes> {
+        Box::pin(async move { bail!("no raw access to {key}") })
+    }
+    /// Concurrent decodes of gridded data (follows the training jobs' CPU budget).
+    fn set_decode_threads(&self, _n: usize) {}
     /// Where grid predictions are published (the grid service; tests inject their own).
     fn pred_sink(&self) -> Option<Arc<dyn super::predict::PredSink>> {
         None
@@ -127,7 +139,7 @@ pub struct NetSource {
     idx: Mutex<lru::LruCache<String, Arc<IdxRows>>>,
     spc_cache: Mutex<HashMap<String, Arc<Vec<Event>>>>,
     storms_cache: Mutex<Option<Arc<Vec<Storm>>>>,
-    decode: Arc<tokio::sync::Semaphore>,
+    decode: crate::caches::Limiter,
     iem_gate: tokio::sync::Mutex<Option<Instant>>,
     /// parsed GLM files: key → flashes (lat, lon, t ms)
     pub(crate) glm: Mutex<lru::LruCache<String, Arc<Vec<(f32, f32, i64)>>>>,
@@ -155,7 +167,7 @@ impl NetSource {
             idx: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(64).unwrap())),
             spc_cache: Mutex::new(HashMap::new()),
             storms_cache: Mutex::new(None),
-            decode: Arc::new(tokio::sync::Semaphore::new(decode_threads.max(1))),
+            decode: crate::caches::Limiter::new(decode_threads.max(1)),
             iem_gate: tokio::sync::Mutex::new(None),
             glm: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(3000).unwrap())),
             usdm: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(4).unwrap())),
@@ -184,25 +196,42 @@ impl NetSource {
             bail!("{url}: HTTP {}", r.status());
         }
         let b = r.bytes().await?;
+        super::jobs::add_net(b.len() as u64);
         self.raw.lock().put(ck, b.clone());
         Ok(b)
     }
 
-    /// IEM asks for ~1 request/s per client.
+    /// IEM asks for ~1 request/s per client; retried with backoff (3 attempts).
     async fn iem_json(&self, url: &str) -> Result<serde_json::Value> {
-        {
-            let mut g = self.iem_gate.lock().await;
-            if let Some(t) = *g {
-                let wait = Duration::from_millis(1100).saturating_sub(t.elapsed());
-                tokio::time::sleep(wait).await;
+        let mut last = anyhow!("no attempt");
+        for attempt in 0..3u32 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_secs(5 * 3u64.pow(attempt - 1))).await;
             }
-            *g = Some(Instant::now());
+            {
+                let mut g = self.iem_gate.lock().await;
+                if let Some(t) = *g {
+                    let wait = Duration::from_millis(1100).saturating_sub(t.elapsed());
+                    tokio::time::sleep(wait).await;
+                }
+                *g = Some(Instant::now());
+            }
+            let res: Result<serde_json::Value> = async {
+                let r = self.http.get(url).timeout(Duration::from_secs(120)).send().await?;
+                if !r.status().is_success() {
+                    bail!("{url}: HTTP {}", r.status());
+                }
+                let b = r.bytes().await?;
+                super::jobs::add_net(b.len() as u64);
+                Ok(serde_json::from_slice(&b)?)
+            }
+            .await;
+            match res {
+                Ok(v) => return Ok(v),
+                Err(e) => last = e,
+            }
         }
-        let r = self.http.get(url).timeout(Duration::from_secs(120)).send().await?;
-        if !r.status().is_success() {
-            bail!("{url}: HTTP {}", r.status());
-        }
-        Ok(r.json().await?)
+        Err(last)
     }
 
     /// Text file cached on disk (immutable historical files).
@@ -218,6 +247,7 @@ impl NetSource {
             bail!("{url}: HTTP {}", r.status());
         }
         let b = r.bytes().await?;
+        super::jobs::add_net(b.len() as u64);
         if let Ok(z) = zstd::encode_all(&b[..], 9) {
             crate::platform::write_atomic(&path, &z).ok();
         }
@@ -247,7 +277,7 @@ impl NetSource {
     // ---------- radar ----------
 
     async fn decode_volume(&self, raw: Bytes, key: &str) -> Result<Arc<Volume>> {
-        let _p = self.decode.clone().acquire_owned().await?;
+        let _p = self.decode.sem.clone().acquire_owned().await?;
         let k = key.to_string();
         let v = tokio::task::spawn_blocking(move || -> Result<Volume> {
             let base = k.rsplit(['/', ':']).next().unwrap_or("").to_string();
@@ -295,6 +325,28 @@ impl NetSource {
         Ok(None)
     }
 
+    /// The chunks of a real-time volume concatenated: a valid Level II archive file.
+    async fn chunks_raw(&self, key: &str) -> Result<Bytes> {
+        let rest = key.strip_prefix("chunks:").ok_or_else(|| anyhow!("bad key"))?;
+        let (bucket, prefix) = rest.split_once('/').ok_or_else(|| anyhow!("bad key"))?;
+        if !self.chunk_buckets.iter().any(|b| b == bucket) {
+            bail!("bucket not allowed");
+        }
+        let l = crate::s3::list(&self.http, bucket, &format!("{prefix}/"), None, None, 3).await?;
+        let mut keys: Vec<(u32, String)> = l.objects.iter().filter_map(|o| Some((o.key.rsplit('-').nth(1)?.parse().ok()?, o.key.clone()))).collect();
+        keys.sort();
+        if !keys.iter().any(|k| k.1.ends_with("-E")) {
+            bail!("volume not complete yet");
+        }
+        let mut out = Vec::new();
+        for (_, k) in &keys {
+            let b = crate::s3::get(&self.http, bucket, k).await?;
+            super::jobs::add_net(b.len() as u64);
+            out.extend_from_slice(&b);
+        }
+        Ok(Bytes::from(out))
+    }
+
     async fn chunks_volume(&self, key: &str) -> Result<Arc<Volume>> {
         let rest = key.strip_prefix("chunks:").ok_or_else(|| anyhow!("bad key"))?;
         let (bucket, prefix) = rest.split_once('/').ok_or_else(|| anyhow!("bad key"))?;
@@ -306,9 +358,11 @@ impl NetSource {
         keys.sort();
         let mut parts = vec![];
         for (_, k) in &keys {
-            parts.push(crate::s3::get(&self.http, bucket, k).await?);
+            let b = crate::s3::get(&self.http, bucket, k).await?;
+            super::jobs::add_net(b.len() as u64);
+            parts.push(b);
         }
-        let _p = self.decode.clone().acquire_owned().await?;
+        let _p = self.decode.sem.clone().acquire_owned().await?;
         let v = tokio::task::spawn_blocking(move || -> Result<Volume> {
             let mut d = crate::radar::level2::Decoder::new();
             for p in &parts {
@@ -443,8 +497,9 @@ impl NetSource {
                         }
                         Err(e) => {
                             errs += 1;
-                            if errs > 5 {
-                                return Err(e);
+                            tracing::warn!("ml: IEM storm reports {}–{}: {e:#}", iem_ts(a), iem_ts(b));
+                            if errs > 2 {
+                                return Err(e.context("IEM storm reports unavailable (cached weeks are kept; resume later)"));
                             }
                             vec![]
                         }
@@ -524,7 +579,7 @@ impl NetSource {
         let key = key.ok_or_else(|| anyhow!("no {product} file near this time"))?;
         let b = self.get(&crate::s3::object_url(crate::grid::sources::MRMS_BUCKET, &key), None).await?;
         let opts = crate::grid::decode::DecodeOpts { nodata: vec![-9999.0, -999.0, -99.0], min_valid: None, transform: crate::grid::decode::Transform::None, max_dim: 0 };
-        let _p = self.decode.clone().acquire_owned().await?;
+        let _p = self.decode.sem.clone().acquire_owned().await?;
         tokio::task::spawn_blocking(move || -> Result<Vec<f32>> {
             let raw = crate::grid::decode::maybe_gunzip(&b)?;
             Ok(crate::grid::decode::decode_at(&raw, &opts, &q)?.0)
@@ -534,17 +589,57 @@ impl NetSource {
 
     async fn mrms_env(&self, field: &str, t: i64, pts: &[(f64, f64)], realtime: bool, out: &mut [FeatMap]) -> Result<()> {
         let (_, product, age, fill) = *mrms_product(field).ok_or_else(|| anyhow!("unknown MRMS field"))?;
+        let id = format!("mrms_{field}");
+        let inside: Vec<bool> = pts.iter().map(|&(la, lo)| in_mrms_domain(la, lo)).collect();
+        let n_in = inside.iter().filter(|x| **x).count();
+        // outside the US: OPERA (Europe) stands in for reflectivity / rain rate where it exists
+        if n_in < pts.len() {
+            if let Some(layer) = opera_layer(field) {
+                let outside: Vec<usize> = (0..pts.len()).filter(|&i| !inside[i] && in_opera_domain(pts[i].0, pts[i].1)).collect();
+                if !outside.is_empty() {
+                    match self.opera_values(layer, t, &outside.iter().map(|&i| pts[i]).collect::<Vec<_>>()).await {
+                        Ok(v) => {
+                            for (k, &i) in outside.iter().enumerate() {
+                                out[i].set(&id, if v[k].is_finite() { v[k].max(fill) } else { fill });
+                            }
+                        }
+                        Err(e) => tracing::debug!("ml: OPERA {layer}: {e:#}"),
+                    }
+                }
+            }
+            if n_in == 0 {
+                return Ok(());
+            }
+        }
         // stencil: centre + 8 points 4 km away → max
         let q = stencil(pts, &[(4.0, 8)]);
         let k = q.len() / pts.len().max(1);
         let vals = self.mrms_values(product, t, realtime, age, q).await?;
-        let id = format!("mrms_{field}");
         for (i, fm) in out.iter_mut().enumerate() {
+            if !inside[i] {
+                // no MRMS outside its domain: missing, not "no echo"
+                continue;
+            }
             let v = vals[i * k..(i + 1) * k].iter().copied().filter(|x| x.is_finite()).fold(f32::NAN, f32::max);
             // no echo / below the product floor counts as `fill` (0 for most fields)
             fm.set(&id, if v.is_finite() { v } else { fill });
         }
         Ok(())
+    }
+
+    /// OPERA composite values (max within 5 km) at points near time `t` (rolling 24 h archive).
+    async fn opera_values(&self, layer: &str, t: i64, pts: &[(f64, f64)]) -> Result<Vec<f32>> {
+        let now = Utc::now().timestamp_millis();
+        if now - t > 23 * 3_600_000 {
+            bail!("OPERA keeps only the last 24 h");
+        }
+        let fr = self.grids.frames(layer, 12, None, None, if now - t > 600_000 { Some(t + 60_000) } else { None }).await?;
+        let f = fr.frames.iter().filter(|f| f.time <= t + 60_000 && t - f.time <= 20 * 60_000).max_by_key(|f| f.time).ok_or_else(|| anyhow!("no OPERA frame near this time"))?;
+        let g = self.grids.grid(&f.key).await?;
+        let q = stencil(pts, &[(4.0, 8)]);
+        let k = q.len() / pts.len().max(1);
+        let vals: Vec<f32> = q.iter().map(|p| g.sample(p.0, p.1).unwrap_or(f32::NAN)).collect();
+        Ok((0..pts.len()).map(|i| vals[i * k..(i + 1) * k].iter().copied().filter(|x| x.is_finite()).fold(f32::NAN, f32::max)).collect())
     }
 
     async fn metar_env(&self, t: i64, pts: &[(f64, f64)], realtime: bool, out: &mut [FeatMap]) -> Result<()> {
@@ -647,7 +742,7 @@ impl NetSource {
     async fn nwp_field(&self, url: &str, idx: &IdxRows, pat: &str, fh: u32, accum: bool, pts: Arc<Vec<(f64, f64)>>) -> Result<Vec<f32>> {
         let range = crate::grid::sources::find_ncep(idx, pat, fh, accum).ok_or_else(|| anyhow!("{pat} not in file"))?;
         let b = self.get(url, Some(range)).await?;
-        let _p = self.decode.clone().acquire_owned().await?;
+        let _p = self.decode.sem.clone().acquire_owned().await?;
         tokio::task::spawn_blocking(move || -> Result<Vec<f32>> {
             let opts = crate::grid::decode::DecodeOpts { nodata: vec![], min_valid: None, transform: crate::grid::decode::Transform::None, max_dim: 0 };
             Ok(crate::grid::decode::decode_at(&b, &opts, &pts)?.0)
@@ -699,6 +794,8 @@ impl NetSource {
                     let dz = a(3, i) - a(2, i);
                     if dz.abs() > 10.0 { (a(0, i) - a(1, i)) / dz * 1000.0 } else { f32::NAN }
                 }
+                VarKind::Mean => (0..fields.len()).map(|k| a(k, i)).sum::<f32>() / fields.len().max(1) as f32,
+                VarKind::Diff => a(1, i) - a(0, i),
             })
             .collect())
     }
@@ -812,7 +909,7 @@ impl NetSource {
             let (start, range) = recs[0];
             let b = self.get(&url, Some(range)).await?;
             let p2 = pts.clone();
-            let _p = self.decode.clone().acquire_owned().await?;
+            let _p = self.decode.sem.clone().acquire_owned().await?;
             let vals = tokio::task::spawn_blocking(move || -> Result<Vec<f32>> {
                 let opts = crate::grid::decode::DecodeOpts::default();
                 Ok(crate::grid::decode::decode_at(&b, &opts, &p2)?.0)
@@ -982,8 +1079,20 @@ impl NetSource {
         Err(last)
     }
 
-    /// Gridded truth at points.
+    /// Gridded truth at points; MRMS-based truth is unknown (NaN) outside the US.
     async fn truth_values(&self, req: &TruthReq, pts: &[(f64, f64)]) -> Result<Vec<f32>> {
+        let mut v = self.truth_values_inner(req, pts).await?;
+        if matches!(req.kind.as_str(), "qpe" | "cref_max" | "mesh_max") {
+            for (x, p) in v.iter_mut().zip(pts) {
+                if !in_mrms_domain(p.0, p.1) {
+                    *x = f32::NAN;
+                }
+            }
+        }
+        Ok(v)
+    }
+
+    async fn truth_values_inner(&self, req: &TruthReq, pts: &[(f64, f64)]) -> Result<Vec<f32>> {
         let n = pts.len();
         let h = 3_600_000i64;
         let rings = radius_rings(req.radius_km);
@@ -1111,12 +1220,12 @@ impl NetSource {
                 if let Some(r) = rows.filter(|r| !r.is_empty()) {
                     let range = crate::grid::sources::find_ncep(&r, "TMP:2 m above ground", 0, false).ok_or_else(|| anyhow!("no TMP:2 m in {name}"))?;
                     let b = self.get(&url, Some(range)).await?;
-                    let _p = self.decode.clone().acquire_owned().await?;
+                    let _p = self.decode.sem.clone().acquire_owned().await?;
                     return tokio::task::spawn_blocking(move || Ok(crate::grid::decode::decode_at(&b, &opts, &p2)?.0)).await?;
                 }
                 // older files have no index: whole file, temperature message
                 let b = self.get(&url, None).await?;
-                let _p = self.decode.clone().acquire_owned().await?;
+                let _p = self.decode.sem.clone().acquire_owned().await?;
                 tokio::task::spawn_blocking(move || -> Result<Vec<f32>> {
                     let msgs = crate::grid::decode::list_messages(&b)?;
                     let m = msgs.iter().find(|m| m.discipline == 0 && m.category == 0 && m.number == 0).ok_or_else(|| anyhow!("no temperature message"))?;
@@ -1126,7 +1235,20 @@ impl NetSource {
             }
             .await;
             match res {
-                Ok(v) => return Ok(v),
+                Ok(mut v) => {
+                    // outside the analysis domain (outside the US): nearest METAR
+                    if v.iter().any(|x| !x.is_finite()) {
+                        if let Ok(obs) = self.grids.metars_at(hour).await.map(|x| x.2) {
+                            let idx = ObsIndex::new(&obs);
+                            for (x, &(la, lo)) in v.iter_mut().zip(pts) {
+                                if !x.is_finite() {
+                                    *x = idx.nearest(&obs, la, lo, 40.0).map(|(o, _)| o.temp).unwrap_or(f32::NAN);
+                                }
+                            }
+                        }
+                    }
+                    return Ok(v);
+                }
                 Err(e) => err = e,
             }
         }
@@ -1134,6 +1256,25 @@ impl NetSource {
         let obs = self.grids.metars_at(hour).await.map(|x| x.2).map_err(|e| err.context(e))?;
         let idx = ObsIndex::new(&obs);
         Ok(pts.iter().map(|&(la, lo)| idx.nearest(&obs, la, lo, 40.0).map(|(o, _)| o.temp).unwrap_or(f32::NAN)).collect())
+    }
+}
+
+/// Inside the MRMS CONUS grid (20–55° N, 130–60° W).
+pub fn in_mrms_domain(lat: f64, lon: f64) -> bool {
+    (20.0..=55.0).contains(&lat) && (-130.0..=-60.0).contains(&lon)
+}
+
+/// Roughly inside the OPERA composite (Europe).
+pub fn in_opera_domain(lat: f64, lon: f64) -> bool {
+    (31.0..=73.0).contains(&lat) && (-32.0..=46.0).contains(&lon)
+}
+
+/// OPERA layer standing in for an MRMS field outside the US.
+pub fn opera_layer(field: &str) -> Option<&'static str> {
+    match field {
+        "cref" | "cref1h" => Some("opera_dbzh"),
+        "prate" => Some("opera_rate"),
+        _ => None,
     }
 }
 
@@ -1291,6 +1432,29 @@ impl Fetch for NetSource {
             let raw = self.radar.raw(key).await?;
             self.decode_volume(raw, key).await
         })
+    }
+
+    fn prefetch<'a>(&'a self, key: &'a str) -> Bf<'a, ()> {
+        Box::pin(async move {
+            if key.starts_with("aws:") {
+                // the radar service keeps raw files in its disk cache
+                self.radar.raw(key).await?;
+            }
+            Ok(())
+        })
+    }
+
+    fn raw<'a>(&'a self, key: &'a str) -> Bf<'a, Bytes> {
+        Box::pin(async move {
+            if key.starts_with("chunks:") {
+                return self.chunks_raw(key).await;
+            }
+            self.radar.raw(key).await
+        })
+    }
+
+    fn set_decode_threads(&self, n: usize) {
+        self.decode.resize(n.max(1));
     }
 
     fn spc<'a>(&'a self, kind: &'a str, years: (i32, i32)) -> Bf<'a, Vec<Event>> {

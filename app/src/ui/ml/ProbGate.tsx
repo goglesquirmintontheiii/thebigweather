@@ -6,12 +6,14 @@
 // hazard selectors, a custom valid range and the probability-grid toggle.
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { Eye, EyeOff, X, MoveHorizontal, Play, Pause, Grid3x3, SlidersHorizontal } from "lucide-preact";
+import { Eye, EyeOff, X, MoveHorizontal, Play, Pause, Grid3x3, SlidersHorizontal, ListTree, ChevronsDownUp } from "lucide-preact";
+import type { ComponentChildren } from "preact";
 import { settings } from "../../store";
 import { gateDrag, type Gate } from "../../gate";
 import { isOn } from "../../overlays/manager";
-import { probGate, setProbGate, pgKey, scrub, PG_DET, PG_OUT } from "../../ml/probgate";
-import { detProbs } from "../../overlays/mldefs";
+import { probGate, setProbGate, pgKey, scrub, PG_DET, PG_OUT, pmLayer, setPerModel } from "../../ml/probgate";
+import { detProbs, detProbsBy } from "../../overlays/mldefs";
+import { targetIconUrl } from "../../ml/targets";
 import { outProbs, outOpts, setOutOpt, CATS, CAT_FILL, CAT_LINE, CAT_NAME, HAZARDS, DAYS, outlookData, probGridOn, toggleProbGrid, outlookModels, hazardOf } from "../../ml/outlook";
 import { LEVEL_COLOR } from "../../ml/targets";
 import { mkey } from "../../ml/client";
@@ -51,7 +53,7 @@ export function ProbGates() {
   return (
     <div class="mlg-stack" style={{ right: `${pos.right}px`, bottom: `${pos.bottom}px` }}>
       {out && <OutlookCard />}
-      {det && <GateBar layer={PG_DET} title="Model detections" probs={detProbs.value} unit="detections" />}
+      {det && <DetGates />}
     </div>
   );
 }
@@ -60,7 +62,38 @@ const pct = (f: number) => `${(Math.max(0, Math.min(1, f)) * 100).toFixed(2)}%`;
 const P = (v: number) => `${Math.round(v * 100)}%`;
 const GRAD = `linear-gradient(90deg, #64748b 0%, ${LEVEL_COLOR.low} 30%, ${LEVEL_COLOR.med} 55%, ${LEVEL_COLOR.high} 80%, #ff2ab4 100%)`;
 
-export function GateBar({ layer, title, probs, unit, compact }: { layer: string; title?: string; probs: number[]; unit: string; compact?: boolean }) {
+/** models 0.8: combined gate, or (expanded) one row + gate per model */
+function DetGates() {
+  const per = !!settings.value.ml?.perModelGates;
+  const by = detProbsBy.value;
+  const toggle = (
+    <button class={`lg-btn ${per ? "on" : ""}`} title={per ? "Collapse: one gate for every model" : "Expand: a gate per model"} onClick={() => setPerModel(!per)}>
+      {per ? <ChevronsDownUp size={12} /> : <ListTree size={12} />}
+    </button>
+  );
+  if (!per) return <GateBar layer={PG_DET} title="Model detections" probs={detProbs.value} unit="detections" extra={toggle} />;
+  const n = detProbs.value.length;
+  return (
+    <div class="mlg glass m8-pm">
+      <div class="mlg-head">
+        <b>Model detections</b>
+        <span class="mlg-txt">per model</span>
+        <span class="mlg-n">{n}</span>
+        <span class="mlg-btns">{toggle}</span>
+      </div>
+      <div class="m8-pm-rows">
+        {by.map((x) => (
+          <div key={x.model_id} class="m8-pm-row">
+            <GateBar layer={pmLayer(x.model_id)} title={x.name} icon={x.target} probs={x.probs} unit="detections" compact />
+          </div>
+        ))}
+        {!by.length && <small class="muted">No detections on the map</small>}
+      </div>
+    </div>
+  );
+}
+
+export function GateBar({ layer, title, probs, unit, compact, extra, icon }: { layer: string; title?: string; probs: number[]; unit: string; compact?: boolean; extra?: ComponentChildren; icon?: string }) {
   const key = pgKey(layer);
   const { lo, hi, on, g } = probGate(layer);
   const saved: Gate = settings.value.gates?.[key] ?? {};
@@ -166,7 +199,8 @@ export function GateBar({ layer, title, probs, unit, compact }: { layer: string;
     <div class={`mlg glass ${compact ? "compact" : ""} ${on ? "on" : ""} ${g.off ? "paused" : ""}`}>
       {title && (
         <div class="mlg-head">
-          <b>{title}</b>
+          {icon && <img class="m8-pm-ic" src={targetIconUrl(icon, 16)} width={16} height={16} alt="" />}
+          <b title={title}>{title}</b>
           <span class={`mlg-txt ${on ? "on" : ""}`}>{text}</span>
           <span class="mlg-n" title={`${inside} of ${n} ${unit} inside the window`}>
             {inside}/{n}
@@ -188,6 +222,7 @@ export function GateBar({ layer, title, probs, unit, compact }: { layer: string;
                 <X size={11} />
               </button>
             )}
+            {extra}
           </span>
         </div>
       )}

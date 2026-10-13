@@ -52,6 +52,8 @@ pub struct PredictOpts {
     pub day: Option<String>,
     /// point budget (the grid is coarsened to fit)
     pub max_points: usize,
+    /// flood risk / instability: frames for windows shifted by these hours
+    pub shifts: Option<Vec<f64>>,
 }
 
 /// Output grid geometry (cell centres; row 0 = south).
@@ -118,7 +120,16 @@ pub async fn predict_grid(fetch: &dyn Fetch, m: &ModelRecord, o: &PredictOpts, t
     if let Some(d) = &o.day {
         tp.day = d.clone();
     }
-    let leads = gridds::leads_for(&m.target, &tp, t, o.leads.as_deref(), o.window);
+    let mut leads = gridds::leads_for(&m.target, &tp, t, o.leads.as_deref(), o.window);
+    if let (Some(sh), Some(l0)) = (&o.shifts, leads.first().copied()) {
+        if matches!(m.target.as_str(), "flood_forecast" | "instability") {
+            let h = 3_600_000.0;
+            leads = sh.iter().map(|x| {
+                let d = (x * h) as i64;
+                gridds::LeadSpec { w0: l0.w0 + d, w1: l0.w1 + d, valid: l0.valid + d, ..l0 }
+            }).collect();
+        }
+    }
     if leads.is_empty() {
         bail!("no leads to run");
     }
@@ -369,6 +380,7 @@ pub fn learner_name(l: &Learner) -> &'static str {
         Learner::Gbdt(_) => "gbdt",
         Learner::Logreg(_) => "logreg",
         Learner::Mlp(_) => "mlp",
+        Learner::Ensemble(_) => "ensemble",
     }
 }
 

@@ -102,22 +102,58 @@ pub struct AlertsCfg {
 pub struct MlCfg {
     /// Allow training and running detection models
     pub enabled: bool,
-    /// Training jobs run at the same time (more are queued)
+    /// Training jobs run at the same time (1-8; more are queued, lowering it pauses the newest)
     pub max_jobs: usize,
-    /// Radar volumes downloaded / processed at once while building a dataset; 0 = auto (full 4, lite 2)
+    /// Radar volumes downloaded / processed at once while building a dataset; 0 = auto (from the
+    /// job's RAM budget: about one volume per 300 MB, 2-16)
     pub download_concurrency: usize,
     /// Radars processed at once when running models live; 0 = auto (full 3, lite 1)
     pub run_concurrency: usize,
-    /// Disk cap for cached extracted samples (MB); 0 = auto (2048)
+    /// Disk cap for cached extracted samples (MB); 0 = auto (2048). Caches of unfinished jobs are
+    /// never evicted.
     pub cache_disk_mb: u64,
     /// Max grid points of one prediction layer (grid models are coarsened to fit); 0 = auto
     /// (full 400000, lite 150000)
     pub pred_max_points: usize,
+    /// Default CPU threads of one training job (feature extraction + fitting); 0 = auto (most cores)
+    pub cpu_threads: usize,
+    /// Default RAM budget of one training job (MB); 0 = auto (about half the server memory budget)
+    pub ram_mb: usize,
+    /// Gridded-data requests (GFS / HRRR / MRMS / GOES …) in flight per training job; 0 = auto
+    pub io_concurrency: usize,
+    /// Days cached training data (samples, labels) is kept after the last job using it finished
+    pub cache_retention_days: u32,
+    /// Resume jobs interrupted by a server / app stop when the server starts again
+    pub auto_resume: bool,
+    /// Live detections kept for animation / time queries (minutes)
+    pub history_keep_min: u32,
+    /// Past grid runs kept per model (the `/past` animation layer)
+    pub history_grid_runs: usize,
+    /// Detections of historical runs kept (hours)
+    pub history_run_keep_h: u32,
+    /// Cycles a detection must persist to become a model report (per-model `report_cycles` overrides)
+    pub report_cycles: u32,
 }
 
 impl Default for MlCfg {
     fn default() -> Self {
-        Self { enabled: true, max_jobs: 1, download_concurrency: 0, run_concurrency: 0, cache_disk_mb: 0, pred_max_points: 0 }
+        Self {
+            enabled: true,
+            max_jobs: 2,
+            download_concurrency: 0,
+            run_concurrency: 0,
+            cache_disk_mb: 0,
+            pred_max_points: 0,
+            cpu_threads: 0,
+            ram_mb: 0,
+            io_concurrency: 0,
+            cache_retention_days: 14,
+            auto_resume: true,
+            history_keep_min: 120,
+            history_grid_runs: 6,
+            history_run_keep_h: 48,
+            report_cycles: 3,
+        }
     }
 }
 
@@ -321,16 +357,30 @@ user_agent = "TheBigWeather/0.1 (self-hosted weather app)"
 [ml]
 # Detection models: train on historical radar / gridded data and run them live
 enabled = true
-# Training jobs at the same time (more are queued)
-max_jobs = 1
-# Radar volumes processed at once while building a training set; 0 = auto (full 4, lite 2)
+# Training jobs at the same time (1-8; more are queued, lowering it pauses the newest)
+max_jobs = 2
+# Radar volumes processed at once while building a training set; 0 = auto (from the job RAM budget)
 download_concurrency = 0
 # Radars processed at once when running models live; 0 = auto (full 3, lite 1)
 run_concurrency = 0
-# Disk cap for cached extracted samples in MB; 0 = auto (2048)
+# Disk cap for cached extracted samples in MB; 0 = auto (2048); unfinished jobs' caches are kept
 cache_disk_mb = 0
 # Max grid points of one model prediction layer (coarsened to fit); 0 = auto (full 400000, lite 150000)
 pred_max_points = 0
+# Default per-job budgets: CPU threads, RAM (MB), gridded requests in flight; 0 = auto
+cpu_threads = 0
+ram_mb = 0
+io_concurrency = 0
+# Days cached training data is kept after the last job using it finished
+cache_retention_days = 14
+# Resume jobs interrupted by a server / app stop at start
+auto_resume = true
+# Live detections kept for animation (minutes), past grid runs kept per model, historical-run detections (hours)
+history_keep_min = 120
+history_grid_runs = 6
+history_run_keep_h = 48
+# Cycles a detection must persist to become a model report
+report_cycles = 3
 
 # Optional API keys. Missing keys just disable that source.
 [keys]

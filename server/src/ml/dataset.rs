@@ -40,6 +40,9 @@ pub struct Sample {
     /// event / case id (CV folds never split a group)
     pub group: String,
     pub meta: SampleMeta,
+    /// extra regression targets (storm track: north displacement, strength)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<f32>,
 }
 
 fn day_of(t: i64) -> NaiveDate {
@@ -72,8 +75,10 @@ pub async fn load_events(fetch: &dyn Fetch, spec: &TrainSpec, years: (i32, i32),
                 let mut v = vec![];
                 for y in years.0..=years.1 {
                     let (a, b) = year_span(y);
-                    ctl.log(format!("loading IEM storm reports for {y}"));
-                    v.extend(fetch.lsr(a, b).await?);
+                    let d0 = downloads();
+                    let r = fetch.lsr(a, b).await?;
+                    ctl.log(format!("IEM storm reports {y}: {} reports ({})", r.len(), cache_note(d0)));
+                    v.extend(r);
                     if ctl.cancelled() {
                         break;
                     }
@@ -88,8 +93,10 @@ pub async fn load_events(fetch: &dyn Fetch, spec: &TrainSpec, years: (i32, i32),
                 let mut v = vec![];
                 for y in years.0..=years.1 {
                     let (a, b) = year_span(y);
-                    ctl.log(format!("loading NWS warnings for {y}"));
-                    v.extend(fetch.sbw(a, b).await?);
+                    let d0 = downloads();
+                    let r = fetch.sbw(a, b).await?;
+                    ctl.log(format!("NWS warnings {y}: {} warnings ({})", r.len(), cache_note(d0)));
+                    v.extend(r);
                     if ctl.cancelled() {
                         break;
                     }
@@ -128,9 +135,56 @@ pub async fn load_events(fetch: &dyn Fetch, spec: &TrainSpec, years: (i32, i32),
     Ok(out)
 }
 
+/// Downloads made so far by the current job.
+fn downloads() -> u64 {
+    super::jobs::current().map(|u| u.downloads.load(Ordering::Relaxed)).unwrap_or(0)
+}
+
+/// "from the disk cache" / "N downloads" since `d0`.
+fn cache_note(d0: u64) -> String {
+    match downloads().saturating_sub(d0) {
+        0 => "from the disk cache".into(),
+        n => format!("{n} downloads, cached for next time"),
+    }
+}
+
+/// Download / CPU / RAM budget of a dataset build.
+#[derive(Clone)]
+pub struct Budget {
+    /// radar runs (volumes) processed at once
+    pub download: usize,
+    /// gridded requests (cases / times) in flight
+    pub io: usize,
+    /// thread pool for feature extraction (None = the global pool)
+    pub pool: Option<Arc<rayon::ThreadPool>>,
+}
+
+impl Budget {
+    pub fn simple(concurrency: usize) -> Budget {
+        Budget { download: concurrency.max(1), io: concurrency.clamp(1, 3), pool: None }
+    }
+    /// Run CPU work on the job's pool (or the global one).
+    pub fn install<T: Send>(&self, f: impl FnOnce() -> T + Send) -> T {
+        match &self.pool {
+            Some(p) => p.install(f),
+            None => f(),
+        }
+    }
+}
+
 /// Relaxed filters: everything of the same kinds (used to skip ambiguous negatives).
 fn relaxed(f: &Filters) -> Filters {
     Filters { lsr_types: f.lsr_types.clone(), phenomena: f.phenomena.clone(), basins: f.basins.clone(), ..Default::default() }
+}
+
+/// Mark a cache file as used (retention counts from the last use); at most once a day.
+fn touch(p: &Path) {
+    let old = std::fs::metadata(p).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).map(|d| d.as_secs() > 86_400).unwrap_or(false);
+    if old {
+        if let Ok(f) = std::fs::OpenOptions::new().append(true).open(p) {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
+    }
 }
 
 /// Disk cache of extracted cells per (volume key, extractor version + params).
@@ -148,27 +202,37 @@ impl CellCache {
         self.dir.join(format!("{:016x}.json.zst", hash_str(&format!("{key}|{params}"))))
     }
     pub fn get(&self, key: &str, params: &str) -> Option<VolCells> {
-        let z = std::fs::read(self.path(key, params)).ok()?;
+        let p = self.path(key, params);
+        let z = std::fs::read(&p).ok()?;
+        touch(&p);
+        super::jobs::add_cache(z.len() as u64, true);
         let d = zstd::decode_all(&z[..]).ok()?;
         let v: VolCells = serde_json::from_slice(&d).ok()?;
         (v.key == key).then_some(v)
     }
+    pub fn exists(&self, key: &str, params: &str) -> bool {
+        self.path(key, params).exists()
+    }
     pub fn put(&self, v: &VolCells, params: &str) {
         if let Ok(j) = serde_json::to_vec(v) {
             if let Ok(z) = zstd::encode_all(&j[..], 3) {
+                super::jobs::add_cache(z.len() as u64, false);
                 crate::platform::write_atomic(&self.path(&v.key, params), &z).ok();
             }
         }
     }
     pub fn get_env(&self, key: &str) -> Option<Vec<FeatMap>> {
         let p = self.dir.join(format!("env-{:016x}.json.zst", hash_str(key)));
-        let z = std::fs::read(p).ok()?;
+        let z = std::fs::read(&p).ok()?;
+        touch(&p);
+        super::jobs::add_cache(z.len() as u64, true);
         serde_json::from_slice(&zstd::decode_all(&z[..]).ok()?).ok()
     }
     pub fn put_env(&self, key: &str, v: &[FeatMap]) {
         let p = self.dir.join(format!("env-{:016x}.json.zst", hash_str(key)));
         if let Ok(j) = serde_json::to_vec(v) {
             if let Ok(z) = zstd::encode_all(&j[..], 3) {
+                super::jobs::add_cache(z.len() as u64, false);
                 crate::platform::write_atomic(&p, &z).ok();
             }
         }
@@ -193,21 +257,33 @@ pub struct Built {
     pub ids: Vec<String>,
     pub samples: Vec<Sample>,
     pub stats: serde_json::Value,
+    /// start time (ms) of the label events referenced by samples (lead-time statistics)
+    pub event_times: HashMap<String, i64>,
 }
 
 /// Build the training set for a spec.
 pub async fn build(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, concurrency: usize) -> Result<Built> {
-    if spec.target == "storm_intensify" {
-        return build_intensify(fetch, spec, ctl, cache_root, concurrency).await;
-    }
-    if super::gridds::is_v2(&spec.target) {
-        return super::gridds::build(fetch, spec, ctl, cache_root, concurrency).await;
-    }
-    if spec.candidate == "radar_cell" {
-        build_radar(fetch, spec, ctl, cache_root, concurrency).await
+    build_with(fetch, spec, ctl, cache_root, &Budget::simple(concurrency)).await
+}
+
+/// Build the training set within a resource budget.
+pub async fn build_with(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, b: &Budget) -> Result<Built> {
+    let r = if spec.target == "storm_intensify" {
+        build_intensify(fetch, spec, ctl, cache_root, b).await
+    } else if spec.target == "storm_track" {
+        build_track(fetch, spec, ctl, cache_root, b).await
+    } else if super::gridds::is_v2(&spec.target) {
+        super::gridds::build(fetch, spec, ctl, cache_root, b.io.max(1)).await
+    } else if spec.candidate == "radar_cell" {
+        build_radar(fetch, spec, ctl, cache_root, b).await
     } else {
-        build_grid(fetch, spec, ctl, cache_root, concurrency).await
+        build_grid(fetch, spec, ctl, cache_root, b.io.max(1)).await
+    };
+    if let (Ok(built), Some(u)) = (&r, super::jobs::current()) {
+        let row = built.ids.len() as u64 * 4 + 120;
+        u.ram_bytes.store(built.samples.len() as u64 * row, Ordering::Relaxed);
     }
+    r
 }
 
 /// Radar volume runs to process for a spec (target events + storm null cases).
@@ -220,7 +296,7 @@ struct Plan {
     total: usize,
 }
 
-async fn plan_runs(fetch: &Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, rng: &mut Rng, with_nulls: bool) -> Result<Plan> {
+async fn plan_runs(fetch: &Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, rng: &mut Rng, with_nulls: bool, centered: bool) -> Result<Plan> {
     let years = (spec.years[0], spec.years[1]);
     ctl.phase("collect events", 0.0);
     let all = load_events(fetch.as_ref(), spec, years, ctl).await?;
@@ -290,6 +366,7 @@ async fn plan_runs(fetch: &Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, rng: &mu
         // window of interest: lead time before the event to shortly after its start
         let w0 = ev.t0 - (spec.match_rule.after_min * 60_000.0) as i64 - 6 * 60_000;
         let w1 = if *is_null { ev.t0 + 5 * 60_000 } else { ev.t0.max(ev.t1.min(ev.t0 + (spec.match_rule.before_min * 60_000.0) as i64)) + 60_000 };
+        let w1 = if centered { w1.max(ev.t0 + (spec.match_rule.before_min * 60_000.0) as i64 + 6 * 60_000) } else { w1 };
         for (_, site) in radars {
             let mut vols = vec![];
             for d in [day_of(w0), day_of(w1)].into_iter().collect::<std::collections::BTreeSet<_>>() {
@@ -318,11 +395,18 @@ async fn plan_runs(fetch: &Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, rng: &mu
             if vols.is_empty() {
                 continue;
             }
-            // a run of consecutive volumes ending near the event start (random small offset)
-            let end_t = ev.t0 + 60_000;
-            let mut end = vols.iter().rposition(|v| v.time <= end_t).unwrap_or(vols.len() - 1);
-            end = end.saturating_sub(rng.below(2));
-            let start = (end + 1).saturating_sub(spec.volumes_per_event);
+            let (start, end) = if centered {
+                // storm tracks: a third of the run before the event, the rest after it
+                let k = vols.iter().position(|v| v.time >= ev.t0).unwrap_or(vols.len() - 1);
+                let start = k.saturating_sub(spec.volumes_per_event / 3);
+                (start, (start + spec.volumes_per_event - 1).min(vols.len() - 1))
+            } else {
+                // a run of consecutive volumes ending near the event start (random small offset)
+                let end_t = ev.t0 + 60_000;
+                let mut end = vols.iter().rposition(|v| v.time <= end_t).unwrap_or(vols.len() - 1);
+                end = end.saturating_sub(rng.below(2));
+                ((end + 1).saturating_sub(spec.volumes_per_event), end)
+            };
             runs.push(Run { site: site.clone(), group: group.clone(), vols: vols[start..=end].iter().map(|v| (v.key.clone(), v.time)).collect() });
         }
     }
@@ -336,9 +420,10 @@ async fn plan_runs(fetch: &Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, rng: &mu
     Ok(Plan { runs, target, ambiguous, n_cases, n_nulls: nulls.len(), total })
 }
 
-async fn build_radar(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, concurrency: usize) -> Result<Built> {
+async fn build_radar(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, b: &Budget) -> Result<Built> {
+    let concurrency = b.download;
     let mut rng = Rng::new(spec.seed);
-    let Plan { runs, target, ambiguous, n_cases, n_nulls, total } = plan_runs(&fetch, spec, ctl, &mut rng, true).await?;
+    let Plan { runs, target, ambiguous, n_cases, n_nulls, total } = plan_runs(&fetch, spec, ctl, &mut rng, true, false).await?;
     // fetch + extract (cached) → trends → environment → labels, streamed per run
     ctl.phase("fetch & extract", 0.0);
     let ids: Vec<String> = super::features::all_features_for(&spec.target, "radar_cell", &spec.sources).into_iter().map(|f| f.id).collect();
@@ -360,6 +445,7 @@ async fn build_radar(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_r
         env_errs: AtomicUsize::new(0),
         vols_ok: AtomicUsize::new(0),
         total,
+        budget: b.clone(),
     };
     let outs: Vec<RunOut> = futures::stream::iter(runs).map(|r| ctx.run(r, ctl)).buffer_unordered(concurrency.max(1)).collect().await;
     if ctl.cancelled() {
@@ -401,7 +487,8 @@ async fn build_radar(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_r
         c.samples = samples.len();
         c.positives = samples.iter().filter(|s| s.label > 0.5).count();
     });
-    Ok(Built { ids, samples, stats })
+    let event_times: HashMap<String, i64> = target.iter().map(|e| (e.id.clone(), e.t0)).collect();
+    Ok(Built { ids, samples, stats, event_times })
 }
 
 /// Consecutive volumes of one radar for one case.
@@ -438,19 +525,81 @@ struct RunCtx {
     env_errs: AtomicUsize,
     vols_ok: AtomicUsize,
     total: usize,
+    budget: Budget,
 }
 
 impl RunCtx {
+    fn cached(&self, key: &str) -> bool {
+        self.cache.exists(key, &self.params_key)
+    }
+
     async fn cells(&self, key: &str) -> Result<VolCells> {
         if let Some(v) = self.cache.get(key, &self.params_key) {
             self.hits.fetch_add(1, Ordering::Relaxed);
             return Ok(v);
         }
+        let usage = super::jobs::current();
+        struct Inflight(Option<Arc<super::jobs::Usage>>);
+        impl Drop for Inflight {
+            fn drop(&mut self) {
+                if let Some(u) = &self.0 {
+                    u.inflight.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
+        }
+        if let Some(u) = &usage {
+            u.inflight.fetch_add(1, Ordering::Relaxed);
+        }
+        let _g = Inflight(usage.clone());
         let vol = self.fetch.volume(key).await?;
-        let (k, cp) = (key.to_string(), self.cell.clone());
-        let vc = tokio::task::spawn_blocking(move || cells::extract(&vol, &k, &cp)).await?;
+        let (k, cp, b) = (key.to_string(), self.cell.clone(), self.budget.clone());
+        let vc = tokio::task::spawn_blocking(move || {
+            let t0 = std::time::Instant::now();
+            let vc = b.install(|| cells::extract(&vol, &k, &cp));
+            drop(vol);
+            if let Some(u) = usage {
+                // extraction keeps the pool's threads busy
+                u.add_busy(t0.elapsed() * b.pool.as_ref().map(|p| p.current_num_threads().clamp(1, 4) as u32).unwrap_or(1));
+            }
+            vc
+        })
+        .await?;
         self.cache.put(&vc, &self.params_key);
         Ok(vc)
+    }
+
+    /// The cells of each volume of a run in order, downloading the next volume while the
+    /// current one is extracted (pipelined). `None` = failed / skipped.
+    async fn run_cells(&self, run: &Run, ctl: &Ctl) -> Vec<Option<VolCells>> {
+        let mut out = vec![];
+        let keys: Vec<&String> = run.vols.iter().map(|v| &v.0).collect();
+        for (i, key) in keys.iter().enumerate() {
+            if ctl.stopping() || !ctl.gate().await {
+                break;
+            }
+            // warm the raw cache of the next uncached volume meanwhile
+            let next = keys.get(i + 1).filter(|k| !self.cached(k));
+            let (res, _) = match next {
+                Some(n) => futures::join!(self.cells(key), self.fetch.prefetch(n)),
+                None => (self.cells(key).await, Ok(())),
+            };
+            let n = self.done.fetch_add(1, Ordering::Relaxed) + 1;
+            ctl.counts(|c| c.volumes_done = n);
+            ctl.set_progress(n as f64 / self.total.max(1) as f64);
+            match res {
+                Ok(v) => {
+                    self.vols_ok.fetch_add(1, Ordering::Relaxed);
+                    out.push(Some(v));
+                }
+                Err(e) => {
+                    if self.errs.fetch_add(1, Ordering::Relaxed) < 20 {
+                        ctl.log(format!("skip {key}: {e:#}"));
+                    }
+                    out.push(None);
+                }
+            }
+        }
+        out
     }
 
     async fn env(&self, vc: &mut VolCells, ctl: &Ctl) {
@@ -483,27 +632,7 @@ impl RunCtx {
 
     async fn run_intensify(&self, run: Run, ctl: &Ctl, p: &IntensifyParams, reports: &labels::TimeIndex) -> RunOut {
         let mut out = RunOut::default();
-        let mut vcs: Vec<VolCells> = vec![];
-        for (key, _) in &run.vols {
-            if ctl.stopping() {
-                break;
-            }
-            let res = self.cells(key).await;
-            let n = self.done.fetch_add(1, Ordering::Relaxed) + 1;
-            ctl.counts(|c| c.volumes_done = n);
-            ctl.set_progress(n as f64 / self.total.max(1) as f64);
-            match res {
-                Ok(v) => {
-                    self.vols_ok.fetch_add(1, Ordering::Relaxed);
-                    vcs.push(v);
-                }
-                Err(e) => {
-                    if self.errs.fetch_add(1, Ordering::Relaxed) < 20 {
-                        ctl.log(format!("skip {key}: {e:#}"));
-                    }
-                }
-            }
-        }
+        let mut vcs: Vec<VolCells> = self.run_cells(&run, ctl).await.into_iter().flatten().collect();
         if vcs.len() < 2 {
             return out;
         }
@@ -520,7 +649,7 @@ impl RunCtx {
                     out.amb += 1;
                     continue;
                 };
-                let s = Sample { features: c.feats.vector(&self.ids), label: *l, weight: 1.0, group: run.group.clone(), meta: SampleMeta { lat: c.lat, lon: c.lon, t: c.t, site: Some(run.site.clone()), cell_id: Some(c.id.clone()), event: None } };
+                let s = Sample { features: c.feats.vector(&self.ids), label: *l, weight: 1.0, group: run.group.clone(), meta: SampleMeta { lat: c.lat, lon: c.lon, t: c.t, site: Some(run.site.clone()), cell_id: Some(c.id.clone()), event: None }, targets: vec![] };
                 if *l > 0.5 { out.pos.push(s) } else { out.neg.push(s) }
             }
         }
@@ -530,25 +659,12 @@ impl RunCtx {
     async fn run(&self, run: Run, ctl: &Ctl) -> RunOut {
         let mut out = RunOut::default();
         let mut prev: Option<VolCells> = None;
-        for (key, _) in &run.vols {
-            if ctl.stopping() {
-                break;
-            }
-            let res = self.cells(key).await;
-            let n = self.done.fetch_add(1, Ordering::Relaxed) + 1;
-            ctl.counts(|c| c.volumes_done = n);
-            ctl.set_progress(n as f64 / self.total.max(1) as f64);
-            let mut vc = match res {
-                Ok(v) => v,
-                Err(e) => {
-                    if self.errs.fetch_add(1, Ordering::Relaxed) < 20 {
-                        ctl.log(format!("skip {key}: {e:#}"));
-                    }
-                    prev = None;
-                    continue;
-                }
+        for res in self.run_cells(&run, ctl).await {
+            let Some(mut vc) = res else {
+                prev = None;
+                continue;
             };
-            self.vols_ok.fetch_add(1, Ordering::Relaxed);
+            let key = vc.key.clone();
             if let Some(p) = &prev {
                 cells::apply_trends(&mut vc, p);
             }
@@ -558,11 +674,11 @@ impl RunCtx {
                     let meta = SampleMeta { lat: c.lat, lon: c.lon, t: c.t, site: Some(run.site.clone()), cell_id: Some(c.id.clone()), event: None };
                     let x = c.feats.vector(&self.ids);
                     if let Some(e) = self.tidx.first_match(c.lat, c.lon, c.t, &self.rule) {
-                        out.pos.push(Sample { features: x, label: 1.0, weight: 1.0, group: run.group.clone(), meta: SampleMeta { event: Some(e.id.clone()), ..meta } });
+                        out.pos.push(Sample { features: x, label: 1.0, weight: 1.0, group: run.group.clone(), meta: SampleMeta { event: Some(e.id.clone()), ..meta }, targets: vec![] });
                     } else if self.tidx.first_match(c.lat, c.lon, c.t, &self.rule.relaxed()).is_some() || self.aidx.first_match(c.lat, c.lon, c.t, &self.rule.relaxed()).is_some() {
                         out.amb += 1;
                     } else {
-                        out.neg.push(Sample { features: x, label: 0.0, weight: 1.0, group: run.group.clone(), meta });
+                        out.neg.push(Sample { features: x, label: 0.0, weight: 1.0, group: run.group.clone(), meta, targets: vec![] });
                     }
                 }
             }
@@ -660,10 +776,11 @@ pub fn intensify_labels(vcs: &[VolCells], ids: &[Vec<usize>], p: &IntensifyParam
 
 /// Storm-intensification samples: consecutive volumes around storm reports, cells tracked, each
 /// cell labelled by its own future state.
-async fn build_intensify(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, concurrency: usize) -> Result<Built> {
+async fn build_intensify(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, b: &Budget) -> Result<Built> {
+    let concurrency = b.download;
     let p: IntensifyParams = serde_json::from_value(spec.target_params.clone()).unwrap_or_default();
     let mut rng = Rng::new(spec.seed);
-    let Plan { runs, target, n_cases, total, .. } = plan_runs(&fetch, spec, ctl, &mut rng, false).await?;
+    let Plan { runs, target, n_cases, total, .. } = plan_runs(&fetch, spec, ctl, &mut rng, false, false).await?;
     ctl.phase("fetch & extract", 0.0);
     let ids: Vec<String> = super::features::all_features_for(&spec.target, "radar_cell", &spec.sources).into_iter().map(|f| f.id).collect();
     let ctx = RunCtx {
@@ -684,10 +801,12 @@ async fn build_intensify(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cac
         env_errs: AtomicUsize::new(0),
         vols_ok: AtomicUsize::new(0),
         total,
+        budget: b.clone(),
     };
     let reports = labels::TimeIndex::new(target);
     let rp = (&p, &reports);
     let outs: Vec<RunOut> = futures::stream::iter(runs).map(|r| ctx.run_intensify(r, ctl, rp.0, rp.1)).buffer_unordered(concurrency.max(1)).collect().await;
+    let _ = &b;
     if ctl.cancelled() {
         bail!("cancelled");
     }
@@ -713,7 +832,153 @@ async fn build_intensify(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cac
         c.samples = samples.len();
         c.positives = samples.iter().filter(|s| s.label > 0.5).count();
     });
-    Ok(Built { ids, samples, stats })
+    Ok(Built { ids, samples, stats, event_times: HashMap::new() })
+}
+
+/// Settings of the storm-track target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackParams {
+    /// minutes ahead
+    pub leads: Vec<f64>,
+    /// vil | ref
+    pub strength: String,
+}
+
+impl Default for TrackParams {
+    fn default() -> Self {
+        Self { leads: vec![15.0, 30.0, 45.0, 60.0], strength: "vil".into() }
+    }
+}
+
+impl TrackParams {
+    pub fn of(spec: &TrainSpec) -> TrackParams {
+        let mut p: TrackParams = serde_json::from_value(spec.target_params.clone()).unwrap_or_default();
+        if p.leads.is_empty() {
+            p.leads = TrackParams::default().leads;
+        }
+        p
+    }
+    /// Feature holding the strength and its units.
+    pub fn strength_feature(&self) -> (&'static str, &'static str) {
+        if self.strength == "ref" { ("ref_max", "dBZ") } else { ("vil_max", "kg/m²") }
+    }
+}
+
+/// Displacement (east km, north km) from a to b on a local flat projection.
+pub fn displacement_km(a: (f64, f64), b: (f64, f64)) -> (f64, f64) {
+    let kx = 111.32 * ((a.0 + b.0) / 2.0).to_radians().cos();
+    ((b.1 - a.1) * kx, (b.0 - a.0) * 110.57)
+}
+
+/// Storm-track labels of a tracked run: for every cell of volume k and lead, the displacement
+/// and strength of the same track at the volume nearest t + lead (None when the track has no
+/// volume there). Returns (k, cell index, lead, dx km, dy km, strength).
+pub fn track_labels(vcs: &[VolCells], ids: &[Vec<usize>], p: &TrackParams) -> Vec<(usize, usize, f64, f32, f32, f32)> {
+    let (sf, _) = p.strength_feature();
+    let mut out = vec![];
+    for k in 0..vcs.len() {
+        for &lead in &p.leads {
+            let tt = vcs[k].t + (lead * 60_000.0) as i64;
+            let tol = ((lead * 60_000.0 * 0.25) as i64).max(180_000);
+            let Some(m) = (k + 1..vcs.len()).filter(|&m| (vcs[m].t - tt).abs() <= tol).min_by_key(|&m| (vcs[m].t - tt).abs()) else { continue };
+            for (i, c) in vcs[k].cells.iter().enumerate() {
+                let Some(later) = vcs[m].cells.iter().zip(&ids[m]).find(|(_, id)| **id == ids[k][i]).map(|(c, _)| c) else { continue };
+                // the label is the position at exactly t + lead: scale by the actual time step
+                let dt = (vcs[m].t - vcs[k].t) as f64 / 60_000.0;
+                if dt <= 0.0 {
+                    continue;
+                }
+                let (dx, dy) = displacement_km((c.lat, c.lon), (later.lat, later.lon));
+                let f = lead / dt;
+                out.push((k, i, lead, (dx * f) as f32, (dy * f) as f32, later.feats.get(sf)));
+            }
+        }
+    }
+    out
+}
+
+impl RunCtx {
+    async fn run_track(&self, run: Run, ctl: &Ctl, p: &TrackParams) -> RunOut {
+        let mut out = RunOut::default();
+        let mut vcs: Vec<VolCells> = self.run_cells(&run, ctl).await.into_iter().flatten().collect();
+        if vcs.len() < 3 {
+            return out;
+        }
+        let ids = track(&mut vcs);
+        let labs = track_labels(&vcs, &ids, p);
+        let mut by_k: HashMap<usize, Vec<(usize, f64, f32, f32, f32)>> = HashMap::new();
+        for (k, i, lead, dx, dy, st) in labs {
+            by_k.entry(k).or_default().push((i, lead, dx, dy, st));
+        }
+        let mut ks: Vec<usize> = by_k.keys().copied().collect();
+        ks.sort_unstable();
+        for k in ks {
+            if !self.emitted.lock().insert(vcs[k].key.clone()) {
+                continue;
+            }
+            self.env(&mut vcs[k], ctl).await;
+            for (i, lead, dx, dy, st) in &by_k[&k] {
+                let c = &vcs[k].cells[*i];
+                // cells first seen in this volume have no motion yet: still useful (steering wind)
+                let mut fm = c.feats.clone();
+                super::features::track_features(&mut fm, *lead);
+                out.pos.push(Sample { features: fm.vector(&self.ids), label: *dx, weight: 1.0, group: run.group.clone(), meta: SampleMeta { lat: c.lat, lon: c.lon, t: c.t, site: Some(run.site.clone()), cell_id: Some(c.id.clone()), event: None }, targets: vec![*dy, *st] });
+            }
+        }
+        out
+    }
+}
+
+/// Storm-track samples: radar loops around storm reports, cells tracked, each (cell, lead)
+/// labelled with the cell's own later displacement and strength.
+async fn build_track(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_root: &Path, b: &Budget) -> Result<Built> {
+    let p = TrackParams::of(spec);
+    let mut rng = Rng::new(spec.seed);
+    let Plan { runs, n_cases, total, .. } = plan_runs(&fetch, spec, ctl, &mut rng, false, true).await?;
+    ctl.phase("fetch & extract", 0.0);
+    let ids: Vec<String> = super::features::all_features_for(&spec.target, "radar_cell", &spec.sources).into_iter().map(|f| f.id).collect();
+    let ctx = RunCtx {
+        fetch: fetch.clone(),
+        cache: CellCache::new(cache_root),
+        params_key: serde_json::to_string(&spec.cell).unwrap_or_default(),
+        cell: spec.cell.clone(),
+        sources: spec.sources.clone(),
+        skey: spec.sources.key(),
+        ids: ids.clone(),
+        rule: spec.match_rule,
+        tidx: EventIndex::new(vec![]),
+        aidx: EventIndex::new(vec![]),
+        emitted: parking_lot::Mutex::new(HashSet::new()),
+        done: AtomicUsize::new(0),
+        errs: AtomicUsize::new(0),
+        hits: AtomicUsize::new(0),
+        env_errs: AtomicUsize::new(0),
+        vols_ok: AtomicUsize::new(0),
+        total,
+        budget: b.clone(),
+    };
+    let pr = &p;
+    let outs: Vec<RunOut> = futures::stream::iter(runs).map(|r| ctx.run_track(r, ctl, pr)).buffer_unordered(b.download.max(1)).collect().await;
+    if ctl.cancelled() {
+        bail!("cancelled");
+    }
+    let mut samples: Vec<Sample> = outs.into_iter().flat_map(|o| o.pos).collect();
+    let ld = |a: &AtomicUsize| a.load(Ordering::Relaxed);
+    ctl.log(format!("extracted {} volumes ({} from cache, {} failed); {} (cell, lead) track samples", ld(&ctx.vols_ok), ld(&ctx.hits), ld(&ctx.errs), samples.len()));
+    ctl.phase("label", 0.0);
+    if samples.is_empty() {
+        bail!("no tracked cells: no radar loops with cells found for the selected events");
+    }
+    let n_all = samples.len();
+    samples = super::gridds::cap_samples(samples, spec.max_samples, true, spec.seed);
+    let mean_spd = samples.iter().map(|s| ((s.label as f64).powi(2) + (s.targets[0] as f64).powi(2)).sqrt()).sum::<f64>() / samples.len().max(1) as f64;
+    let stats = serde_json::json!({"events": n_cases, "volumes": ld(&ctx.vols_ok), "volumes_planned": total, "volumes_failed": ld(&ctx.errs), "samples_before_cap": n_all, "samples": samples.len(), "leads": p.leads, "mean_displacement_km": (mean_spd * 10.0).round() / 10.0});
+    ctl.counts(|c| {
+        c.samples = samples.len();
+        c.positives = 0;
+    });
+    Ok(Built { ids, samples, stats, event_times: HashMap::new() })
 }
 
 /// A candidate point for grid-point targets.
@@ -857,7 +1122,7 @@ async fn build_grid(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_ro
             let ck = format!("grid|{t}|{skey}|{:016x}", hash_str(&format!("{q:?}")));
             let done = &done;
             async move {
-                if ctl.stopping() {
+                if ctl.stopping() || !ctl.gate().await {
                     return (t, None);
                 }
                 let r = match cache.get_env(&ck) {
@@ -879,7 +1144,7 @@ async fn build_grid(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_ro
                 (t, r)
             }
         })
-        .buffer_unordered(concurrency.clamp(1, 3))
+        .buffer_unordered(concurrency.max(1))
         .collect()
         .await;
     let ids: Vec<String> = super::features::all_features_for(&spec.target, "grid_point", &spec.sources).into_iter().map(|f| f.id).collect();
@@ -902,7 +1167,7 @@ async fn build_grid(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_ro
                     }
                 }
             }
-            samples.push(Sample { features: fm.vector(&ids), label: p.label, weight: 1.0, group: p.group.clone(), meta: SampleMeta { lat: p.lat, lon: p.lon, t: p.t, site: None, cell_id: None, event: p.event.clone() } });
+            samples.push(Sample { features: fm.vector(&ids), label: p.label, weight: 1.0, group: p.group.clone(), meta: SampleMeta { lat: p.lat, lon: p.lon, t: p.t, site: None, cell_id: None, event: p.event.clone() }, targets: vec![] });
         }
     }
     if dropped > 0 {
@@ -917,5 +1182,5 @@ async fn build_grid(fetch: Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, cache_ro
         c.positives = npos;
     });
     let stats = serde_json::json!({"positives": npos, "negatives": samples.len() - npos, "times": total});
-    Ok(Built { ids, samples, stats })
+    Ok(Built { ids, samples, stats, event_times: HashMap::new() })
 }

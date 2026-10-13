@@ -300,8 +300,10 @@ pub fn extract(v: &Volume, key: &str, p: &CellParams) -> VolCells {
     let radar_h = v.height_m as f64;
     let (vlat, vlon) = (v.lat as f64, v.lon as f64);
 
+    // cells in parallel (on the caller's rayon pool: a training job's own pool)
+    use rayon::prelude::*;
     let mut cells: Vec<Cell> = comps
-        .iter()
+        .par_iter()
         .enumerate()
         .map(|(k, c)| {
             let mut fm = FeatMap::default();
@@ -624,9 +626,18 @@ pub fn apply_trends(cur: &mut VolCells, prev: &VolCells) -> Vec<Option<usize>> {
         let p = &prev.cells[j];
         let (brg, d) = bearing_dist(p.lat, p.lon, cur.cells[i].lat, cur.cells[i].lon);
         let kt = (d / dt * 1.943_844) as f32;
+        let (pu, pv, page) = (p.feats.get("motion_u_kt"), p.feats.get("motion_v_kt"), p.feats.get("track_age_min"));
         let c = &mut cur.cells[i];
         c.feats.set("motion_kt", kt);
         c.motion = Some((brg as f32, kt));
+        let a = (brg as f32).to_radians();
+        c.feats.set("motion_u_kt", kt * a.sin());
+        c.feats.set("motion_v_kt", kt * a.cos());
+        if pu.is_finite() && pv.is_finite() {
+            c.feats.set("prev_u_kt", pu);
+            c.feats.set("prev_v_kt", pv);
+        }
+        c.feats.set("track_age_min", if page.is_finite() { page } else { 0.0 } + (dt / 60.0) as f32);
         for (k, src) in [("ref_trend", "ref_max"), ("vil_trend", "vil_max"), ("vrot_trend", "vrot_max")] {
             let (a, b) = (c.feats.get(src), p.feats.get(src));
             if a.is_finite() && b.is_finite() {

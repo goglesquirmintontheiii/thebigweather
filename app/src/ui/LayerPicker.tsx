@@ -10,8 +10,12 @@ import { noLevel3 } from "../intl/sites";
 import { BrainCircuit } from "lucide-preact"; // models 0.7
 import { predLayers, predModelId, predModelName, runState, mlOpen, mlTab, refreshGridCatalog, loadRun } from "../ml/client"; // models 0.7
 import { fmtTime } from "../util"; // models 0.7
+import { Percent, Tornado, Layers2 } from "lucide-preact"; // data 0.8
+import { isEnsId, isSvrId, thrSpec, ensThr, setEnsThr } from "../weather"; // data 0.8
+import { setD6 } from "../grid/contours"; // data 0.8
+import { convertUnit } from "../util"; // data 0.8
 
-type Cat = "radar" | "world" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs" | "water" /* data 0.6 */ | "mine" /* models 0.7 */;
+type Cat = "radar" | "world" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs" | "water" /* data 0.6 */ | "mine" /* models 0.7 */ | "ens" | "severe" /* data 0.8 */;
 const CATS: { id: Cat; name: string; icon: any }[] = [
   { id: "radar", name: "Radar", icon: Radar },
   { id: "world", name: "World", icon: Globe },
@@ -23,9 +27,13 @@ const CATS: { id: Cat; name: string; icon: any }[] = [
   { id: "obs", name: "Surface", icon: Thermometer },
   { id: "water", name: "Water", icon: Waves }, // data 0.6: flooding + marine
   { id: "mine", name: "My models", icon: BrainCircuit }, // models 0.7
+  { id: "ens", name: "Ensembles", icon: Percent }, // data 0.8
+  { id: "severe", name: "Severe", icon: Tornado }, // data 0.8
 ];
 
 function catOf(d: GridLayerDef): Cat {
+  if (isEnsId(d.id) || d.group === "Ensembles") return "ens"; // data 0.8
+  if (isSvrId(d.id) || d.group === "Severe parameters") return "severe"; // data 0.8
   if ((d.source as string) === "mlpred" || d.id.startsWith("mlpred/")) return "mine"; // models 0.7
   if (isWaterDef(d)) return "water"; // data 0.6
   if (d.source === "nowcast") return "future"; // data 0.6
@@ -106,6 +114,8 @@ export function LayerPicker() {
                 {cat === "future" && <FutureList pick={pick} />}
                 {cat === "water" && <WaterList pick={pick} />}
                 {cat === "mine" && <MineList pick={pick} />}
+                {cat === "ens" && <EnsList pick={pick} />}
+                {cat === "severe" && <SevereList pick={pick} />}
               </div>
             </div>
           )}
@@ -360,6 +370,19 @@ function SatList({ pick }: { pick: Pick }) {
           </div>
         </>
       )}
+      {/* data 0.8: GOES fog / low-cloud probability (goes/<sat>/fog) */}
+      {gridLayers.value.filter((d) => /^goes\/[^/]+\/fog$/.test(d.id) && (imageOnly || d.id.startsWith(`goes/${sat}/`))).length > 0 && (
+        <>
+          <label class="lbl">Fog / low cloud</label>
+          <div class="lp-grid">
+            {gridLayers.value
+              .filter((d) => /^goes\/[^/]+\/fog$/.test(d.id) && (imageOnly || d.id.startsWith(`goes/${sat}/`)))
+              .map((d) => (
+                <Item key={d.id} on={isGrid(d.id)} name={d.name} sub="Probability 0–100 %" onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />
+              ))}
+          </div>
+        </>
+      )}
       {!imageOnly && !goes.length && <div class="muted small">Connect to a server to list GOES layers.</div>}
     </>
   );
@@ -515,3 +538,173 @@ function WorldList({ pick }: { pick: Pick }) {
     </>
   );
 }
+
+/* ---------- data 0.8: ensemble probabilities, severe parameters, composites, threshold dock ---------- */
+const OP_TXT: Record<string, string> = { gt: ">", ge: "≥", gte: "≥", lt: "<", le: "≤", lte: "≤" };
+/** server units → display units (linear), and back */
+function thrConv(units: string) {
+  const [a0, u] = convertUnit(0, units);
+  const a1 = convertUnit(1, units)[0];
+  const k = a1 - a0 || 1;
+  return { u, to: (v: number) => a0 + v * k, from: (x: number) => (x - a0) / k };
+}
+const nice = (x: number) => (Math.abs(x) >= 10 ? Math.round(x).toString() : (+x.toFixed(2)).toString());
+
+function EnsList({ pick }: { pick: Pick }) {
+  const defs = gridLayers.value.filter((d) => catOf(d) === "ens");
+  if (!defs.length) return <div class="muted small">No ensemble layers on this server yet (needs the data 0.8 server).</div>;
+  const models = [...new Set(defs.map((d) => d.id.split("/")[1] ?? d.group))];
+  return (
+    <>
+      {models.map((m) => (
+        <div key={m}>
+          <label class="lbl">{defs.find((d) => d.id.split("/")[1] === m)?.group.replace(/^Ensembles · /, "") || m.toUpperCase()}</label>
+          <div class="lp-grid">
+            {defs
+              .filter((d) => d.id.split("/")[1] === m)
+              .map((d) => {
+                const sp = thrSpec(d);
+                return <Item key={d.id} on={isGrid(d.id)} name={d.name} sub={sp ? `P(${OP_TXT[sp.op] ?? sp.op} threshold)` : undefined} onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />;
+              })}
+          </div>
+        </div>
+      ))}
+      <div class="muted small lp-note">Probability that ensemble members exceed a threshold. Pick the threshold above the legend.</div>
+    </>
+  );
+}
+
+/** composite presets: a severe parameter + contours / barbs of another */
+export const COMPOSITES: { id: string; name: string; sub: string; fill: RegExp; contour?: RegExp; barbs?: string }[] = [
+  { id: "stp-srh", name: "STP + SRH contours", sub: "Tornado ingredients", fill: /^stp/, contour: /srh.*(01|1km|0_1)|srh01|srh1/ },
+  { id: "cape-shear", name: "MLCAPE + shear barbs", sub: "0–6 km bulk shear", fill: /^mlcape|^cape_ml|mlcape/, barbs: "shr06" },
+  { id: "scp-shear", name: "SCP + eff. shear contours", sub: "Supercell potential", fill: /^scp/, contour: /eff.*sh|ebwd|shr_eff|effshear/ },
+  { id: "ship-500", name: "SHIP + 500 mb barbs", sub: "Large hail", fill: /^ship/, barbs: "500" },
+  { id: "cape-cin", name: "MLCAPE + MLCIN contours", sub: "Instability vs cap", fill: /^mlcape|mlcape/, contour: /mlcin|cin_ml|^cin/ },
+];
+export function applyComposite(id: string, src?: string) {
+  const c = COMPOSITES.find((x) => x.id === id);
+  if (!c) return false;
+  const all = gridLayers.value.filter((d) => isSvrId(d.id));
+  const srcs = [...new Set(all.map((d) => d.id.split("/")[1]))];
+  const cur = settings.value.weather.kind === "grid" && isSvrId(settings.value.weather.id) ? settings.value.weather.id.split("/")[1] : undefined;
+  const order = [src, cur, ...srcs].filter(Boolean) as string[];
+  for (const s of order) {
+    const sib = all.filter((d) => d.id.startsWith(`svr/${s}/`));
+    const f = sib.find((d) => c.fill.test(d.id.split("/")[2].toLowerCase()));
+    if (!f) continue;
+    const ct = c.contour ? sib.find((d) => c.contour!.test(d.id.split("/")[2].toLowerCase())) : undefined;
+    selectWeather({ kind: "grid", id: f.id });
+    setD6((d) => {
+      d.contours = !!ct;
+      d.cfield = ct ? ct.id.split("/")[2] : "";
+      d.interval = undefined;
+      d.base = undefined;
+      d.barbs = !!c.barbs;
+      if (c.barbs) d.blevel = c.barbs as any;
+    });
+    return true;
+  }
+  return false;
+}
+
+function SevereList({ pick }: { pick: Pick }) {
+  const defs = gridLayers.value.filter((d) => catOf(d) === "severe");
+  if (!defs.length) return <div class="muted small">No severe parameter layers on this server yet (needs the data 0.8 server).</div>;
+  const srcs = [...new Set(defs.map((d) => d.id.split("/")[1] ?? ""))];
+  const avail = COMPOSITES.filter((c) => defs.some((d) => c.fill.test((d.id.split("/")[2] ?? "").toLowerCase())));
+  return (
+    <>
+      {avail.length > 0 && (
+        <>
+          <label class="lbl">
+            <Layers2 size={11} /> Composites
+          </label>
+          <div class="lp-grid">
+            {avail.map((c) => (
+              <Item key={c.id} on={false} name={c.name} sub={c.sub} onClick={() => pick(() => applyComposite(c.id))} />
+            ))}
+          </div>
+        </>
+      )}
+      {srcs.map((s) => (
+        <div key={s}>
+          <label class="lbl">{defs.find((d) => d.id.split("/")[1] === s)?.group.replace(/^Severe parameters · /, "") || `Severe parameters · ${s.toUpperCase()}`}</label>
+          <div class="lp-grid">
+            {defs
+              .filter((d) => d.id.split("/")[1] === s)
+              .map((d) => (
+                <Item key={d.id} on={isGrid(d.id)} name={d.name} onClick={() => pick(() => selectWeather({ kind: "grid", id: d.id }))} />
+              ))}
+          </div>
+        </div>
+      ))}
+      <div class="muted small lp-note">SPC mesoanalysis-style colours. Contours and barbs: the controls above the legend.</div>
+    </>
+  );
+}
+
+/** threshold picker (ensembles) and composite chips (severe), docked above the legend */
+export function P8LayerDock() {
+  const w = settings.value.weather;
+  const [custom, setCustom] = useState("");
+  const [pos, setPos] = useState<{ right: number; bottom: number } | null>(null);
+  useEffect(() => {
+    const upd = () => {
+      const lg = document.querySelector<HTMLElement>(".legend:not(.top)");
+      const lc = document.querySelector<HTMLElement>(".d6-lines");
+      const el = lc ?? lg;
+      if (!el) return setPos({ right: 12, bottom: 150 });
+      const r = el.getBoundingClientRect();
+      setPos({ right: Math.round(window.innerWidth - r.right), bottom: Math.round(window.innerHeight - r.top + 6) });
+    };
+    upd();
+    const t = setInterval(upd, 700);
+    return () => clearInterval(t);
+  }, []);
+  if (w.kind !== "grid" || !pos) return null;
+  const d = gridDef(w.id);
+  if (!d) return null;
+  if (isSvrId(w.id)) {
+    const src = w.id.split("/")[1];
+    const sib = gridLayers.value.filter((x) => x.id.startsWith(`svr/${src}/`));
+    const avail = COMPOSITES.filter((c) => sib.some((x) => c.fill.test(x.id.split("/")[2].toLowerCase())));
+    if (!avail.length) return null;
+    return (
+      <div class="p8-dock glass" style={{ right: `${pos.right}px`, bottom: `${pos.bottom}px` }}>
+        <span class="p8-dock-h">Composite</span>
+        {avail.map((c) => (
+          <button key={c.id} class="chip" title={c.sub} onClick={() => applyComposite(c.id, src)}>
+            {c.name}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  const sp = thrSpec(d);
+  if (!sp) return null;
+  const cv = thrConv(sp.units);
+  const cur = ensThr();
+  const op = OP_TXT[sp.op] ?? sp.op;
+  const apply = () => {
+    const x = parseFloat(custom);
+    if (Number.isFinite(x)) setEnsThr(+cv.from(x).toPrecision(6));
+    setCustom("");
+  };
+  return (
+    <div class="p8-dock glass" style={{ right: `${pos.right}px`, bottom: `${pos.bottom}px` }}>
+      <span class="p8-dock-h" title={`Probability that the value is ${op} the threshold`}>
+        P({d.name.replace(/^Prob(ability)?\.? ?(of )?/i, "").split(" · ")[0]} {op})
+      </span>
+      {sp.presets.map((v) => (
+        <button key={v} class={`chip ${cur != null && Math.abs(cur - v) < 1e-9 ? "on" : ""}`} onClick={() => setEnsThr(v)}>
+          {nice(cv.to(v))}
+          {cv.u && !cv.u.startsWith("°") ? ` ${cv.u}` : cv.u}
+        </button>
+      ))}
+      <input class="p8-thr-in" type="number" step="any" placeholder={cur != null && !sp.presets.some((v) => Math.abs(cur - v) < 1e-9) ? nice(cv.to(cur)) : "custom"} value={custom} onInput={(e) => setCustom((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.key === "Enter" && apply()} onBlur={apply} />
+      <small class="muted">{cv.u}</small>
+    </div>
+  );
+}
+/* ---------- end data 0.8 ---------- */

@@ -90,6 +90,10 @@ pub struct TrainSpec {
     pub target_params: Value,
     /// stratified cap on the number of samples (0 = no cap)
     pub max_samples: usize,
+    /// quick | medium | thorough | intensive ("" = custom)
+    pub intensity: String,
+    /// per-job resource budget (0 = server default)
+    pub resources: super::jobs::Resources,
 }
 
 impl Default for TrainSpec {
@@ -126,6 +130,8 @@ impl Default for TrainSpec {
             task: String::new(),
             target_params: json!({}),
             max_samples: 0,
+            intensity: String::new(),
+            resources: Default::default(),
         }
     }
 }
@@ -157,6 +163,7 @@ pub const TARGETS: &[Target] = &[
     Target { id: "wind", name: "Damaging wind", candidate: "radar_cell", task: "classification", output: "detections", description: "Cells producing severe wind (≥ 50 kt measured/estimated or damage).", defaults: |_| json!({"label_source": ["spc_wind"], "filters": {"min_wind_kt": 50.0}, "match": {"radius_km": 15.0, "before_min": 10.0, "after_min": 20.0}, "sources": radar_sources()}) },
     Target { id: "debris", name: "Tornado debris (TDS)", candidate: "radar_cell", task: "classification", output: "detections", description: "Cells with an ongoing (E)F2+ tornado — lofted debris (low CC, low ZDR) should be visible.", defaults: |_| json!({"label_source": ["spc_tornado"], "filters": {"min_mag": 2}, "match": {"radius_km": 8.0, "before_min": 5.0, "after_min": 0.0}, "sources": radar_sources()}) },
     Target { id: "storm_intensify", name: "Storm instability (intensifying cells)", candidate: "radar_cell", task: "classification", output: "detections", description: "Unstable storm cells likely to develop / intensify within the look-ahead: the same cell (tracked through later radar volumes) gains VIL or reflectivity, or produces a severe report. Self-supervised from radar loops around storm reports and null days.", defaults: |y| json!({"label_source": ["radar_tracks", "spc_hail", "spc_wind", "spc_tornado"], "years": [y - 2, y - 1], "volumes_per_event": 10, "max_events": 120, "null_days": 20, "match": {"radius_km": 15.0, "before_min": 10.0, "after_min": 60.0}, "sources": radar_sources(), "target_params": {"lead_min": 30.0, "criteria": "any", "dvil": 10.0, "dref": 5.0, "use_reports": true, "report_radius_km": 15.0}}) },
+    Target { id: "storm_track", name: "Storm track (future path & strength)", candidate: "radar_cell", task: "regression", output: "detections", description: "Future positions of each storm cell at +15 / +30 / +45 / +60 min (displacement regression from the cell's motion history, environment steering wind — GFS / HRRR 0–6 km mean wind, shear, Bunkers motion — and cell features), the speed along the track and the predicted strength (VIL or max reflectivity) with an uncertainty cone. Self-supervised from cells tracked through archived radar loops.", defaults: |y| json!({"label_source": ["radar_tracks", "spc_hail", "spc_wind"], "years": [y - 2, y - 1], "volumes_per_event": 16, "max_events": 150, "null_days": 0, "match": {"radius_km": 30.0, "before_min": 60.0, "after_min": 45.0}, "sources": {"radar_products": ["REF", "VEL", "SW", "ZDR", "RHO", "PHI", "CREF", "ET", "VIL"], "mrms": [], "metar": false, "model": ["mwu", "mwv", "shru", "shrv", "wind850", "wind250"]}, "params": {"loss": "huber", "huber_delta": 4.0}, "max_samples": 200000, "target_params": {"leads": [15.0, 30.0, 45.0, 60.0], "strength": "vil"}}) },
     Target { id: "flash_flood", name: "Flash flood", candidate: "grid_point", task: "classification", output: "detections", description: "Points with a flash-flood report within 1 h (MRMS QPE / FLASH features).", defaults: |y| json!({"label_source": ["iem_lsr"], "filters": {"lsr_types": ["F"]}, "years": [(y - 3).max(2021), y - 1], "max_events": 600, "neg_ratio": 5.0, "sources": {"mrms": ["qpe1h", "qpe6h", "prate", "flash_crest_unit", "flash_ari01h", "flash_ffg01h"], "metar": false, "model": ["pwat"]}, "grid": {"lead_hours": [0.0], "exclude_km": 50.0, "exclude_hours": 6.0, "run_spacing_deg": 0.1, "run_every_min": 10}}) },
     Target { id: "tropical_genesis", name: "Tropical storm formation (48 h)", candidate: "grid_point", task: "classification", output: "detections", description: "Disturbances that become a tropical storm within 48 h (HURDAT2 genesis, GFS analysis environment).", defaults: |y| json!({"label_source": ["hurdat_genesis"], "filters": {"basins": ["al", "ep"]}, "years": [2021, y - 1], "max_events": 400, "neg_ratio": 6.0, "region": {"bbox": [-180.0, 0.0, -10.0, 40.0]}, "sources": {"mrms": [], "metar": false, "model": ["absv850", "shear_850_200", "rh700", "sst", "mslp", "pwat", "mucape", "land"]}, "grid": {"lead_hours": [0.0, 12.0, 24.0, 36.0, 48.0], "exclude_km": 600.0, "exclude_hours": 72.0, "run_spacing_deg": 1.0, "run_every_min": 360}}) },
     Target { id: "tropical_possible", name: "Possible tropical formation", candidate: "grid_point", task: "classification", output: "detections", description: "Systems that become any tropical cyclone (first best-track fix) within 48 h.", defaults: |y| json!({"label_source": ["hurdat_first_fix"], "filters": {"basins": ["al", "ep"]}, "years": [2021, y - 1], "max_events": 400, "neg_ratio": 6.0, "region": {"bbox": [-180.0, 0.0, -10.0, 40.0]}, "sources": {"mrms": [], "metar": false, "model": ["absv850", "shear_850_200", "rh700", "sst", "mslp", "pwat", "mucape", "land"]}, "grid": {"lead_hours": [0.0, 12.0, 24.0, 36.0, 48.0], "exclude_km": 600.0, "exclude_hours": 72.0, "run_spacing_deg": 1.0, "run_every_min": 360}}) },
@@ -183,6 +190,10 @@ pub fn target_params(id: &str) -> Value {
             p("dref", "ΔREF max ≥", "float", json!(5.0), json!(0.0), json!(30.0), n.clone(), "dB"),
             p("use_reports", "Severe reports count", "bool", json!(true), n.clone(), n.clone(), n.clone(), "Also positive when a severe report (label sources) occurs near the cell within the look-ahead"),
             p("report_radius_km", "Report radius", "float", json!(15.0), json!(2.0), json!(60.0), n.clone(), "km"),
+        ]),
+        "storm_track" => json!([
+            p("leads", "Leads", "minutes_list", json!([15.0, 30.0, 45.0, 60.0]), json!(5.0), json!(120.0), n.clone(), "Minutes ahead; one model covers all leads (lead is a feature)"),
+            p("strength", "Strength", "choice", json!("vil"), n.clone(), n.clone(), json!(["vil", "ref"]), "Predicted strength along the track: VIL (kg/m²) or max reflectivity (dBZ)"),
         ]),
         "instability" => json!([
             p("hours", "Window", "float", json!(3.0), json!(0.5), json!(24.0), n.clone(), "Hours after the analysis time"),
@@ -258,6 +269,7 @@ pub fn target(id: &str) -> Option<&'static Target> {
     TARGETS.iter().find(|t| t.id == id)
 }
 
+/// A hand-written preset (the original catalog; kept so their ids keep resolving).
 pub struct Preset {
     pub id: &'static str,
     pub name: &'static str,
@@ -265,7 +277,9 @@ pub struct Preset {
     pub spec: fn(i32) -> Value,
 }
 
-pub const PRESETS: &[Preset] = &[
+/// Original presets. Those whose id matches a generated `<slug>-<intensity>` preset are merged
+/// into it; the others resolve as aliases (see [`legacy_alias`]).
+pub const LEGACY_PRESETS: &[Preset] = &[
     Preset { id: "tornado-quick", name: "Tornado — quick (last 3 seasons, 150 events, GBDT)", target: "tornado", spec: |y| json!({"name": "Tornado (quick)", "years": [y - 3, y - 1], "max_events": 150, "null_days": 25, "neg_ratio": 4.0, "volumes_per_event": 3, "radars_per_event": 1, "algo": "gbdt", "cv_folds": 0}) },
     Preset { id: "tornado-thorough", name: "Tornado — thorough (2013–last year, 1500 events, 5-fold CV, tuned GBDT)", target: "tornado", spec: |y| json!({"name": "Tornado (thorough)", "years": [2013, y - 1], "max_events": 1500, "null_days": 300, "neg_ratio": 5.0, "volumes_per_event": 4, "radars_per_event": 2, "algo": "gbdt", "cv_folds": 5, "sources": {"mrms": ["azs02", "mesh"], "metar": true, "model": []}, "params": {"n_trees": 1500, "learning_rate": 0.03, "max_depth": 6, "min_child_weight": 3.0, "subsample": 0.8, "colsample": 0.7, "lambda": 2.0, "max_bins": 128, "early_stopping_rounds": 80}}) },
     Preset { id: "supercell", name: "Supercell (rotation + hail proxies; labels: tornado or ≥ 1.5\" hail)", target: "supercell", spec: |y| json!({"name": "Supercell", "years": [y - 3, y - 1], "max_events": 250, "null_days": 30, "algo": "gbdt"}) },
@@ -276,24 +290,19 @@ pub const PRESETS: &[Preset] = &[
     Preset { id: "tropical-genesis", name: "Tropical genesis (Atlantic + E Pacific, GFS analysis features)", target: "tropical_genesis", spec: |_| json!({"name": "Tropical genesis", "algo": "gbdt"}) },
     Preset { id: "wildfire-ignition", name: "Wildfire ignition (HMS + METAR / model dryness)", target: "wildfire", spec: |_| json!({"name": "Wildfire ignition", "algo": "gbdt"}) },
     Preset { id: "flash-flood", name: "Flash flood (MRMS QPE / FLASH + reports)", target: "flash_flood", spec: |_| json!({"name": "Flash flood", "algo": "gbdt"}) },
-    // storm instability (intensifying cells)
     Preset { id: "storm-intensify-quick", name: "Storm instability — quick (intensify within 30 min; 2 seasons, 120 cases)", target: "storm_intensify", spec: |y| json!({"name": "Intensifying storms (quick)", "years": [y - 2, y - 1], "max_events": 120, "null_days": 20, "volumes_per_event": 10, "algo": "gbdt", "params": {"n_trees": 300}}) },
     Preset { id: "storm-intensify-thorough", name: "Storm instability — thorough (2019+, 1000 cases, MRMS + GOES + HRRR, 5-fold CV)", target: "storm_intensify", spec: |y| json!({"name": "Intensifying storms (thorough)", "years": [2019, y - 1], "max_events": 1000, "null_days": 200, "volumes_per_event": 12, "cv_folds": 5, "sources": {"mrms": ["azs02", "mesh", "vil", "et18", "posh"], "metar": true, "model": [], "hrrr": ["mlcape", "mucape", "cin", "shear06", "srh01", "srh03", "uh25"], "satellite": ["tb13_min", "ccf", "cool13", "glm10", "glm30", "glm_jump"]}, "params": {"n_trees": 1200, "learning_rate": 0.03, "max_depth": 6, "early_stopping_rounds": 80}}) },
-    // general instability
     Preset { id: "instability-quick", name: "Instability — quick (3 h / 40 km; 2 seasons, GFS + MRMS + METAR + GOES)", target: "instability", spec: |y| json!({"name": "Instability (quick)", "years": [(y - 2).max(2021), y - 1], "max_events": 250, "null_days": 50, "max_samples": 20000, "algo": "gbdt"}) },
     Preset { id: "instability-thorough", name: "Instability — thorough (2021+, HRRR analyses + HRRR forecasts, GOES/GLM, 5-fold CV)", target: "instability", spec: |y| json!({"name": "Instability (thorough)", "years": [2021, y - 1], "max_events": 2500, "null_days": 400, "max_samples": 200000, "cv_folds": 5, "sources": {"mrms": ["cref", "vil", "mesh", "azs02", "et18"], "metar": true, "model": SEVERE_ENV, "hrrr": ["cape", "mlcape", "mucape", "cin", "mlcin", "srh01", "srh03", "shear06", "shear01", "uh25", "refc", "ltng", "pwat", "lcl"], "fcst": ["cape", "shear06", "uh25", "refc", "srh01"], "fcst_model": "hrrr", "satellite": ["tb13", "tb13_min", "ccf", "cool13", "wv8", "wv10", "glm10", "glm30", "glm_jump"]}, "params": {"n_trees": 1500, "learning_rate": 0.03, "max_depth": 6, "early_stopping_rounds": 80}}) },
-    // weather-layer forecasts
     Preset { id: "temp-forecast-quick", name: "Temperature — quick (leads 1–24 h, last season, GFS MOS-like)", target: "temp_forecast", spec: |y| json!({"name": "Temperature forecast (quick)", "years": [(y - 1).max(2021), y - 1], "max_events": 100, "max_samples": 25000, "algo": "gbdt", "params": {"n_trees": 400, "loss": "squared"}}) },
     Preset { id: "temp-forecast-thorough", name: "Temperature — thorough (3 years, HRRR ≤ 18 h else GFS, satellite, P10/P90, 5-fold CV)", target: "temp_forecast", spec: |y| json!({"name": "Temperature forecast (thorough)", "years": [(y - 3).max(2021), y - 1], "max_events": 1200, "max_samples": 250000, "cv_folds": 5, "sources": {"metar": true, "model": ["t2m", "td2m", "elev", "land", "soilw", "snod", "mslp", "wind10", "t850"], "hrrr": ["t2m", "td2m"], "fcst": ["t2m", "td2m", "tcc", "wind10", "apcp", "rh2m", "tmax", "tmin", "t850", "mslp"], "fcst_model": "auto", "satellite": ["tb13", "ccf"]}, "params": {"n_trees": 1500, "learning_rate": 0.03, "max_depth": 7, "loss": "squared", "quantiles": [0.1, 0.9], "early_stopping_rounds": 80}}) },
     Preset { id: "precip-forecast-quick", name: "Precipitation — quick (1/3/6/24 h totals, last season)", target: "precip_forecast", spec: |y| json!({"name": "Precipitation forecast (quick)", "years": [(y - 1).max(2021), y - 1], "max_events": 100, "max_samples": 25000, "algo": "gbdt", "params": {"n_trees": 400, "loss": "huber", "huber_delta": 2.0}}) },
     Preset { id: "precip-forecast-thorough", name: "Precipitation — thorough (3 years, HRRR/GFS QPF, MRMS, GOES, P10/P90)", target: "precip_forecast", spec: |y| json!({"name": "Precipitation forecast (thorough)", "years": [(y - 3).max(2021), y - 1], "max_events": 1200, "max_samples": 250000, "cv_folds": 5, "sources": {"mrms": ["qpe1h", "qpe3h", "qpe6h", "qpe24h", "prate", "cref", "vil", "et18"], "model": ["pwat", "elev", "rh700", "cape"], "hrrr": ["pwat", "refc", "apcp1h"], "fcst": ["apcp", "pwat", "cape", "refc", "tcc", "rh700"], "fcst_model": "auto", "satellite": ["tb13", "tb13_min", "ccf", "cool13", "wv9", "glm10"]}, "params": {"n_trees": 1500, "learning_rate": 0.03, "max_depth": 7, "loss": "huber", "huber_delta": 2.0, "quantiles": [0.1, 0.9], "early_stopping_rounds": 80}}) },
     Preset { id: "storm-forecast-quick", name: "Storms — quick (P(≥ 40 dBZ within 25 km), leads 1/3/6 h)", target: "storm_forecast", spec: |y| json!({"name": "Storm forecast (quick)", "years": [(y - 1).max(2021), y - 1], "max_events": 100, "max_samples": 25000, "algo": "gbdt", "params": {"n_trees": 400}}) },
     Preset { id: "storm-forecast-thorough", name: "Storms — thorough (3 seasons, HRRR, GOES + GLM, 5-fold CV)", target: "storm_forecast", spec: |y| json!({"name": "Storm forecast (thorough)", "years": [(y - 3).max(2021), y - 1], "max_events": 1200, "max_samples": 250000, "cv_folds": 5, "sources": {"mrms": ["cref", "vil", "et18", "et50", "prate", "mesh", "azs02"], "metar": true, "model": ["cape", "mucape", "cin", "shear06", "pwat", "lftx", "lapse75"], "hrrr": ["mlcape", "mlcin", "shear06", "srh03", "uh25", "refc", "ltng"], "fcst": ["refc", "cape", "apcp", "uh25", "ltng"], "fcst_model": "auto", "satellite": ["tb13", "tb13_min", "ccf", "cool13", "wv8", "glm10", "glm30", "glm_jump"]}, "params": {"n_trees": 1500, "learning_rate": 0.03, "max_depth": 7, "early_stopping_rounds": 80}}) },
-    // tropical
     Preset { id: "tropical-forecast-2day", name: "Tropical development — 2 days (Atlantic + E Pacific)", target: "tropical_forecast", spec: |_| json!({"name": "Tropical development (2 day)", "max_events": 250, "max_samples": 25000, "target_params": {"lead_days": [2.0]}}) },
     Preset { id: "tropical-forecast-7day", name: "Tropical development — 7 days", target: "tropical_forecast", spec: |_| json!({"name": "Tropical development (7 day)", "max_events": 250, "max_samples": 25000, "target_params": {"lead_days": [7.0]}, "sources": {"fcst_step_h": 24}}) },
     Preset { id: "tropical-forecast-thorough", name: "Tropical development — thorough (2/5/7 days in one model, more cases, 5-fold CV)", target: "tropical_forecast", spec: |_| json!({"name": "Tropical development (thorough)", "max_events": 1000, "null_days": 600, "max_samples": 200000, "cv_folds": 5, "target_params": {"lead_days": [2.0, 5.0, 7.0]}, "sources": {"fcst_step_h": 24}, "params": {"n_trees": 1200, "learning_rate": 0.03, "early_stopping_rounds": 80}}) },
-    // outlooks
     Preset { id: "outlook-day1", name: "Outlook — Day 1 (any severe, 12Z–12Z)", target: "outlook", spec: |_| json!({"name": "Outlook Day 1", "target_params": {"day": "1", "hazard": "any"}}) },
     Preset { id: "outlook-day2", name: "Outlook — Day 2", target: "outlook", spec: |_| json!({"name": "Outlook Day 2", "target_params": {"day": "2", "hazard": "any"}}) },
     Preset { id: "outlook-day3", name: "Outlook — Day 3", target: "outlook", spec: |_| json!({"name": "Outlook Day 3", "target_params": {"day": "3", "hazard": "any"}}) },
@@ -302,13 +311,247 @@ pub const PRESETS: &[Preset] = &[
     Preset { id: "outlook-day1-wind", name: "Outlook — Day 1 wind", target: "outlook", spec: |_| json!({"name": "Outlook Day 1 wind", "label_source": ["spc_wind"], "target_params": {"day": "1", "hazard": "wind"}}) },
     Preset { id: "outlook-day1-hail", name: "Outlook — Day 1 hail", target: "outlook", spec: |_| json!({"name": "Outlook Day 1 hail", "label_source": ["spc_hail"], "target_params": {"day": "1", "hazard": "hail"}}) },
     Preset { id: "outlook-thorough", name: "Outlook — Day 1 thorough (2021+, HRRR + GFS, 5-fold CV)", target: "outlook", spec: |y| json!({"name": "Outlook Day 1 (thorough)", "years": [2021, y - 1], "max_events": 900, "null_days": 400, "max_samples": 300000, "cv_folds": 5, "sources": {"fcst": ["cape", "mucape", "mlcape", "srh03", "srh01", "shear06", "apcp", "lftx", "pwat", "lapse75", "td2m", "refc", "uh25"], "fcst_model": "auto"}, "target_params": {"day": "1", "grid_deg": 0.5}, "params": {"n_trees": 1500, "learning_rate": 0.03, "early_stopping_rounds": 80}}) },
-    // floods
     Preset { id: "flood-quick", name: "Flood risk — quick (6 h / 25 km; 2 seasons)", target: "flood_forecast", spec: |y| json!({"name": "Flood risk (quick)", "years": [(y - 2).max(2021), y - 1], "max_events": 250, "null_days": 40, "max_samples": 20000}) },
     Preset { id: "flood-thorough", name: "Flood risk — thorough (2021+, warnings, HRRR QPF, 5-fold CV)", target: "flood_forecast", spec: |y| json!({"name": "Flood risk (thorough)", "years": [2021, y - 1], "label_source": ["iem_lsr", "iem_sbw"], "filters": {"phenomena": ["FF"]}, "max_events": 2000, "null_days": 300, "max_samples": 200000, "cv_folds": 5, "target_params": {"use_warnings": true}, "sources": {"mrms": ["qpe1h", "qpe3h", "qpe6h", "qpe12h", "qpe24h", "qpe72h", "prate", "flash_crest_unit", "flash_crest_q", "flash_soil", "flash_ari01h", "flash_ari03h", "flash_ari06h", "flash_ffg01h", "flash_ffg03h", "flash_ffg06h"], "hrrr": ["apcp1h", "pwat"], "fcst": ["apcp", "pwat", "refc"], "fcst_model": "auto", "satellite": ["tb13_min", "ccf"]}, "params": {"n_trees": 1200, "learning_rate": 0.03, "early_stopping_rounds": 80}}) },
 ];
 
-pub fn preset(id: &str) -> Option<&'static Preset> {
-    PRESETS.iter().find(|p| p.id == id)
+/// Training intensities, lightest first.
+pub const INTENSITIES: &[&str] = &["quick", "medium", "thorough", "intensive"];
+
+/// Preset families: (family slug, target, display name, target_params / spec overrides).
+/// Each family gets one preset per intensity: `<slug>-<intensity>`.
+fn families() -> Vec<(&'static str, &'static str, &'static str, Value)> {
+    vec![
+        ("tornado", "tornado", "Tornado", json!({})),
+        ("supercell", "supercell", "Supercell", json!({})),
+        ("hail", "hail", "Large hail (≥ 1\")", json!({})),
+        ("sighail", "sighail", "Significant hail (≥ 2\")", json!({})),
+        ("wind", "wind", "Damaging wind", json!({})),
+        ("tds", "debris", "Tornado debris (TDS)", json!({})),
+        ("storm-intensify", "storm_intensify", "Storm instability (intensifying cells)", json!({})),
+        ("storm-track", "storm_track", "Storm track (future path & strength)", json!({})),
+        ("flash-flood", "flash_flood", "Flash flood", json!({})),
+        ("tropical-genesis", "tropical_genesis", "Tropical genesis (48 h)", json!({})),
+        ("tropical-possible", "tropical_possible", "Possible tropical formation", json!({})),
+        ("wildfire", "wildfire", "Wildfire ignition", json!({})),
+        ("instability", "instability", "Atmospheric instability", json!({})),
+        ("temp-forecast", "temp_forecast", "Temperature forecast", json!({})),
+        ("precip-forecast", "precip_forecast", "Precipitation forecast", json!({})),
+        ("storm-forecast", "storm_forecast", "Storm forecast", json!({})),
+        ("tropical-forecast", "tropical_forecast", "Tropical development (2 days)", json!({"target_params": {"lead_days": [2.0]}})),
+        ("tropical-forecast-7day", "tropical_forecast", "Tropical development (7 days)", json!({"target_params": {"lead_days": [7.0]}, "sources": {"fcst_step_h": 24}})),
+        ("outlook", "outlook", "Outlook Day 1 (any severe)", json!({"target_params": {"day": "1", "hazard": "any"}})),
+        ("outlook-day2", "outlook", "Outlook Day 2", json!({"target_params": {"day": "2", "hazard": "any"}})),
+        ("outlook-day3", "outlook", "Outlook Day 3", json!({"target_params": {"day": "3", "hazard": "any"}})),
+        ("outlook-day4-7", "outlook", "Outlook Day 4–7", json!({"target_params": {"day": "4-7", "hazard": "any"}, "sources": {"fcst_step_h": 12}})),
+        ("outlook-day1-tornado", "outlook", "Outlook Day 1 tornado", json!({"label_source": ["spc_tornado"], "target_params": {"day": "1", "hazard": "tornado"}})),
+        ("outlook-day1-wind", "outlook", "Outlook Day 1 wind", json!({"label_source": ["spc_wind"], "target_params": {"day": "1", "hazard": "wind"}})),
+        ("outlook-day1-hail", "outlook", "Outlook Day 1 hail", json!({"label_source": ["spc_hail"], "target_params": {"day": "1", "hazard": "hail"}})),
+        ("flood", "flood_forecast", "Flood risk", json!({})),
+        ("custom", "custom", "Custom (radar cells)", json!({})),
+    ]
+}
+
+/// Old preset ids that are not `<slug>-<intensity>`: id → generated preset id.
+pub fn legacy_alias(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "supercell" => "supercell-quick",
+        "hail-large" => "hail-quick",
+        "hail-significant" => "sighail-quick",
+        "wind-damaging" => "wind-quick",
+        "tds" => "tds-quick",
+        "tropical-genesis" => "tropical-genesis-quick",
+        "wildfire-ignition" => "wildfire-quick",
+        "flash-flood" => "flash-flood-quick",
+        "tropical-forecast-2day" => "tropical-forecast-quick",
+        "tropical-forecast-7day" => "tropical-forecast-7day-quick",
+        "outlook-day1" => "outlook-quick",
+        "outlook-day2" => "outlook-day2-quick",
+        "outlook-day3" => "outlook-day3-quick",
+        "outlook-day4-7" => "outlook-day4-7-quick",
+        "outlook-day1-tornado" => "outlook-day1-tornado-quick",
+        "outlook-day1-wind" => "outlook-day1-wind-quick",
+        "outlook-day1-hail" => "outlook-day1-hail-quick",
+        _ => return None,
+    })
+}
+
+/// Earliest useful training year of a target (archive start of its main sources / labels).
+pub fn min_year(target: &str) -> i32 {
+    match target {
+        // dual-pol everywhere since 2013
+        "tornado" | "supercell" | "hail" | "sighail" | "wind" | "debris" | "storm_intensify" | "storm_track" | "custom" => 2013,
+        // MRMS / GFS (AWS) archives
+        _ => 2021,
+    }
+}
+
+/// Extra sources per intensity tier (2 = thorough, 3 = intensive) for a target.
+fn tier_sources(target: &str, tier: usize) -> Value {
+    let radar_cell = target_is_cell(target);
+    if radar_cell {
+        return match tier {
+            0 => json!({}),
+            1 => json!({"mrms": ["azs02", "mesh"], "metar": true}),
+            2 => json!({"mrms": ["azs02", "mesh", "vil", "et18", "posh"], "metar": true, "model": ["mlcape", "mucape", "shear06", "srh01", "srh03"], "satellite": ["tb13_min", "glm10"]}),
+            _ => json!({"mrms": ["azs02", "azs36", "mesh", "mesh60", "vil", "vild", "et18", "et50", "posh", "rot60", "rotml60", "ref_m20c", "h50_m20c"], "metar": true, "model": SEVERE_ENV, "hrrr": ["mlcape", "mucape", "cin", "mlcin", "shear06", "shear01", "srh01", "srh03", "uh25", "lcl", "ustm", "vstm"], "satellite": ["tb13_min", "ccf", "cool13", "glm10", "glm30", "glm_jump"]}),
+        };
+    }
+    match (target, tier) {
+        (_, 0) | (_, 1) => json!({}),
+        ("tropical_genesis" | "tropical_possible" | "tropical_forecast", 2) => json!({"satellite": ["tb13_min", "ccf"]}),
+        ("tropical_genesis" | "tropical_possible" | "tropical_forecast", _) => json!({"satellite": ["tb13", "tb13_min", "ccf", "wv8", "wv10"], "fcst": ["absv850", "mslp_min", "shear_850_200", "rh700", "apcp", "pwat"], "fcst_model": "gfs"}),
+        ("wildfire", 2) => json!({"satellite": ["tb13"]}),
+        ("wildfire", _) => json!({"hrrr": ["t2m", "td2m", "gust"], "fcst": ["wind10", "gust", "rh2m", "tmax"], "fcst_model": "auto", "satellite": ["tb13", "glm30"], "other": ["drought"]}),
+        ("flash_flood", 2) => json!({"hrrr": ["apcp1h", "pwat"], "other": ["drought"]}),
+        ("flash_flood", _) => json!({"mrms": ["qpe1h", "qpe3h", "qpe6h", "qpe12h", "qpe24h", "qpe72h", "prate", "flash_crest_unit", "flash_crest_q", "flash_soil", "flash_ari01h", "flash_ari03h", "flash_ari06h", "flash_ffg01h", "flash_ffg03h", "flash_ffg06h"], "hrrr": ["apcp1h", "pwat", "refc"], "fcst": ["apcp", "pwat", "refc"], "fcst_model": "auto", "satellite": ["tb13_min", "ccf", "glm10"], "other": ["drought"]}),
+        ("outlook", 3) => json!({"fcst": ["cape", "mucape", "mlcape", "srh03", "srh01", "shear06", "apcp", "lftx", "pwat", "lapse75", "td2m", "refc", "uh25", "ltng", "t850", "mslp"], "fcst_model": "auto", "model": ["elev", "land", "soilw"]}),
+        ("flood_forecast", 3) => json!({"mrms": ["qpe1h", "qpe3h", "qpe6h", "qpe12h", "qpe24h", "qpe72h", "prate", "cref", "flash_crest_unit", "flash_crest_q", "flash_soil", "flash_ari01h", "flash_ari03h", "flash_ari06h", "flash_ffg01h", "flash_ffg03h", "flash_ffg06h"], "model": ["soilw", "soilw2", "pwat", "elev"], "hrrr": ["apcp1h", "pwat", "refc"], "fcst": ["apcp", "pwat", "refc", "cape"], "fcst_model": "auto", "satellite": ["tb13_min", "ccf", "cool13", "glm10"], "other": ["drought"]}),
+        ("instability", 3) => json!({"mrms": ["cref", "vil", "mesh", "azs02", "et18", "posh", "ltg30"], "metar": true, "model": SEVERE_ENV, "hrrr": ["cape", "mlcape", "mucape", "cin", "mlcin", "srh01", "srh03", "shear06", "shear01", "uh25", "refc", "ltng", "pwat", "lcl"], "fcst": ["cape", "mlcape", "shear06", "uh25", "refc", "srh01", "ltng", "apcp"], "fcst_model": "auto", "satellite": ["tb13", "tb13_min", "ccf", "cool13", "wv8", "wv9", "wv10", "glm10", "glm30", "glm_jump"]}),
+        ("temp_forecast", 3) => json!({"metar": true, "model": ["t2m", "td2m", "elev", "land", "soilw", "snod", "mslp", "wind10", "t850", "rh2m", "weasd"], "hrrr": ["t2m", "td2m", "gust"], "fcst": ["t2m", "td2m", "tcc", "wind10", "apcp", "rh2m", "tmax", "tmin", "t850", "mslp", "gust"], "fcst_model": "auto", "satellite": ["tb13", "ccf", "ref02"]}),
+        ("precip_forecast", 3) => json!({"mrms": ["qpe1h", "qpe3h", "qpe6h", "qpe24h", "prate", "cref", "vil", "et18", "cref1h"], "model": ["pwat", "elev", "rh700", "rh850", "cape", "wind850"], "hrrr": ["pwat", "refc", "apcp1h", "cape"], "fcst": ["apcp", "pwat", "cape", "refc", "tcc", "rh700"], "fcst_model": "auto", "satellite": ["tb13", "tb13_min", "ccf", "cool13", "wv8", "wv9", "glm10", "glm30"]}),
+        ("storm_forecast", 3) => json!({"mrms": ["cref", "cref1h", "vil", "et18", "et50", "prate", "mesh", "azs02", "ltg30"], "metar": true, "model": ["cape", "mucape", "cin", "shear06", "pwat", "lftx", "lapse75", "srh03"], "hrrr": ["mlcape", "mlcin", "shear06", "srh03", "uh25", "refc", "ltng", "pwat"], "fcst": ["refc", "cape", "apcp", "uh25", "ltng", "shear06"], "fcst_model": "auto", "satellite": ["tb13", "tb13_min", "ccf", "cool13", "wv8", "wv10", "glm10", "glm30", "glm_jump"]}),
+        ("instability" | "flood_forecast" | "outlook" | "temp_forecast" | "precip_forecast" | "storm_forecast", 2) => json!({}),
+        _ => json!({}),
+    }
+}
+
+fn target_is_cell(id: &str) -> bool {
+    target(id).map(|t| t.candidate == "radar_cell").unwrap_or(false)
+}
+
+/// Spec overrides of one intensity for a target (before the family's own overrides).
+pub fn intensity_spec(target_id: &str, intensity: &str, y: i32) -> Value {
+    let Some(t) = target(target_id) else { return json!({}) };
+    let tier = INTENSITIES.iter().position(|x| *x == intensity).unwrap_or(0);
+    let d = (t.defaults)(y);
+    let base = TrainSpec::default();
+    let g = |k: &str| d.get(k).and_then(|v| v.as_f64());
+    let ev0 = g("max_events").unwrap_or(base.max_events as f64);
+    let nd0 = g("null_days").unwrap_or(base.null_days as f64);
+    let ms0 = g("max_samples").unwrap_or(0.0);
+    let y0 = d.get("years").and_then(|v| v.get(0)).and_then(|v| v.as_i64()).map(|v| v as i32).unwrap_or(y - 3);
+    let span0 = (y - 1 - y0).max(0);
+    let lo = min_year(target_id);
+    let start = match tier {
+        0 => y0,
+        1 => (y - 1 - span0 - 2).max(lo).min(y0),
+        _ => lo,
+    };
+    let fe = [1.0, 3.0, 8.0, 25.0][tier];
+    let cap = |x: f64, c: f64| x.min(c).round().max(0.0) as u64;
+    let reg = t.task == "regression";
+    let cell = t.candidate == "radar_cell";
+    let folds = [0, 3, 5, 5][tier];
+    let mut v = json!({
+        "intensity": intensity,
+        "years": [start, y - 1],
+        "max_events": cap(ev0 * fe, 20_000.0),
+        "null_days": cap(nd0 * fe, 10_000.0),
+        "cv_folds": folds,
+        "algo": "gbdt",
+    });
+    if ms0 > 0.0 {
+        v["max_samples"] = json!(cap(ms0 * [1.0, 2.5, 5.0, 25.0][tier], 1_000_000.0));
+    }
+    let mut params = match tier {
+        0 => json!({"n_trees": 400}),
+        1 => json!({"n_trees": 800, "learning_rate": 0.05, "max_depth": 6, "early_stopping_rounds": 60}),
+        2 => json!({"n_trees": 1500, "learning_rate": 0.03, "max_depth": 6, "min_child_weight": 3.0, "subsample": 0.8, "colsample": 0.8, "max_bins": 128, "early_stopping_rounds": 80}),
+        _ => json!({"n_trees": 3000, "learning_rate": 0.02, "max_depth": 8, "min_child_weight": 3.0, "subsample": 0.8, "colsample": 0.7, "lambda": 2.0, "max_bins": 254, "early_stopping_rounds": 150}),
+    };
+    if let Some(p) = d.get("params").and_then(|p| p.as_object()) {
+        for (k, x) in p {
+            params[k] = x.clone();
+        }
+    }
+    if reg && tier >= 2 && matches!(target_id, "temp_forecast" | "precip_forecast") {
+        params["quantiles"] = json!([0.1, 0.9]);
+    }
+    v["params"] = params;
+    if cell {
+        let vpe0 = g("volumes_per_event").unwrap_or(base.volumes_per_event as f64) as usize;
+        let vpe = match target_id {
+            "storm_intensify" => [10, 10, 12, 14][tier],
+            "storm_track" => [16, 18, 20, 24][tier],
+            _ => (vpe0 + [0, 1, 1, 3][tier]).min(12),
+        };
+        let rpe = [1, 1, 2, 3][tier];
+        v["volumes_per_event"] = json!(vpe);
+        v["radars_per_event"] = json!(rpe);
+    } else {
+        let sp = d.get("grid").and_then(|x| x.get("run_spacing_deg")).and_then(|x| x.as_f64()).unwrap_or(0.5);
+        v["grid"] = json!({"run_spacing_deg": ((sp * [1.0, 1.0, 0.75, 0.5][tier]) * 1000.0).round() / 1000.0});
+        if let Some(pp) = d.get("target_params").and_then(|x| x.get("pts_per_case")).and_then(|x| x.as_f64()) {
+            v["target_params"] = json!({"pts_per_case": (pp * [1.0, 1.0, 1.5, 2.0][tier]).round() as u64});
+        }
+    }
+    let mut src = tier_sources(target_id, tier);
+    if target_id == "storm_track" && tier >= 2 {
+        // keep the steering-wind inputs next to the tier's environment
+        if let Some(a) = src.get_mut("model").and_then(|m| m.as_array_mut()) {
+            for k in ["mwu", "mwv", "shru", "shrv", "wind850", "wind250"] {
+                a.push(json!(k));
+            }
+        }
+    }
+    if src.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
+        v["sources"] = src;
+    }
+    v
+}
+
+/// A catalog preset (generated per family × intensity, legacy specs merged in).
+#[derive(Debug, Clone)]
+pub struct PresetDef {
+    pub id: String,
+    pub name: String,
+    pub target: String,
+    /// preset family slug (cards merge by family)
+    pub family_slug: String,
+    pub intensity: String,
+    /// spec overrides (over the target defaults)
+    pub spec: Value,
+}
+
+fn summary_of(v: &Value) -> String {
+    let yrs = v.get("years").and_then(|y| y.as_array()).map(|a| format!("{}–{}", a[0], a[1])).unwrap_or_default();
+    let ev = v.get("max_events").and_then(|x| x.as_f64()).map(|x| format!("{x:.0} cases")).unwrap_or_default();
+    let cv = v.get("cv_folds").and_then(|x| x.as_u64()).filter(|x| *x >= 2).map(|x| format!("{x}-fold CV")).unwrap_or_else(|| "holdout".into());
+    let tr = v.get("params").and_then(|p| p.get("n_trees")).and_then(|x| x.as_u64()).map(|x| format!("≤ {x} trees")).unwrap_or_default();
+    [yrs, ev, cv, tr].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", ")
+}
+
+/// Every catalog preset for the year `y`.
+pub fn presets_for(y: i32) -> Vec<PresetDef> {
+    let mut out = vec![];
+    for (slug, tid, fname, fover) in families() {
+        for (tier, int) in INTENSITIES.iter().enumerate() {
+            let id = format!("{slug}-{int}");
+            let mut spec = intensity_spec(tid, int, y);
+            merge(&mut spec, &fover);
+            if let Some(l) = LEGACY_PRESETS.iter().find(|p| p.id == id) {
+                // the original preset of this id wins (keeps its tuned values)
+                let mut l = (l.spec)(y);
+                if let Some(o) = l.as_object_mut() {
+                    o.remove("name");
+                }
+                merge(&mut spec, &l);
+            }
+            let iname = ["Quick", "Medium", "Thorough", "Intensive"][tier];
+            spec["name"] = json!(format!("{fname} ({int})"));
+            spec["intensity"] = json!(int);
+            let name = format!("{fname} — {iname} ({})", summary_of(&spec));
+            out.push(PresetDef { id, name, target: tid.to_string(), family_slug: slug.to_string(), intensity: int.to_string(), spec });
+        }
+    }
+    out
+}
+
+pub fn preset(id: &str) -> Option<PresetDef> {
+    let y = chrono::Utc::now().year();
+    let id = legacy_alias(id).unwrap_or(id);
+    presets_for(y).into_iter().find(|p| p.id == id)
 }
 
 /// Deep merge: objects merge key by key, everything else replaces.
@@ -333,21 +576,29 @@ pub fn merge(dst: &mut Value, src: &Value) {
 
 /// Resolve a request body into a full spec.
 pub fn resolve(raw: &Value) -> Result<TrainSpec> {
-    let y = chrono::Utc::now().year();
-    let raw = if raw.is_object() { raw.clone() } else { json!({}) };
     let preset_id = raw.get("preset").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
     let p = match preset_id {
         Some(id) => Some(preset(id).ok_or_else(|| anyhow!("unknown preset {id}"))?),
         None => None,
     };
-    let target_id = raw.get("target").and_then(|v| v.as_str()).map(str::to_string).or(p.map(|p| p.target.to_string())).unwrap_or_else(|| "tornado".into());
+    resolve_with(raw, p.as_ref())
+}
+
+/// [`resolve`] with the preset already looked up.
+pub fn resolve_with(raw: &Value, p: Option<&PresetDef>) -> Result<TrainSpec> {
+    let y = chrono::Utc::now().year();
+    let raw = if raw.is_object() { raw.clone() } else { json!({}) };
+    let target_id = raw.get("target").and_then(|v| v.as_str()).map(str::to_string).or(p.as_ref().map(|p| p.target.clone())).unwrap_or_else(|| "tornado".into());
     let t = target(&target_id).ok_or_else(|| anyhow!("unknown target {target_id}"))?;
     let mut v = serde_json::to_value(TrainSpec::default())?;
     merge(&mut v, &json!({"target": t.id, "candidate": t.candidate, "name": t.name}));
     merge(&mut v, &(t.defaults)(y));
     if let Some(p) = p {
-        merge(&mut v, &(p.spec)(y));
+        merge(&mut v, &p.spec);
         merge(&mut v, &json!({"preset": p.id}));
+    } else if let Some(int) = raw.get("intensity").and_then(|v| v.as_str()).filter(|s| INTENSITIES.contains(s)) {
+        // an intensity without a preset: that intensity's layer over the target defaults
+        merge(&mut v, &intensity_spec(t.id, int, y));
     }
     // a request's own params replace (not merge into) the preset's
     let mut req = raw.clone();
@@ -359,6 +610,90 @@ pub fn resolve(raw: &Value) -> Result<TrainSpec> {
     let mut s: TrainSpec = serde_json::from_value(v).map_err(|e| anyhow!("bad training spec: {e}"))?;
     s.validate()?;
     Ok(s)
+}
+
+/// Family of a model / preset: the target plus the spec bits that make models comparable
+/// (outlook hazard and day, forecast windows, thresholds, region outside CONUS). Models of the
+/// same family trained at different intensities can replace each other.
+pub fn family_key(s: &TrainSpec) -> String {
+    let tp = &s.target_params;
+    let g = |k: &str| tp.get(k).map(|v| match v {
+        Value::Array(a) => a.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(","),
+        Value::String(x) => x.clone(),
+        x => x.to_string(),
+    }).unwrap_or_default();
+    let bits = match s.target.as_str() {
+        "outlook" => format!(":{}:day{}", if g("hazard").is_empty() { "any".into() } else { g("hazard") }, if g("day").is_empty() { "1".into() } else { g("day") }),
+        "storm_forecast" => if s.task == "regression" { ":dbz".into() } else { format!(":{}{}", if g("truth") == "glm" { "glm".to_string() } else { "cref".to_string() }, if g("truth") == "glm" { String::new() } else { format!("{}", tp.get("dbz").and_then(|x| x.as_f64()).unwrap_or(40.0)) }) },
+        "tropical_forecast" => format!(":{}d", if g("lead_days").is_empty() { "2.0".into() } else { g("lead_days") }),
+        "instability" | "flood_forecast" => format!(":{}h", tp.get("hours").and_then(|x| x.as_f64()).unwrap_or(if s.target == "instability" { 3.0 } else { 6.0 })),
+        "storm_intensify" => format!(":{}min", tp.get("lead_min").and_then(|x| x.as_f64()).unwrap_or(30.0)),
+        "storm_track" => format!(":{}", if g("strength").is_empty() { "vil".into() } else { g("strength") }),
+        _ => String::new(),
+    };
+    let region = match (&s.region.bbox, s.region.states.is_empty()) {
+        (Some(b), _) if !inside_conus(b) => format!(":r{:.0},{:.0},{:.0},{:.0}", b[0], b[1], b[2], b[3]),
+        _ => String::new(),
+    };
+    format!("{}{bits}{region}", s.target)
+}
+
+/// A bounding box (mostly) inside the CONUS / MRMS domain.
+pub fn inside_conus(b: &[f64; 4]) -> bool {
+    b[0] >= -131.0 && b[2] <= -59.0 && b[1] >= 19.0 && b[3] <= 56.0
+}
+
+/// Sources that only cover the United States (CONUS).
+pub fn conus_only_sources(s: &Sources) -> Vec<String> {
+    let mut v = vec![];
+    if !s.mrms.is_empty() {
+        v.push("mrms".to_string());
+    }
+    if !s.hrrr.is_empty() {
+        v.push("hrrr".into());
+    }
+    if s.fcst_model == "hrrr" && !s.fcst.is_empty() {
+        v.push("hrrr_forecast".into());
+    }
+    if s.other.iter().any(|o| o == "drought") {
+        v.push("drought".into());
+    }
+    v
+}
+
+/// Can a model run on past data, and from when: (compatible, reason, earliest unix ms).
+/// Archives: Level II (1991), MRMS (Oct 2020), GOES-R ABI / GLM (2017 / 2018), GFS 0.25° on AWS
+/// (2021), HRRR (2014), METAR (IEM archive), US Drought Monitor (2000), SPC / IEM labels.
+pub fn history_info(target: &str, candidate: &str, s: &Sources) -> (bool, String, i64) {
+    let ms = |y: i32, m: u32| chrono::Utc.with_ymd_and_hms(y, m, 1, 0, 0, 0).unwrap().timestamp_millis();
+    use chrono::TimeZone;
+    let mut from = if candidate == "radar_cell" { ms(1991, 6) } else { ms(2000, 1) };
+    let mut why = vec![];
+    let mut bump = |t: i64, what: &str| {
+        if t > from {
+            from = t;
+        }
+        why.push(what.to_string());
+    };
+    if !s.mrms.is_empty() || matches!(target, "precip_forecast" | "storm_forecast" | "instability") {
+        bump(ms(2020, 10), "MRMS ≥ Oct 2020");
+    }
+    if !s.satellite.is_empty() {
+        bump(ms(2018, 1), "GOES-R ≥ 2018");
+    }
+    if !s.model.is_empty() || (!s.fcst.is_empty() && s.fcst_model != "hrrr") || matches!(target, "tropical_forecast" | "outlook") {
+        bump(ms(2021, 1), "GFS (AWS) ≥ 2021");
+    }
+    if !s.hrrr.is_empty() || s.fcst_model == "hrrr" {
+        bump(ms(2014, 10), "HRRR ≥ Oct 2014");
+    }
+    if candidate == "radar_cell" && why.is_empty() {
+        why.push("NEXRAD Level II archive ≥ 1991".into());
+    }
+    if s.metar {
+        why.push("METAR (IEM archive)".into());
+    }
+    (true, format!("all sources have archives ({})", why.join(", ")), from)
 }
 
 impl TrainSpec {
@@ -376,10 +711,10 @@ impl TrainSpec {
         if !matches!(self.task.as_str(), "classification" | "regression") {
             bail!("task must be classification or regression");
         }
-        if self.task == "regression" && !matches!(self.target.as_str(), "temp_forecast" | "precip_forecast" | "storm_forecast") {
-            bail!("regression is available for temp_forecast, precip_forecast and storm_forecast");
+        if self.task == "regression" && !matches!(self.target.as_str(), "temp_forecast" | "precip_forecast" | "storm_forecast" | "storm_track") {
+            bail!("regression is available for temp_forecast, precip_forecast, storm_forecast and storm_track");
         }
-        if matches!(self.target.as_str(), "temp_forecast" | "precip_forecast") && self.task != "regression" {
+        if matches!(self.target.as_str(), "temp_forecast" | "precip_forecast" | "storm_track") && self.task != "regression" {
             bail!("{} is a regression target", self.target);
         }
         if !self.target_params.is_object() {
@@ -408,7 +743,13 @@ impl TrainSpec {
         self.null_days = self.null_days.min(20_000);
         self.cv_folds = self.cv_folds.min(10);
         self.radars_per_event = self.radars_per_event.clamp(1, 3);
-        self.volumes_per_event = self.volumes_per_event.clamp(1, 12);
+        self.volumes_per_event = self.volumes_per_event.clamp(1, if matches!(self.target.as_str(), "storm_intensify" | "storm_track") { 24 } else { 12 });
+        if !self.intensity.is_empty() && !INTENSITIES.contains(&self.intensity.as_str()) {
+            bail!("intensity must be quick, medium, thorough or intensive");
+        }
+        self.resources.cpu_threads = self.resources.cpu_threads.min(1024);
+        self.resources.download_concurrency = self.resources.download_concurrency.min(64);
+        self.resources.io_concurrency = self.resources.io_concurrency.min(64);
         self.max_radar_km = self.max_radar_km.clamp(20.0, 300.0);
         self.match_rule.radius_km = self.match_rule.radius_km.clamp(0.5, 200.0);
         self.match_rule.before_min = self.match_rule.before_min.clamp(0.0, 24.0 * 60.0);
@@ -447,7 +788,7 @@ pub fn run_params() -> Value {
         p("min_cell_dbz", "Minimum cell reflectivity", "float", json!(0.0), json!(0.0), json!(75.0), n.clone(), "Skip cells whose max reflectivity is lower (dBZ)", &cells),
         p("min_area_km2", "Minimum area", "float", json!(0.0), json!(0.0), json!(100000.0), n.clone(), "Skip cells / areas smaller than this (km²)", &all),
         p("max_range_km", "Maximum radar range", "float", json!(230.0), json!(10.0), json!(460.0), n.clone(), "Skip cells farther from the radar (km)", &cells),
-        p("region", "Region", "region", n.clone(), n.clone(), n.clone(), n.clone(), "{bbox:[w,s,e,n]} or {states:[…]}: where to run grid models / keep detections (default: the model's region)", &all),
+        p("region", "Region", "region", n.clone(), n.clone(), n.clone(), n.clone(), "{bbox:[w,s,e,n]} or {states:[…]}: where to run grid models / keep detections (default: the model's region). Grid models also run outside the US (global GFS / GOES / METAR inputs; US-only inputs such as MRMS / HRRR are missing there, so accuracy is lower)", &all),
         p("leads", "Leads", "hours_list", n.clone(), json!(0.0), json!(240.0), n.clone(), "Forecast hours to produce (default: the trained leads)", &fc),
         p("valid_from", "Valid from", "time", n.clone(), n.clone(), n.clone(), n.clone(), "Window start (unix ms) for outlooks / a single forecast valid time", &grids),
         p("valid_to", "Valid to", "time", n.clone(), n.clone(), n.clone(), n.clone(), "Window end (unix ms) for outlooks", &["outlook"]),
@@ -460,6 +801,14 @@ pub fn run_params() -> Value {
         p("notify", "Notify", "bool", json!(false), n.clone(), n.clone(), n.clone(), "Push a notification (ml_notify on /ws) for new detections at or above the medium level", &all),
         p("outlook_levels", "Outlook categories", "json", n.clone(), n.clone(), n.clone(), n.clone(), "[{prob, cat}] probability (0–1) → category (TSTM, MRGL, SLGT, ENH, MDT, HIGH); default SPC-like for the hazard", &["outlook"]),
         p("quantiles", "Quantile layers", "bool", json!(true), n.clone(), n.clone(), n.clone(), "Also publish P10 / P90 layers when the model has quantile learners", &["temp_forecast", "precip_forecast", "storm_forecast"]),
+        p("areas", "Area highlights", "bool", json!(true), n.clone(), n.clone(), n.clone(), "Publish area detections (kind \"area\" polygons per probability level) besides the grid layer", &grids),
+        p("area_levels", "Area levels", "prob_list", n.clone(), json!(0.01), json!(0.99), n.clone(), "Probabilities (0–1) of the area polygons (default: the model's low / medium / high levels)", &grids),
+        p("area_smoothing_km", "Area smoothing", "float", json!(0.0), json!(0.0), json!(300.0), n.clone(), "Smooth the probabilities before drawing the areas (km); the layer keeps `smoothing_km`", &grids),
+        p("frame_step_h", "Frame step", "float", n.clone(), json!(0.25), json!(24.0), n.clone(), "Hours between the frames of a forecast layer (default 1 h for temperature / precipitation / storm forecasts; flood risk / instability: shifted windows)", &["temp_forecast", "precip_forecast", "storm_forecast", "flood_forecast", "instability"]),
+        p("max_frames", "Max frames", "int", json!(24), json!(1), json!(120), n.clone(), "Frames per forecast run at most", &["temp_forecast", "precip_forecast", "storm_forecast", "flood_forecast", "instability"]),
+        p("report_cycles", "Report after", "int", json!(3), json!(1), json!(50), n.clone(), "A detection persisting this many cycles (volumes / grid runs) becomes a model report", &all),
+        p("track_leads", "Track leads", "minutes_list", json!([15.0, 30.0, 45.0, 60.0]), json!(5.0), json!(120.0), n.clone(), "Minutes ahead of the predicted positions", &["storm_track"]),
+        p("radars", "Radars", "radars", json!("all"), n.clone(), n.clone(), n.clone(), "Radars this model runs on: \"all\" | [ids] | {states:[…]} | {bbox:[w,s,e,n]} (default: the runner's selection)", &cells),
     ])
 }
 
@@ -550,13 +899,22 @@ pub fn catalog() -> Value {
             ]}
         ],
         "label_sources": super::labels::SOURCES.iter().map(|s| json!({"id": s.0, "name": s.1, "targets": s.2, "years": [s.3, y], "url": s.4, "truth": super::labels::is_truth_source(s.0)})).collect::<Vec<_>>(),
-        "presets": PRESETS.iter().map(|p| json!({"id": p.id, "name": p.name, "target": p.target, "kind": if p.id.contains("thorough") { "thorough" } else { "quick" }, "spec": resolve(&json!({"preset": p.id})).map(|s| serde_json::to_value(s).unwrap_or_default()).unwrap_or_default()})).collect::<Vec<_>>(),
+        "presets": presets_for(y).iter().map(|p| {
+            let spec = resolve_with(&json!({"preset": p.id}), Some(p)).ok();
+            json!({"id": p.id, "name": p.name, "target": p.target, "family": spec.as_ref().map(family_key).unwrap_or_else(|| p.target.clone()), "family_slug": p.family_slug, "intensity": p.intensity, "kind": p.intensity,
+                "spec": spec.map(|s| serde_json::to_value(s).unwrap_or_default()).unwrap_or_default()})
+        }).collect::<Vec<_>>(),
+        "intensities": INTENSITIES.iter().map(|i| json!({"id": i, "name": match *i { "quick" => "Quick", "medium" => "Medium", "thorough" => "Thorough", _ => "Intensive" }, "help": match *i {
+            "quick" => "Recent seasons, a few hundred cases, holdout validation: minutes to an hour",
+            "medium" => "More years and cases, extra radar / MRMS sources, 3-fold CV",
+            "thorough" => "Most of the archive, satellite / model environment, 5-fold CV, tuned trees",
+            _ => "All years with data, the most cases, every applicable source (satellite, HRRR, NWP forecasts), finer grids, 3000 deeper trees, 5-fold CV: hours to days" }})).collect::<Vec<_>>(),
         "mrms_fields": MRMS_FIELDS.iter().map(|f| json!({"id": f.0, "name": f.1, "unit": f.2})).collect::<Vec<_>>(),
         "model_vars": MODEL_VARS.iter().map(|v| json!({"id": v.id, "name": v.name, "unit": v.unit})).collect::<Vec<_>>(),
         "sources": source_catalog(),
         "run_params": run_params(),
         "run_globals": [
-            {"id": "radars", "name": "Radars", "type": "radars", "default": "all", "help": "\"all\" | \"nexrad\" | \"tdwr\" | [ids] | {states:[…]} | {bbox:[w,s,e,n]}"},
+            {"id": "radars", "name": "Radars", "type": "radars", "default": "all", "help": "\"all\" | [ids] | {states:[…]} | {bbox:[w,s,e,n]}"},
             {"id": "interval_s", "name": "Cycle interval", "type": "int", "default": 60, "min": 15, "max": 3600, "help": "Seconds between runner cycles"},
             {"id": "concurrency", "name": "Radars at once", "type": "int", "default": 0, "min": 0, "max": 64, "help": "0 = server default"},
             {"id": "enabled", "name": "Enabled", "type": "bool", "default": false, "help": "Run the selected models live"}
@@ -600,9 +958,33 @@ mod tests {
         assert!(c["presets"].as_array().unwrap().iter().all(|p| p["spec"]["target"].is_string()), "a preset failed to resolve");
         assert!(resolve(&json!({})).is_ok());
         // every preset resolves; new targets carry task / output
-        for p in PRESETS {
-            resolve(&json!({"preset": p.id})).unwrap_or_else(|e| panic!("{}: {e}", p.id));
+        for p in presets_for(chrono::Utc::now().year()) {
+            let s = resolve(&json!({"preset": p.id})).unwrap_or_else(|e| panic!("{}: {e}", p.id));
+            assert_eq!(s.intensity, p.intensity);
         }
+        for l in LEGACY_PRESETS {
+            resolve(&json!({"preset": l.id})).unwrap_or_else(|e| panic!("{}: {e}", l.id));
+        }
+        // every target has the four intensities; intensive uses more data than quick
+        for t in TARGETS {
+            let fam: Vec<_> = presets_for(2026).into_iter().filter(|p| p.target == t.id).collect();
+            for i in INTENSITIES {
+                assert!(fam.iter().any(|p| p.intensity == *i), "{} lacks {i}", t.id);
+            }
+            let q = resolve(&json!({"target": t.id, "intensity": "quick"})).unwrap();
+            let x = resolve(&json!({"target": t.id, "intensity": "intensive"})).unwrap();
+            assert!(x.max_events >= q.max_events && x.years[0] <= q.years[0] && x.cv_folds >= q.cv_folds, "{}", t.id);
+            assert_eq!(x.intensity, "intensive");
+        }
+        let ps = c["presets"].as_array().unwrap();
+        let fam = ps.iter().find(|p| p["id"] == "outlook-day2-thorough").unwrap();
+        assert_eq!(fam["family"], "outlook:any:day2");
+        assert_eq!(fam["intensity"], "thorough");
+        let s = resolve(&json!({"preset": "storm-track-quick"})).unwrap();
+        assert_eq!(s.task, "regression");
+        assert!(s.sources.model.contains(&"mwu".to_string()), "{:?}", s.sources.model);
+        let s = resolve(&json!({"preset": "storm-track-intensive"})).unwrap();
+        assert!(s.sources.model.contains(&"mwu".to_string()) && s.sources.hrrr.contains(&"ustm".to_string()), "{:?}", s.sources);
         let s = resolve(&json!({"preset": "temp-forecast-quick"})).unwrap();
         assert_eq!(s.task, "regression");
         assert_eq!(s.target_params["leads"], json!([1.0, 3.0, 6.0, 12.0, 24.0]));

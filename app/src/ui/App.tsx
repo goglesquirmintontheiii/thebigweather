@@ -79,13 +79,40 @@ import "../share/desktop";
 import { ModelsCenter } from "./ModelsCenter";
 import "../overlays/mldefs";
 /* end detection models */
+/* radio/dash 0.8 */
+import "../overlays/p8adefs";
+import { Dashboard } from "./Dashboard";
+import { AlertTimeline } from "./AlertTimeline";
+/* end radio/dash 0.8 */
+/* data 0.8 */
+import "../overlays/p8defs";
+import "../chase/chase";
+import { ChaserPanel } from "./ChaserPanel";
+import { ExportPanel } from "./ExportPanel";
+import { NotifyPanel } from "./NotifyPanel";
+import { P8LayerDock } from "./LayerPicker";
+/* end data 0.8 */
+
+/* panes/palette/a11y 0.8 */
+import { PaneWindowApp } from "./Panes";
+import { CommandPalette } from "./CommandPalette";
+import { SkipLinks, LiveRegion } from "../a11y/A11yUI";
+import { startA11y } from "../a11y/a11y";
+/* end panes/palette/a11y 0.8 */
 
 export function App() {
+  /* panes 0.8: a pane window shows only its map pane (popoutSpec never changes, so hooks stay stable) */
+  if (popoutSpec?.kind === "pane") return <PaneWindowApp />;
+  return <MainApp />;
+}
+
+function MainApp() {
   const mapEl = useRef<HTMLDivElement>(null);
   useEffect(() => {
     createMap(mapEl.current!);
     startAlerts();
     loadFiles();
+    startA11y(); // panes/palette/a11y 0.8
     (window as any).__tbwImport = importFile;
     /* workflow 0.6: main window only (not the mini radar / map pop-outs, not share viewers) */
     if (!popoutSpec && !shareParam) {
@@ -110,6 +137,7 @@ export function App() {
         }
       }}
     >
+      <SkipLinks /> {/* panes/palette/a11y 0.8 */}
       <PaneGrid mapEl={mapEl} />
       <Crosshair />
       <CursorValue />
@@ -123,6 +151,7 @@ export function App() {
       <SidePanel />
       <Legend />
       <LinesControl /> {/* data 0.6 */}
+      <P8LayerDock /> {/* data 0.8 */}
       <IntlLegend /> {/* intl & forecast tools */}
       <View3D /> {/* 3D */}
       <div class="bottom-dock">
@@ -148,6 +177,11 @@ export function App() {
       <RadioCenter />
       <HistStorms /> {/* history 0.6 */}
       <ModelsCenter /> {/* detection models */}
+      <Dashboard /> {/* radio/dash 0.8 */}
+      <AlertTimeline /> {/* radio/dash 0.8 */}
+      <ChaserPanel /> {/* data 0.8 */}
+      <ExportPanel /> {/* data 0.8 */}
+      <NotifyPanel /> {/* data 0.8 */}
       <ShakeMenu /> {/* shake/stats/server 0.6 */}
       <ServerSettings /> {/* shake/stats/server 0.6 */}
       <RadioPlayers />
@@ -156,6 +190,8 @@ export function App() {
       <ContextMenu />
       <ShortcutsDialog />
       <Toasts />
+      <CommandPalette /> {/* panes/palette/a11y 0.8 */}
+      <LiveRegion /> {/* panes/palette/a11y 0.8 */}
       {noServer && <ConnectDialog />}
     </div>
   );

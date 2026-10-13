@@ -70,6 +70,9 @@ export interface TargetDef {
   default_labels_source?: string[] | string;
   description?: string;
   filters?: FilterDef[];
+  /** models 0.8: can be trained / run outside the US (regions it supports, e.g. ["us", "europe", "global"]) */
+  non_us?: boolean;
+  regions?: string[];
 }
 export interface CandidateDef {
   id: string;
@@ -97,6 +100,19 @@ export interface Preset {
   spec: Partial<TrainSpec>;
   description?: string;
   est_min?: number;
+  /** models 0.8: presets of one family differ by intensity (quick | medium | thorough | intensive) */
+  family?: string;
+  family_name?: string;
+  intensity?: Intensity | string;
+}
+/** models 0.8 */
+export type Intensity = "quick" | "medium" | "thorough" | "intensive";
+/** models 0.8: training resources (spec.resources) */
+export interface Resources {
+  cpu_threads?: number;
+  ram_mb?: number;
+  download_concurrency?: number;
+  io_concurrency?: number;
 }
 export interface Catalog {
   targets: TargetDef[];
@@ -150,7 +166,7 @@ export interface TrainSpec {
   [k: string]: any;
 }
 
-export type JobState = "queued" | "running" | "stopping" | "done" | "failed" | "cancelled" | "interrupted";
+export type JobState = "queued" | "running" | "stopping" | "done" | "failed" | "cancelled" | "interrupted" | "paused";
 export interface Job {
   id: string;
   ep: Ep;
@@ -177,6 +193,11 @@ export interface Job {
   kind?: string;
   base_model?: string | null;
   mode?: string | null;
+  /** models 0.8: live resource use and the job's limits */
+  usage?: { cpu_pct?: number; ram_mb?: number; net_mbps?: number } | null;
+  resources?: Resources | null;
+  /** models 0.8: "train" | "history" | "run_now" | "compare" … */
+  type?: string;
 }
 
 export interface Metrics {
@@ -241,6 +262,33 @@ export interface Model {
   /** quantile levels of extra learners (regression → P10 / P90 layers) */
   quantiles?: number[];
   layer_id?: string | null;
+  /* models 0.8 */
+  size_bytes?: number;
+  cache_bytes?: number;
+  intensity?: string;
+  family_key?: string;
+  history_compatible?: boolean;
+  history_reason?: string;
+  coverage?: { region?: string; confidence?: string | number } | null;
+  /** placeholder for a model still training (id "job:<id>") */
+  training?: boolean;
+  progress?: number;
+  state?: string;
+  job_id?: string;
+  /** ensembles: virtual models built from members */
+  virtual?: boolean;
+  ensemble?: { members?: string[]; method?: string; weights?: number[] } | null;
+}
+
+/** models 0.8: GET/PUT /api/ml/models/{id}/run */
+export interface ModelRun {
+  enabled: boolean;
+  options?: Record<string, any>;
+  radars?: any;
+  state?: string;
+  last_run?: number;
+  error?: string;
+  detections?: number;
 }
 
 export interface RunState {
@@ -321,4 +369,17 @@ export interface Detection {
   valid_to?: number;
   /** regression areas (e.g. storm_forecast dBZ): the max predicted value; prob is then 1 */
   value?: number;
+  /** models 0.8: storm_track forecast path */
+  track?: TrackPt[];
+  /** models 0.8: from a history run (kept apart from live detections) */
+  hist?: boolean;
+}
+export interface TrackPt {
+  lead_min: number;
+  lat: number;
+  lon: number;
+  speed_kt?: number;
+  strength?: number;
+  strength_units?: string;
+  cone_km?: number;
 }

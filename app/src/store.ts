@@ -99,11 +99,41 @@ export interface PaneCfg {
 /** The single visible weather layer. */
 export type WeatherSel =
   | { kind: "radar" }
-  | { kind: "grid"; id: string; run?: string; storm?: string }
+  | { kind: "grid"; id: string; run?: string; storm?: string; /* data 0.8: ensemble probability threshold (server units) */ thr?: number }
   | { kind: "gibs"; id: string }
   /** intl & forecast tools: international raster radar (see intl/radar.ts) */
   | { kind: "intl"; id: string; precip?: "rain" | "snow" };
 export type RadarSource = "L2" | "L3";
+
+/* ---------- panes/palette/a11y 0.8 ---------- */
+export type PaneLayoutId = "1" | "2" | "2v" | "3" | "3c" | "4" | "swipe" | `custom:${string}`;
+/** a grid layout: cells[0] is the main map, the rest are extra panes in order */
+export interface PaneLayoutDef {
+  id: string;
+  name: string;
+  rows: number;
+  cols: number;
+  cells: { r: number; c: number; rs: number; cs: number }[];
+}
+/** what an extra pane (or linked window) follows from the main map */
+export interface PaneLink {
+  pos: boolean;
+  time: boolean;
+  layers: boolean;
+}
+export interface A11ySettings {
+  /** colour-vision-safe palettes (radar tables, alerts, overlays, legends, accents) */
+  cvd: "off" | "deutan" | "protan" | "tritan";
+  /** UI text scale (1 = normal … 1.5) */
+  textScale: number;
+  contrast: boolean;
+  reduceMotion: boolean;
+  /** always show focus rings (otherwise only when navigating with the keyboard) */
+  focusRings: boolean;
+  /** screen-reader announcements (new warnings, frame time when stepping) */
+  announce: boolean;
+}
+/* ---------- end panes/palette/a11y 0.8 ---------- */
 
 export interface Settings {
   servers: ServerEntry[];
@@ -150,7 +180,21 @@ export interface Settings {
   /** speak new warnings aloud */
   speak: boolean;
   /** extra map panes: layout and what each shows */
-  panes: { layout: "1" | "2" | "2v" | "3" | "4" | "swipe" /* data 0.6 */; sync: boolean; list: PaneCfg[]; /* data 0.6: swipe divider position (0..1) */ swipeX?: number };
+  panes: {
+    layout: PaneLayoutId /* panes/palette/a11y 0.8: built-ins + "custom:<id>" */;
+    sync: boolean;
+    list: PaneCfg[];
+    /* data 0.6: swipe divider position (0..1) */ swipeX?: number;
+    /* panes/palette/a11y 0.8: divider point y (0..1), orientation, angle (deg, 0 = vertical line), per-pane links */
+    swipeY?: number;
+    swipeMode?: "v" | "h" | "d";
+    swipeAngle?: number;
+    links?: Record<string, PaneLink>;
+  };
+  /* panes/palette/a11y 0.8 */
+  paneLayouts?: PaneLayoutDef[];
+  a11y?: A11ySettings;
+  /* end panes/palette/a11y 0.8 */
   /** keep drawings after leaving drawing mode */
   drawKeep: boolean;
   drawings: import("./map/draw").Drawing[];
@@ -207,10 +251,36 @@ export interface Settings {
     concurrency?: number;
     /** Run-tab detections list follows the map's probability gate */
     listGate?: boolean;
+    /* models 0.8 */
+    /** detections legend expanded: one probability gate per model */
+    perModelGates?: boolean;
+    /** Models list: where the models live */
+    loc?: "both" | "main" | "local";
+    /** radars each model runs on, keyed "ep|id" */
+    runRadars?: Record<string, any>;
+    /* end models 0.8 */
   };
   /* ---------- end detection models ---------- */
   /* ---------- end radar 0.6 ---------- */
+  /* ---------- data 0.8 ---------- */
+  p8?: P8Settings;
+  /* ---------- end data 0.8 ---------- */
 }
+
+/* ---------- data 0.8 ---------- */
+export interface P8Settings {
+  /** last ensemble threshold per ens layer id (server units) */
+  thr?: Record<string, number>;
+  /** radar QC: REF → REFQC with a CC threshold; bio = also remove biological echoes */
+  qc?: boolean;
+  cc?: number;
+  bio?: boolean;
+  /** beam blockage overlay for the current radar / tilt */
+  blockage?: boolean;
+  /** chaser toolkit */
+  chase?: { snapMin: number; autoLog: boolean; safeZone: boolean; vectors: boolean; cell?: string };
+}
+/* ---------- end data 0.8 ---------- */
 
 /* ---------- radar 0.6 ---------- */
 export interface PlacefileCfg {
@@ -236,7 +306,7 @@ export interface Data6Settings {
   ccolor: string;
   labels: boolean;
   barbs: boolean;
-  blevel: "10m" | "850" | "500" | "250";
+  blevel: "10m" | "850" | "500" | "250" | "shr06" /* data 0.8: 0–6 km bulk shear vectors */;
   bcolor: string;
   /** models compared in the forecast center */
   models?: string[];
@@ -290,6 +360,8 @@ export interface RuleAction {
   webhook?: string;
   /** "ws:<id>" workspace, "ovl:<id>" overlay on */
   open?: string;
+  /** data 0.8: server notification channels (ids from /api/notify/channels) */
+  channels?: string[];
 }
 export interface Rule {
   id: string;
@@ -299,6 +371,8 @@ export interface Rule {
   act: RuleAction;
   /** minutes */
   cooldown: number;
+  /** data 0.8: who evaluates the rule (default "app") */
+  run_on?: "app" | "server" | "both";
 }
 export interface OfflineRegion {
   id: string;
@@ -328,7 +402,7 @@ export interface Wf6Settings {
   routeUrl: string;
   rules: Rule[];
   quiet: { on: boolean; from: string; to: string };
-  briefing: { voice: string; rate: number; times: string[]; point: string };
+  briefing: { voice: string; rate: number; times: string[]; point: string; /* radio/dash 0.8: TTS engine + offline voice */ engine?: "auto" | "system" | "offline"; offlineVoice?: string };
   kiosk: { workspaces: string[]; seconds: number; resume: number };
   offline: { regions: OfflineRegion[]; prefer: boolean };
   plugins: PluginCfg[];
@@ -414,7 +488,7 @@ function popoutOverrides(out: any) {
   if (!POPOUT) return out;
   try {
     const spec = JSON.parse(decodeURIComponent(location.hash.match(/popout=([^&]+)/)![1]));
-    if (spec.kind === "map" && spec.data) for (const [k, v] of Object.entries(spec.data)) out[k] = v;
+    if ((spec.kind === "map" || spec.kind === "pane") /* panes 0.8 */ && spec.data) for (const [k, v] of Object.entries(spec.data)) out[k] = v;
   } catch {
     /* ignore */
   }

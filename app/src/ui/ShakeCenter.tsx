@@ -36,6 +36,7 @@ import {
   type Quake,
   type FiltOpts,
 } from "../shake";
+import { shakeGoto } from "../shake"; // radio/dash 0.8
 import { settings } from "../store";
 import { mapRef } from "../map/mapview";
 import { fmtDist } from "../util";
@@ -561,6 +562,18 @@ export function ShakeViewer({ st, onClose }: { st: ShakeSta; onClose: () => void
   const [quakes, setQuakes] = useState<Quake[]>([]);
   const [range, setRange] = useState<Range>([0, 1]);
   const [loadedAt, setLoadedAt] = useState(0);
+  /* radio/dash 0.8: jump to a time (seismic events layer click) */
+  const go = shakeGoto.value;
+  useEffect(() => {
+    if (!go) return;
+    shakeGoto.value = null;
+    if (go.compare) setMode("compare");
+    setAnchor("custom");
+    setLive(false);
+    setCStart(toLocalInput(go.t - (go.before ?? 120000)));
+    setCEnd(toLocalInput(go.t + (go.after ?? 360000)));
+  }, [go]);
+  /* end radio/dash 0.8 */
   const cmp = shakeCompare.value;
   const sk = staKey(st);
   const stations = useMemo(() => [st, ...cmp.filter((s) => staKey(s) !== sk)], [sk, cmp]);

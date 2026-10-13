@@ -5,6 +5,8 @@
 import { themeLight } from "../theme";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { settings, update } from "../store";
+import { registerChart, newChartId } from "../export/svg"; // data 0.8
+import { exportCanvas } from "../export/export"; // data 0.8
 
 // ---------- generic chart ----------
 
@@ -60,6 +62,7 @@ export function LineChart({
 }) {
   const cv = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
+  const chartId = useRef(newChartId()); // data 0.8: SVG export
   const [w, setW] = useState(700);
   const [hov, setHov] = useState<number | null>(null);
   const [fontTick, setFontTick] = useState(0);
@@ -208,6 +211,7 @@ export function LineChart({
         });
     }
     g.setLineDash([]);
+    registerChart(chartId.current, { title: title ?? "", unit, t, series, band, range, w, h, tz, utc: settings.value.utc, fmt, el: c }); // data 0.8
     if (hov != null && t[hov] != null) {
       g.strokeStyle = ink(0.5);
       g.beginPath();
@@ -229,6 +233,14 @@ export function LineChart({
   return (
     <div class="d6-chart" ref={wrap} onPointerMove={onMove as any} onPointerLeave={() => setHov(null)}>
       <canvas ref={cv} style={{ width: `${w}px`, height: `${h}px` }} />
+      {/* data 0.8: save this chart */}
+      <div class="p8-chart-dl">
+        {(["png", "svg"] as const).map((f) => (
+          <button key={f} title={`Save chart as ${f.toUpperCase()}`} onClick={() => exportCanvas({ id: `chart:${chartId.current}`, name: title || "chart", svg: true, canvas: () => cv.current }, f)}>
+            {f.toUpperCase()}
+          </button>
+        ))}
+      </div>
       {hov != null && (
         <div class="d6-tip glass" style={{ left: `${Math.min(hx + 10, w - 170)}px` }}>
           <b>{new Date(t[hov]).toLocaleString(undefined, daily ? { weekday: "short", month: "short", day: "numeric", timeZone: tzOpt(tz) } : { weekday: "short", hour: "numeric", minute: "2-digit", timeZone: tzOpt(tz) })}</b>
@@ -386,9 +398,10 @@ export function ModelCompare({ lat, lon }: { lat: number; lon: number }) {
       {busy && !mm && <div class="muted">Loading models…</div>}
       {mm && (
         <>
-          <LineChart t={mm.t} series={ser("temperature_2m", cT)} title="Temperature" unit={`°${U().temp}`} tz={mm.tz} h={170} />
+          <ConfidenceLines mm={mm} models={vis.map((m) => m.id)} />
+          <LineChart t={mm.t} series={ser("temperature_2m", cT)} band={spreadBand(mm, vis.map((m) => m.id), "temperature_2m", cT)} title="Temperature" unit={`°${U().temp}`} tz={mm.tz} h={170} />
           <LineChart t={mm.t} series={ser("precipitation", cP, true)} title="Total precipitation" unit={p} tz={mm.tz} zero fmt={(v) => v.toFixed(p === "in" ? 2 : 1)} />
-          <LineChart t={mm.t} series={ser("wind_speed_10m", cS)} title="Wind" unit={U().speed} tz={mm.tz} zero />
+          <LineChart t={mm.t} series={ser("wind_speed_10m", cS)} band={spreadBand(mm, vis.map((m) => m.id), "wind_speed_10m", cS)} title="Wind" unit={U().speed} tz={mm.tz} zero />
           <LineChart t={mm.t} series={ser("wind_gusts_10m", cS)} title="Gusts" unit={U().speed} tz={mm.tz} zero />
           <LineChart t={mm.t} series={ser("pressure_msl", cPr)} title="Pressure" unit={inHg() ? "inHg" : "hPa"} tz={mm.tz} fmt={(v) => (inHg() ? v.toFixed(2) : v.toFixed(0))} />
           <LineChart t={mm.t} series={ser("cloud_cover", (x) => x)} title="Cloud cover" unit="%" tz={mm.tz} fixed={[0, 100]} />
@@ -401,3 +414,131 @@ export function ModelCompare({ lat, lon }: { lat: number; lon: number }) {
     </div>
   );
 }
+
+/* ---------- data 0.8: model spread bands and plain-language confidence ---------- */
+/** min–max across models at each hour (needs ≥ 2 models with a value) */
+export function spreadBand(mm: MultiModel, ids: string[], v: CmVar, conv: (x: number | null) => number | null): LBand | undefined {
+  if (ids.length < 2) return undefined;
+  const lo: (number | null)[] = [], hi: (number | null)[] = [];
+  for (let i = 0; i < mm.t.length; i++) {
+    const xs = ids.map((id) => mm.m[id]?.[v]?.[i]).filter((x): x is number => x != null && Number.isFinite(x));
+    if (xs.length < 2) (lo.push(null), hi.push(null));
+    else (lo.push(conv(Math.min(...xs))), hi.push(conv(Math.max(...xs))));
+  }
+  return { lo, hi, color: "rgba(148,163,184,0.22)", name: "Model spread" };
+}
+
+export type ConfLevel = "high" | "medium" | "low";
+export interface DayConf {
+  key: string;
+  t: number;
+  level: ConfLevel;
+  text: string;
+  n: number;
+}
+const hourFmt = (t: number, tz?: string) => new Date(t).toLocaleTimeString(undefined, { hour: "numeric", timeZone: tzOpt(tz) });
+/** per local day: agreement of highs / lows, rain yes-no, rain timing and gusts across models */
+export function dayConfidence(mm: MultiModel, ids: string[], maxDays = 7): DayConf[] {
+  const tz = mm.tz;
+  const dayKey = (t: number) => new Date(t).toLocaleDateString("en-CA", { timeZone: tzOpt(tz) });
+  const days = new Map<string, number[]>();
+  mm.t.forEach((t, i) => {
+    const k = dayKey(t);
+    if (!days.has(k)) days.set(k, []);
+    days.get(k)!.push(i);
+  });
+  const F = U().temp === "F";
+  const dT = (c: number) => (F ? c * 1.8 : c);
+  const tu = `°${U().temp}`;
+  const out: DayConf[] = [];
+  const now = Date.now();
+  for (const [k, idx] of days) {
+    if (idx.length < 12 || mm.t[idx[idx.length - 1]] < now) continue;
+    const per = ids
+      .map((id) => {
+        const m = mm.m[id];
+        const tv = idx.map((i) => m?.temperature_2m?.[i]).filter((x): x is number => x != null);
+        const pv = idx.map((i) => m?.precipitation?.[i] ?? null);
+        const gv = idx.map((i) => m?.wind_gusts_10m?.[i]).filter((x): x is number => x != null);
+        if (tv.length < idx.length * 0.6) return null;
+        const tot = pv.reduce((a: number, x) => a + (x ?? 0), 0);
+        const first = pv.findIndex((x) => (x ?? 0) >= 0.3);
+        return { hi: Math.max(...tv), lo: Math.min(...tv), tot, first: first >= 0 ? mm.t[idx[first]] : null, gust: gv.length ? Math.max(...gv) : null };
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x);
+    if (per.length < 2) continue;
+    const sp = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
+    const hiS = dT(sp(per.map((p) => p.hi)));
+    const loS = dT(sp(per.map((p) => p.lo)));
+    const tS = Math.max(hiS, loS);
+    const wet = per.filter((p) => p.tot >= 1);
+    const fw = wet.length / per.length;
+    const firsts = wet.map((p) => p.first).filter((x): x is number => x != null);
+    const timeS = firsts.length >= 2 ? (Math.max(...firsts) - Math.min(...firsts)) / 3600e3 : 0;
+    const gusts = per.map((p) => p.gust).filter((x): x is number => x != null);
+    const gS = gusts.length >= 2 ? sp(gusts) * speedFactorMs() : 0;
+    const tLvl: ConfLevel = tS <= (F ? 4 : 2.2) ? "high" : tS <= (F ? 8 : 4.5) ? "medium" : "low";
+    const rLvl: ConfLevel = fw <= 0.15 || (fw >= 0.85 && timeS <= 4) ? "high" : fw <= 0.3 || fw >= 0.7 ? "medium" : "low";
+    const order = { high: 0, medium: 1, low: 2 } as const;
+    const level: ConfLevel = order[tLvl] >= order[rLvl] ? tLvl : rLvl;
+    const r1 = (x: number) => Math.round(x);
+    const hiTxt = `${r1(Math.min(...per.map((p) => cT(p.hi)!)))}–${r1(Math.max(...per.map((p) => cT(p.hi)!)))}${tu}`;
+    let text: string;
+    const rainTxt = fw <= 0.15 ? "all models dry" : fw >= 0.85 ? "all models bring rain" : `${wet.length} of ${per.length} models bring rain`;
+    if (level === "high") text = `High confidence: models agree within ${Math.max(1, r1(tS))}${tu}; ${rainTxt}.`;
+    else if (rLvl === "low" && tLvl !== "low") text = `Low confidence on rain: ${rainTxt}${firsts.length >= 2 && timeS > 4 ? `, starting ${hourFmt(Math.min(...firsts), tz)}–${hourFmt(Math.max(...firsts), tz)}` : ""}.`;
+    else if (fw >= 0.7 && timeS > 4) text = `${level === "low" ? "Low" : "Medium"} confidence on rain timing: rain likely, but models start it anywhere from ${hourFmt(Math.min(...firsts), tz)} to ${hourFmt(Math.max(...firsts), tz)}.`;
+    else if (tLvl !== "high") text = `${level === "low" ? "Low" : "Medium"} confidence on temperature: highs ${hiTxt} (${r1(tS)}${tu} spread); ${rainTxt}.`;
+    else text = `Medium confidence: highs agree (${hiTxt}); ${rainTxt}.`;
+    if (gS >= 15 && level !== "high") text += ` Gusts differ by ${r1(gS)} ${U().speed}.`;
+    out.push({ key: k, t: mm.t[idx[0]], level, text, n: per.length });
+    if (out.length >= maxDays) break;
+  }
+  return out;
+}
+function speedFactorMs() {
+  return U().speed === "kt" ? 1.94384 : U().speed === "mph" ? 2.23694 : U().speed === "km/h" ? 3.6 : 1;
+}
+export function ConfidenceLines({ mm, models, max = 7 }: { mm: MultiModel; models: string[]; max?: number }) {
+  const days = useMemo(() => dayConfidence(mm, models, max), [mm, models.join(), max, settings.value.units]);
+  if (!days.length) return null;
+  return (
+    <div class="p8-conf">
+      {days.map((d) => (
+        <div key={d.key} class={`p8-conf-row ${d.level}`}>
+          <b>{new Date(d.t).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: tzOpt(mm.tz) })}</b>
+          <span class={`p8-conf-chip ${d.level}`}>{d.level}</span>
+          <span>{d.text}</span>
+        </div>
+      ))}
+      <small class="muted">Confidence from how closely {days[0].n} models agree (highs/lows, rain or not, rain start time, gusts). Shaded band on the charts = range across models.</small>
+    </div>
+  );
+}
+/** forecast tab: per-day confidence + temperature with the model spread band and the model mean */
+export function ForecastConfidence({ lat, lon }: { lat: number; lon: number }) {
+  const ids = (settings.value.data6?.models ?? CM_MODELS.filter((m) => m.on).map((m) => m.id));
+  const [mm, setMm] = useState<MultiModel | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    setErr(null);
+    fetchMulti(lat, lon, CM_MODELS.map((m) => m.id), 7)
+      .then(setMm)
+      .catch((e) => setErr(String(e.message ?? e)));
+  }, [lat, lon]);
+  if (err) return <div class="muted small">Model confidence unavailable: {err}</div>;
+  if (!mm) return <div class="muted small">Comparing models…</div>;
+  const vis = ids.filter((id) => mm.m[id]);
+  const band = spreadBand(mm, vis, "temperature_2m", cT);
+  const mean = mm.t.map((_, i) => {
+    const xs = vis.map((id) => mm.m[id]?.temperature_2m?.[i]).filter((x): x is number => x != null);
+    return xs.length ? cT(xs.reduce((a, b) => a + b, 0) / xs.length) : null;
+  });
+  return (
+    <>
+      <ConfidenceLines mm={mm} models={vis} />
+      <LineChart t={mm.t} series={[{ id: "mean", name: `Mean of ${vis.length} models`, color: "#e5e7eb", v: mean, width: 2 }]} band={band} title="Temperature · model spread" unit={`°${U().temp}`} tz={mm.tz} h={130} />
+    </>
+  );
+}
+/* ---------- end data 0.8 ---------- */

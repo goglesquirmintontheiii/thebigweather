@@ -61,13 +61,24 @@ export async function mlReq<T = any>(ep: Ep, method: string, path: string, body?
     return t as any;
   }
 }
-async function mlBin(ep: Ep, path: string): Promise<{ buf: ArrayBuffer; name: string }> {
+export async function mlBin(ep: Ep, path: string): Promise<{ buf: ArrayBuffer; name: string; type: string }> {
+  // models 0.8: the built-in server may not be running yet (an empty base fetched the app's own page)
+  if (ep === "local" && !localIsMain.value && !localUrl.value && !(await ensureLocal())) throw new ApiError(0, "The built-in server isn't running");
   const b = base(ep);
+  if (!b.url) throw new ApiError(0, "No server configured");
   const r = await fetch(b.url + path, { headers: b.token ? { Authorization: `Bearer ${b.token}` } : {} });
-  if (!r.ok) throw new ApiError(r.status, r.statusText);
+  if (!r.ok) {
+    let msg = r.statusText;
+    try {
+      msg = (await r.json()).error ?? msg;
+    } catch {
+      /* not json */
+    }
+    throw new ApiError(r.status, msg || `HTTP ${r.status}`);
+  }
   const cd = r.headers.get("content-disposition") ?? "";
   const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
-  return { buf: await r.arrayBuffer(), name: m ? decodeURIComponent(m[1]) : "" };
+  return { buf: await r.arrayBuffer(), name: m ? decodeURIComponent(m[1]) : "", type: r.headers.get("content-type") ?? "" };
 }
 
 /** Status of the bundled server (doesn't start it). */
@@ -188,6 +199,18 @@ export function normModel(m: any, ep: Ep): Model {
     // the training revision (format_version / format is the file format, not this)
     version: m.version != null ? num(m.version, 1) : Array.isArray(m.history) && m.history.length ? Math.max(...m.history.map((h: any) => num(h.version, 1))) : 1,
     history: Array.isArray(m.history) ? m.history.map((h: any, i: number): HistoryEntry => ({ ...h, version: num(h.version, i + 1), at: tms(h.at), kind: h.kind || (i ? "retrain" : "train"), samples: h.samples != null ? num(h.samples) : undefined, metrics_summary: h.metrics_summary && typeof h.metrics_summary === "object" ? h.metrics_summary : undefined })) : [],
+    // models 0.8
+    size_bytes: m.size_bytes != null ? num(m.size_bytes) : m.size != null ? num(m.size) : undefined,
+    cache_bytes: m.cache_bytes != null ? num(m.cache_bytes) : undefined,
+    intensity: typeof m.intensity === "string" ? m.intensity.toLowerCase() : undefined,
+    family_key: m.family_key != null ? String(m.family_key) : undefined,
+    history_compatible: typeof m.history_compatible === "boolean" ? m.history_compatible : undefined,
+    history_reason: typeof m.history_reason === "string" ? m.history_reason : m.history_compatible_reason,
+    coverage: m.coverage && typeof m.coverage === "object" ? m.coverage : undefined,
+    training: !!m.training || String(m.id ?? "").startsWith("job:"),
+    progress: m.progress != null ? (num(m.progress) > 1 ? num(m.progress) / 100 : num(m.progress)) : undefined,
+    job_id: m.job_id != null ? String(m.job_id) : String(m.id ?? "").startsWith("job:") ? String(m.id).slice(4) : undefined,
+    virtual: !!m.virtual || !!m.ensemble,
   };
 }
 export function normJob(j: any, ep: Ep): Job {
@@ -203,6 +226,8 @@ export function normJob(j: any, ep: Ep): Job {
     name: j.name || j.spec?.name || undefined,
     target: normTarget(j.target || j.spec?.target || "custom"),
     counts: j.counts ?? {},
+    usage: j.usage && typeof j.usage === "object" ? j.usage : undefined, // models 0.8
+    resources: j.resources ?? j.spec?.resources ?? undefined,
   };
 }
 function geomCenter(g: any): [number, number] | null {
@@ -247,6 +272,13 @@ export function normDetection(f: any, ep: Ep): Detection | null {
     lon: c[0],
     lat: c[1],
     poly: g?.type === "Polygon" ? g.coordinates : g?.type === "MultiPolygon" ? g.coordinates[0] : p.poly ?? (Array.isArray(p.outline) && p.outline.length >= 3 ? [[...p.outline, p.outline[0]]] : undefined),
+    // models 0.8: storm_track path (+lead minutes, position, speed, strength, cone radius)
+    track: Array.isArray(p.track)
+      ? p.track
+          .map((x: any) => ({ lead_min: num(x.lead_min), lat: num(x.lat, NaN), lon: num(x.lon, NaN), speed_kt: x.speed_kt != null ? num(x.speed_kt) : undefined, strength: x.strength != null ? num(x.strength) : undefined, strength_units: x.strength_units ?? p.strength_units, cone_km: x.cone_km != null ? num(x.cone_km) : undefined }))
+          .filter((x: any) => Number.isFinite(x.lat) && Number.isFinite(x.lon))
+          .sort((a: any, b: any) => a.lead_min - b.lead_min)
+      : undefined,
   };
 }
 /** /api/ml/detections sends each detection as a Point (kind "point") plus, for cells, a Polygon
@@ -272,7 +304,8 @@ export function detectionsFromFeatures(feats: any[], ep: Ep): Detection[] {
 
 // ---------- shared state ----------
 export const mlOpen = signal(false);
-export type MlTab = "models" | "train" | "jobs" | "run";
+/** "run" is kept as an alias of "models" (models 0.8: running is per model, in the model's page) */
+export type MlTab = "models" | "train" | "jobs" | "run" | "reports" | "compare";
 export const mlTab = signal<MlTab>("models");
 export const catalog = signal<Catalog | null>(null);
 export const catalogErr = signal("");
@@ -334,7 +367,7 @@ export async function loadModels() {
   await Promise.all(
     liveEps().map(async (ep) => {
       try {
-        const r = await mlReq<any>(ep, "GET", "/api/ml/models");
+        const r = await mlReq<any>(ep, "GET", "/api/ml/models?include_training=1"); // models 0.8: + training placeholders
         const list = Array.isArray(r) ? r : r?.models ?? [];
         out.push(...list.map((m: any) => normModel(m, ep)));
       } catch (e: any) {
@@ -351,7 +384,7 @@ export async function loadModels() {
       const o = old.get(mkey(m));
       return o && o.updated === m.updated && o.importance?.length && !m.importance?.length ? { ...o, ...m, metrics: o.metrics, importance: o.importance, feature_schema: o.feature_schema, spec: o.spec } : m;
     })
-    .sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
+    .sort((a, b) => +!!b.training - +!!a.training || (b.created ?? 0) - (a.created ?? 0)); // models 0.8: training placeholders first
   modelsErr.value = err;
   modelsLoading.value = false;
 }
@@ -407,23 +440,37 @@ export async function deleteModel(m: Model) {
 }
 
 const safeName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, "_").trim().slice(0, 80) || "model";
-export async function exportModel(m: Model) {
+/** models 0.8: result of the last export per model key, shown next to the Export button (the toast
+ *  sat under the Models window, so a successful export looked like nothing happened) */
+export const exportState = signal<Record<string, { busy?: boolean; path?: string; error?: string }>>({});
+export async function exportModel(m: Model): Promise<string | null> {
+  const k = mkey(m);
+  exportState.value = { ...exportState.value, [k]: { busy: true } };
   try {
     const { buf, name } = await mlBin(m.ep, `/api/ml/models/${encodeURIComponent(m.id)}/export`);
+    if (!buf.byteLength) throw new Error("the server sent an empty file");
     const file = name || `${safeName(m.name)}.tbwmodel`;
+    // saveio: Electron IPC (Downloads/TheBigWeather) or a browser download; anchors must be in the DOM for some browsers
     const tbw: any = (window as any).tbw;
-    if (tbw?.saveFile) {
-      const path = await tbw.saveFile(file, new Uint8Array(buf));
-      toast(`Saved ${path}`);
-    } else {
+    let path: string | null = null;
+    if (tbw?.saveFile) path = await tbw.saveFile(file, buf);
+    else {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob([buf], { type: "application/octet-stream" }));
       a.download = file;
+      a.style.display = "none";
+      document.body.appendChild(a);
       a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      setTimeout(() => (URL.revokeObjectURL(a.href), a.remove()), 30_000);
+      path = `Downloads/${file}`;
     }
+    exportState.value = { ...exportState.value, [k]: { path: path ?? file } };
+    toast(`Saved ${path ?? file}`);
+    return path ?? file;
   } catch (e: any) {
+    exportState.value = { ...exportState.value, [k]: { error: e.message ?? String(e) } };
     toast(`Export failed: ${e.message}`, "error");
+    return null;
   }
 }
 
@@ -456,6 +503,20 @@ export async function copyModel(m: Model, to: Ep): Promise<Model | null> {
     toast(`Copy failed: ${e.message}`, "error");
     return null;
   }
+}
+
+/** models 0.8: move = export → import on the other machine → delete the source */
+export async function moveModel(m: Model, to: Ep): Promise<Model | null> {
+  const n = await copyModel(m, to);
+  if (!n) return null;
+  try {
+    await mlReq(m.ep, "DELETE", `/api/ml/models/${encodeURIComponent(m.id)}`);
+  } catch (e: any) {
+    toast(`Copied, but couldn't delete the original: ${e.message}`, "warn", 8000);
+  }
+  await loadModels();
+  selModel.value = mkey(n);
+  return n;
 }
 
 // ---------- jobs ----------
@@ -495,7 +556,7 @@ export async function loadJobs() {
     }
   }
 }
-const order = (j: Job) => ({ running: 0, stopping: 0, queued: 1 } as Record<string, number>)[j.state] ?? 2;
+const order = (j: Job) => ({ running: 0, stopping: 0, queued: 1, paused: 1 } as Record<string, number>)[j.state] ?? 2;
 
 export async function loadJob(ep: Ep, id: string) {
   try {
@@ -505,7 +566,7 @@ export async function loadJob(ep: Ep, id: string) {
     /* gone */
   }
 }
-export const activeJobs = computed(() => jobs.value.filter((j) => j.state === "running" || j.state === "queued" || j.state === "stopping"));
+export const activeJobs = computed(() => jobs.value.filter((j) => j.state === "running" || j.state === "queued" || j.state === "stopping" || j.state === "paused"));
 
 export async function startTraining(ep: Ep, body: Partial<TrainSpec> | { preset: string; name?: string; time_limit_min?: number | null }): Promise<string | null> {
   try {
@@ -527,6 +588,23 @@ export async function jobAction(j: Job, what: "stop" | "delete") {
     await loadJobs();
   } catch (e: any) {
     toast(`${what === "stop" ? "Stop" : "Cancel"} failed: ${e.message}`, "error");
+  }
+}
+
+/** models 0.8: retry a failed job (POST …/retry; older servers: …/resume) */
+export async function retryJob(j: Job) {
+  try {
+    if (j.ep === "local" && !(await ensureLocal())) return;
+    try {
+      await mlReq(j.ep, "POST", `/api/ml/jobs/${encodeURIComponent(j.id)}/retry`, {});
+    } catch (e: any) {
+      if (e.status !== 404 && e.status !== 405) throw e;
+      await mlReq(j.ep, "POST", `/api/ml/jobs/${encodeURIComponent(j.id)}/resume`, {});
+    }
+    toast("Retrying · see Jobs");
+    await loadJobs();
+  } catch (e: any) {
+    toast(`Retry failed: ${e.message}`, "error");
   }
 }
 

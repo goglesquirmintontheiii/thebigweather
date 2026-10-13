@@ -4,6 +4,7 @@
 // AQI, METARs, SPC, radar) — each source is only fetched while an enabled rule needs it.
 
 import { signal, effect } from "@preact/signals";
+import { say } from "../tts"; // radio/dash 0.8
 import { api, ApiError } from "../api";
 import { settings, update, toast, uid, type Rule, type RuleCond, type RuleAction } from "../store";
 import { alerts } from "../alerts";
@@ -272,12 +273,10 @@ export async function runActions(r: Rule, h: Hit, test = false) {
     else if (Notification.permission !== "denied") Notification.requestPermission().then((p) => p === "granted" && show());
   }
   toast(`${r.name}: ${h.msg}`, "alert", 9000);
-  if (a.tts && !silent && "speechSynthesis" in window) {
-    const u = new SpeechSynthesisUtterance(fillTemplate(a.tts, r, h));
-    u.volume = settings.value.audio.volume;
-    const v = settings.value.wf6.briefing.voice;
-    if (v) u.voice = speechSynthesis.getVoices().find((x) => x.name === v) ?? null;
-    setTimeout(() => speechSynthesis.speak(u), a.sound && a.sound !== "off" ? 1800 : 0);
+  if (a.tts && !silent) {
+    // radio/dash 0.8: system voice or the bundled offline voice (tts.ts)
+    const text = fillTemplate(a.tts, r, h);
+    setTimeout(() => say(text), a.sound && a.sound !== "off" ? 1800 : 0);
   }
   if (a.flash && !silent) {
     flashOn.value = true;
@@ -329,6 +328,7 @@ async function evaluateAll() {
     const st: Record<string, { hit: boolean; text: string }> = {};
     for (const r of settings.value.wf6.rules) {
       if (!r.on) continue;
+      if (r.run_on === "server" && rulesStore.value === "server") continue; // data 0.8: evaluated (and delivered) by the server
       let h: Hit | null = null;
       try {
         h = await check(r);

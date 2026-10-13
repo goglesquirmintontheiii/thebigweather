@@ -10,7 +10,7 @@ import { shareParam, initViewer } from "./share/share";
 
 setWorkerUrl(new URL(workerUrl, location.href).href);
 
-const go = () => render(popoutSpec && popoutSpec.kind !== "map" ? <PopoutApp spec={popoutSpec} /> : <App />, document.getElementById("root")!);
+const go = () => render(popoutSpec && popoutSpec.kind !== "map" && popoutSpec.kind !== "pane" /* panes 0.8: App renders the pane window */ ? <PopoutApp spec={popoutSpec} /> : <App />, document.getElementById("root")!);
 // share links (Phase 6): ?share=<id> loads the shared workspace first
 if (shareParam) initViewer().finally(go);
 else go();

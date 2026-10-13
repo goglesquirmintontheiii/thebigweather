@@ -24,6 +24,57 @@ pub enum Learner {
     Gbdt(Gbdt),
     Logreg(LogReg),
     Mlp(Mlp),
+    /// a virtual model combining stored models (members embedded, so exports are self-contained)
+    Ensemble(Box<Ensemble>),
+}
+
+/// Members of an ensemble model and how they are combined.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ensemble {
+    /// mean | max | vote | weighted
+    pub method: String,
+    #[serde(default)]
+    pub weights: Vec<f64>,
+    pub regression: bool,
+    /// ensemble schema size
+    pub n: usize,
+    pub members: Vec<ModelRecord>,
+    /// per member: index of each member feature in the ensemble schema
+    pub maps: Vec<Vec<usize>>,
+}
+
+impl Ensemble {
+    /// Combined probability (classification) or value (regression) of a vector in the
+    /// ensemble schema order.
+    pub fn value(&self, x: &[f32]) -> f64 {
+        let ps: Vec<f64> = self.members.iter().zip(&self.maps).map(|(m, map)| {
+            let xm: Vec<f32> = map.iter().map(|&j| x.get(j).copied().unwrap_or(f32::NAN)).collect();
+            m.prob(&xm)
+        }).collect();
+        combine(&self.method, &self.weights, &ps, &self.members.iter().map(|m| m.threshold).collect::<Vec<_>>())
+    }
+}
+
+/// Combine member outputs: mean | max | vote (share of members at or above their threshold) |
+/// weighted (weighted mean).
+pub fn combine(method: &str, weights: &[f64], ps: &[f64], thresholds: &[f64]) -> f64 {
+    if ps.is_empty() {
+        return f64::NAN;
+    }
+    match method {
+        "max" => ps.iter().copied().fold(f64::MIN, f64::max),
+        "vote" => ps.iter().zip(thresholds).filter(|(p, t)| **p >= **t).count() as f64 / ps.len() as f64,
+        "weighted" => {
+            let (mut s, mut w) = (0.0, 0.0);
+            for (i, p) in ps.iter().enumerate() {
+                let wi = weights.get(i).copied().unwrap_or(1.0).max(0.0);
+                s += wi * p;
+                w += wi;
+            }
+            if w > 0.0 { s / w } else { f64::NAN }
+        }
+        _ => ps.iter().sum::<f64>() / ps.len() as f64,
+    }
 }
 
 impl Learner {
@@ -32,6 +83,10 @@ impl Learner {
             Learner::Gbdt(m) => m.margin(x),
             Learner::Logreg(m) => m.margin(x),
             Learner::Mlp(m) => m.margin(x),
+            Learner::Ensemble(e) => {
+                let v = e.value(x);
+                if e.regression { v } else { super::core::logit(v) }
+            }
         }
     }
     pub fn contributions(&self, x: &[f32]) -> (Vec<f64>, f64) {
@@ -39,6 +94,7 @@ impl Learner {
             Learner::Gbdt(m) => m.contributions(x),
             Learner::Logreg(m) => m.contributions(x),
             Learner::Mlp(m) => m.contributions(x),
+            Learner::Ensemble(e) => (vec![0.0; e.n], self.margin(x)),
         }
     }
     pub fn n_features(&self) -> Option<usize> {
@@ -46,8 +102,18 @@ impl Learner {
             Learner::Gbdt(m) => Some(m.importance.len()),
             Learner::Logreg(m) => Some(m.coef.len()),
             Learner::Mlp(m) => m.layers.first().map(|l| l.nin),
+            Learner::Ensemble(e) => Some(e.n),
         }
     }
+}
+
+/// An extra output of a model (storm track: north displacement, strength).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuxLearner {
+    pub name: String,
+    pub learner: Learner,
+    #[serde(default)]
+    pub metrics: Value,
 }
 
 /// Platt scaling of the raw margin: p = σ(a·m + b).
@@ -219,6 +285,21 @@ pub struct ModelRecord {
     /// job that produced it
     #[serde(default)]
     pub job_id: Option<String>,
+    /// quick | medium | thorough | intensive | custom
+    #[serde(default)]
+    pub intensity: String,
+    /// target + key spec bits: models of a family can replace each other
+    #[serde(default)]
+    pub family_key: String,
+    /// extra outputs (storm track: dy_km, strength)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aux: Vec<AuxLearner>,
+    /// cached training data used by the job that trained it (bytes)
+    #[serde(default)]
+    pub cache_bytes: u64,
+    /// model file size on disk (set by the store)
+    #[serde(skip)]
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -293,7 +374,56 @@ impl ModelRecord {
             "history_len": self.history.len(),
             "history": self.history,
             "quantiles": self.quantiles.iter().map(|q| q.q).collect::<Vec<_>>(),
-            "retrainable": self.spec.get("target").is_some(),
+            "retrainable": self.spec.get("target").is_some() && !self.is_ensemble(),
+            "intensity": self.intensity(), "family_key": self.family(),
+            "size_bytes": self.size_bytes, "cache_bytes": self.cache_bytes,
+            "kind": if self.is_ensemble() { "ensemble" } else { "model" },
+            "ensemble": self.ensemble_info(),
+            "history_mode": self.history_json(),
+            "history_compatible": self.history_json()["compatible"],
+            "coverage": self.coverage(),
+        })
+    }
+    pub fn is_ensemble(&self) -> bool {
+        matches!(self.learner, Learner::Ensemble(_))
+    }
+    pub fn ensemble_info(&self) -> Value {
+        match &self.learner {
+            Learner::Ensemble(e) => json!({"method": e.method, "weights": e.weights, "members": e.members.iter().map(|m| json!({"id": m.id, "name": m.name, "algo": m.algo, "version": m.version})).collect::<Vec<_>>()}),
+            _ => Value::Null,
+        }
+    }
+    pub fn intensity(&self) -> String {
+        if !self.intensity.is_empty() {
+            return self.intensity.clone();
+        }
+        self.spec.get("intensity").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| "custom".into())
+    }
+    pub fn family(&self) -> String {
+        if !self.family_key.is_empty() {
+            return self.family_key.clone();
+        }
+        let s = super::predict::model_spec(self);
+        super::spec::family_key(&s)
+    }
+    /// Historical-mode compatibility: `{compatible, reason, from}`.
+    pub fn history_json(&self) -> Value {
+        let (ok, why, from) = super::spec::history_info(&self.target, &self.candidate, &self.feature_schema.sources);
+        json!({"compatible": ok, "reason": why, "from": from})
+    }
+    /// Where the model is reliable: its training region (confidence normal) and what happens
+    /// outside the US (grid models run there with lower confidence: US-only inputs are missing).
+    pub fn coverage(&self) -> Value {
+        let s = super::predict::model_spec(self);
+        let conus = super::spec::conus_only_sources(&self.feature_schema.sources);
+        let grid = self.candidate == "grid_point";
+        let b = s.region.bbox();
+        json!({
+            "region": b,
+            "states": s.region.states,
+            "confidence": "normal",
+            "us_only_sources": conus,
+            "outside_us": {"allowed": grid, "confidence": if grid { "lower" } else { "unavailable" }, "missing_inputs": conus, "trained_outside_us": !super::spec::inside_conus(&b)},
         })
     }
     /// Full JSON for `GET /api/ml/models/{id}` (learner omitted).
@@ -305,10 +435,20 @@ impl ModelRecord {
             o.insert("quantile_levels".into(), json!(self.quantiles.iter().map(|q| q.q).collect::<Vec<_>>()));
             o.insert("output".into(), json!(self.output()));
             o.insert("layer_id".into(), json!(self.layer_id()));
+            o.remove("aux");
+            o.insert("aux_outputs".into(), json!(self.aux.iter().map(|a| json!({"name": a.name, "metrics": a.metrics})).collect::<Vec<_>>()));
+            o.insert("intensity".into(), json!(self.intensity()));
+            o.insert("family_key".into(), json!(self.family()));
+            o.insert("size_bytes".into(), json!(self.size_bytes));
+            o.insert("kind".into(), json!(if self.is_ensemble() { "ensemble" } else { "model" }));
+            o.insert("ensemble".into(), self.ensemble_info());
+            o.insert("history_mode".into(), self.history_json());
+            o.insert("coverage".into(), self.coverage());
             o.insert("learner_info".into(), match &self.learner {
                 Learner::Gbdt(g) => json!({"type": "gbdt", "trees": g.trees.len(), "nodes": g.trees.iter().map(|t| t.nodes.len()).sum::<usize>()}),
                 Learner::Logreg(l) => json!({"type": "logreg", "coef": self.ids().iter().zip(&l.coef).map(|(i, c)| json!({"id": i, "coef": c})).collect::<Vec<_>>(), "intercept": l.intercept}),
                 Learner::Mlp(m) => json!({"type": "mlp", "layers": m.layers.iter().map(|l| l.nout).collect::<Vec<_>>()}),
+                Learner::Ensemble(e) => json!({"type": "ensemble", "method": e.method, "members": e.members.len()}),
             });
         }
         v
@@ -377,7 +517,8 @@ impl Store {
                 let p = e.path().join("model.json");
                 let Ok(b) = std::fs::read(&p) else { continue };
                 match serde_json::from_slice::<ModelRecord>(&b) {
-                    Ok(m) => {
+                    Ok(mut m) => {
+                        m.size_bytes = dir_bytes(&e.path());
                         models.insert(m.id.clone(), Arc::new(m));
                     }
                     Err(err) => tracing::warn!("ml: skipping {}: {err}", p.display()),
@@ -394,12 +535,13 @@ impl Store {
     pub fn get(&self, id: &str) -> Option<Arc<ModelRecord>> {
         self.models.read().get(id).cloned()
     }
-    pub fn save(&self, m: ModelRecord) -> Result<Arc<ModelRecord>> {
+    pub fn save(&self, mut m: ModelRecord) -> Result<Arc<ModelRecord>> {
         if !valid_id(&m.id) {
             bail!("bad model id");
         }
         let p = self.dir.join(&m.id).join("model.json");
         crate::platform::write_atomic(&p, &serde_json::to_vec(&m)?)?;
+        m.size_bytes = dir_bytes(&self.dir.join(&m.id));
         let a = Arc::new(m);
         self.models.write().insert(a.id.clone(), a.clone());
         Ok(a)
@@ -454,6 +596,14 @@ impl Store {
         let g = self.models.read();
         (g.len() * 64 * 1024, g.len())
     }
+    /// Bytes of all model files on disk.
+    pub fn disk_bytes(&self) -> u64 {
+        self.models.read().values().map(|m| m.size_bytes).sum()
+    }
+}
+
+fn dir_bytes(d: &std::path::Path) -> u64 {
+    std::fs::read_dir(d).map(|rd| rd.flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| m.len()).sum()).unwrap_or(0)
 }
 
 /// `.tbwmodel`: zstd-compressed JSON `{format: "tbwmodel", format_version, exported, model}`.

@@ -1,6 +1,6 @@
 // Catalog of weather layers (radar + gridded + imagery) and the active-layer description.
 
-import { signal, computed } from "@preact/signals";
+import { signal, computed, effect } from "@preact/signals";
 import { api } from "./api";
 import { settings, update, type WeatherSel } from "./store";
 import { BUILTIN } from "./radar/colormaps";
@@ -15,6 +15,8 @@ export interface GridLayerDef {
   source: "mrms" | "model" | "ndfd" | "metar" | "goes" | "future" | "opera" | "cwa" | "nowcast" /* data 0.6 */ | "mlpred" /* models 0.7: my models' predictions */;
   model?: string;
   step_min: number;
+  /** data 0.8: extra request parameters (ensembles: thr = threshold in `units`, with presets) */
+  params?: { thr?: { units?: string; presets?: number[]; def?: number; op?: string } } & Record<string, any>;
 }
 export interface ModelInfo {
   id: string;
@@ -129,6 +131,61 @@ export function isWaterDef(d: GridLayerDef): boolean {
   return /flood|flash|hydro|marine|wave|ocean|sea/.test(g) || /^model\/(gfswave|ww3|rtofs|gwes)\//.test(d.id) || d.model === "gfswave";
 }
 /* ---------- end data 0.6 ---------- */
+
+/* ---------- data 0.8: ensemble probability + severe parameter layers ---------- */
+export const isEnsId = (id: string) => id.startsWith("ens/");
+export const isSvrId = (id: string) => id.startsWith("svr/");
+/** threshold spec of an ensemble layer (server units); a default when the catalog gives none */
+export function thrSpec(d: GridLayerDef | undefined): { units: string; presets: number[]; op: string } | null {
+  if (!d || !isEnsId(d.id)) return null;
+  const t = d.params?.thr ?? {};
+  const op = String(t.op ?? d.id.split("/")[3] ?? "gt");
+  const presets = Array.isArray(t.presets) ? t.presets.map(Number).filter(Number.isFinite) : [];
+  return { units: String(t.units ?? d.units ?? ""), presets, op };
+}
+/** threshold in use for the layer on screen (server units), or null */
+export function ensThr(sel: WeatherSel = settings.value.weather): number | null {
+  if (sel.kind !== "grid" || !isEnsId(sel.id)) return null;
+  if (sel.thr != null && Number.isFinite(sel.thr)) return sel.thr;
+  const sp = thrSpec(gridDef(sel.id));
+  const d = gridDef(sel.id)?.params?.thr?.def;
+  const saved = settings.value.p8?.thr?.[sel.id];
+  return saved ?? (d != null ? +d : sp?.presets[Math.floor(sp.presets.length / 2)] ?? null);
+}
+/** extra query string for grid requests (frames / render / value / export): "&thr=…" */
+export function gridExtraQ(sel: WeatherSel = settings.value.weather): string {
+  const t = ensThr(sel);
+  return t == null ? "" : `&thr=${encodeURIComponent(String(t))}`;
+}
+export function setEnsThr(v: number) {
+  update((s) => {
+    if (s.weather.kind !== "grid" || !isEnsId(s.weather.id)) return;
+    s.weather = { ...s.weather, thr: v };
+    s.p8 = { ...(s.p8 ?? {}), thr: { ...(s.p8?.thr ?? {}), [s.weather.id]: v } };
+  });
+}
+/** colour table for a severe parameter / fog / ensemble layer whose catalog cmap we don't have */
+export function p8Cmap(d: GridLayerDef): string | null {
+  const v = d.id.split("/").pop()!.toLowerCase();
+  if (isEnsId(d.id)) return BUILTIN[d.cmap] && d.cmap !== "PROB" ? null : "ENSPROB";
+  if (/^goes\/.*\/fog$/.test(d.id) || v === "fog") return BUILTIN[d.cmap] ? null : "FOG";
+  if (!isSvrId(d.id) || (BUILTIN[d.cmap] && d.cmap !== "REF")) return null;
+  const m: [RegExp, string][] = [[/dcape/, "DCAPE"], [/stp/, "STP"], [/scp/, "SCP"], [/ship/, "SHIP"], [/srh|helic/, "SRH"], [/shr|shear|bwd/, "SHEAR"], [/cin/, "CIN"], [/cape/, "CAPE"], [/lcl/, "LCL"], [/lapse|lr\d|_lr/, "LAPSE"], [/pwat|pw$/, "PWAT"], [/theta|thte|^te/, "THETAE"]];
+  return m.find(([r]) => r.test(v))?.[1] ?? null;
+}
+/** ensemble layers draw probability (%): the catalog's own units belong to the threshold */
+const ensUnitsFix = (d: GridLayerDef) => isEnsId(d.id) && d.units !== "%";
+effect(() => {
+  const ls = gridLayers.value;
+  if (!ls.some((d) => p8Cmap(d) || ensUnitsFix(d))) return;
+  gridLayers.value = ls.map((d) => {
+    const c = p8Cmap(d);
+    let n = c ? { ...d, cmap: c } : d;
+    if (ensUnitsFix(n)) n = { ...n, units: "%", params: { ...(n.params ?? {}), thr: { ...(n.params?.thr ?? {}), units: n.params?.thr?.units ?? n.units } } };
+    return n;
+  });
+});
+/* ---------- end data 0.8 ---------- */
 
 // screenshot / console handle (intl & forecast tools)
 (window as any).__tbwWeather = { gridLayers };

@@ -15,6 +15,7 @@ import { Ensembles } from "./EnsemblePlume"; // intl & forecast tools
 import { openSounding } from "../sounding/state";
 /* ---------- data 0.6 ---------- */
 import { ModelCompare } from "./Meteogram";
+import { ForecastConfidence } from "./Meteogram"; // data 0.8
 import { HealthTab, StarsTab } from "./OutdoorTabs";
 import { ClimatePanel } from "./ClimatePanel";
 /* ---------- end data 0.6 ---------- */
@@ -687,6 +688,12 @@ function ForecastBody() {
             ))}
           </div>
         </div>
+      )}
+      {/* data 0.8: model agreement per day */ tab === "fc" && fc && where && (
+        <section class="fcc-sec p8-fconf">
+          <label class="lbl">Forecast confidence</label>
+          <ForecastConfidence lat={where.lat} lon={where.lon} />
+        </section>
       )}
       {tab === "fc" && fc && hours.length > 1 && (
         <section class="fcc-sec">

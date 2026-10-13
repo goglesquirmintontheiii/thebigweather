@@ -8,7 +8,7 @@ import { SameDecoder, type SameEvent } from "./decoder";
 import { encodeSame } from "./encoder";
 import { buildHeader, locationName, type SameHeader } from "./parse";
 import { loadFips, countyName } from "./fips";
-import { hideCounties, sameKey, sameShown } from "./mapshow";
+import { hideCounties, sameKey, sameShown, showCounties } from "./mapshow";
 
 export const SAME_RATE = 24000;
 
@@ -37,6 +37,37 @@ export function setSameSound(v: boolean) {
     /* */
   }
 }
+
+/* radio/dash 0.8: decoded headers go on the map right away (tests too; per-viewer switch) */
+export const LVL_COLOR: Record<string, string> = { emergency: "#ff00ff", warning: "#ff3b30", watch: "#ffb020", advisory: "#4aa3ff", statement: "#4aa3ff", test: "#8a96a6", admin: "#8a96a6" };
+export const sameAutoMap = signal(readFlag("tbw.same.automap", true));
+function readFlag(k: string, def: boolean) {
+  try {
+    const v = localStorage.getItem(k);
+    return v == null ? def : v === "1";
+  } catch {
+    return def;
+  }
+}
+export function setSameAutoMap(v: boolean) {
+  sameAutoMap.value = v;
+  try {
+    localStorage.setItem("tbw.same.automap", v ? "1" : "0");
+  } catch {
+    /* */
+  }
+}
+/** Outline a decoded header's areas (keyed to its log entry, so Hide / Clear / expiry remove it). */
+export function mapHeader(h: SameHeader, key: string, label: string, test: boolean) {
+  const fips = h.locations.map((l) => l.fips);
+  if (!fips.length) return;
+  showCounties(fips, `${h.eventName} (${label})`, LVL_COLOR[h.level] ?? "#ff3b30", { key, expires: h.expires.getTime(), test }).catch(() => {});
+}
+/** Listeners for every decoded header (scanner: jump to the station that fired). */
+export type SameHit = { label: string; header: SameHeader | null; raw: string; test: boolean; id: number; at: Date };
+export const sameHitListeners = new Set<(h: SameHit) => void>();
+export const sameToneListeners = new Set<(label: string, kind: "nwr" | "eas", on: boolean) => void>();
+/* end radio/dash 0.8 */
 
 export function areaList(h: SameHeader, max = 99): string {
   const names = h.locations.map((l) => locationName(l, countyName));
@@ -124,15 +155,22 @@ export class SameMonitor {
 
   private event(e: SameEvent) {
     const at = new Date();
-    if (e.type === "tone-start") this.tone.value = { kind: e.kind, since: Date.now() };
-    else if (e.type === "tone-end") {
+    if (e.type === "tone-start") {
+      this.tone.value = { kind: e.kind, since: Date.now() };
+      for (const l of sameToneListeners) l(this.label(), e.kind, true); // radio/dash 0.8
+    } else if (e.type === "tone-end") {
       this.tone.value = null;
+      for (const l of sameToneListeners) l(this.label(), e.kind, false); // radio/dash 0.8
       if (e.duration >= 1) this.add({ id: nextId++, kind: "tone", at, tone: e.kind, duration: e.duration });
     } else if (e.type === "eom") this.add({ id: nextId++, kind: "eom", at, copies: e.copies });
     else if (e.type === "header") {
       const test = this.nextIsTest;
-      this.add({ id: nextId++, kind: "header", at, header: e.header, raw: e.raw, copies: e.copies, test });
+      const id = nextId++;
+      this.add({ id, kind: "header", at, header: e.header, raw: e.raw, copies: e.copies, test });
       const h = e.header;
+      // radio/dash 0.8: on the map as soon as it's decoded; tell the scanner
+      if (h && sameAutoMap.value) mapHeader(h, sameKey(id), this.label(), test);
+      for (const l of sameHitListeners) l({ label: this.label(), header: h, raw: e.raw, test, id, at });
       if (h) {
         const names = h.locations.map((l) => countyName(l.fips)).filter((n): n is string => !!n);
         sameRecentPlaces.value = [...new Set([...names, ...sameRecentPlaces.value])].slice(0, 12);

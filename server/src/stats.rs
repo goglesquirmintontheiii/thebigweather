@@ -9,6 +9,7 @@ use sysinfo::{Disks, Networks, System};
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Stats {
+    /// whole-machine CPU use, % (0-100)
     pub cpu: f32,
     pub cores: usize,
     pub per_core: Vec<f32>,
@@ -24,10 +25,12 @@ pub struct Stats {
     pub disk_fs: String,
     pub net_rx_total: u64,
     pub net_tx_total: u64,
-    /// server process CPU, % of one core (can exceed 100)
-    pub proc_cpu: f32,
     /// server process CPU as % of the whole machine (0-100), comparable with `cpu`
+    pub proc_cpu: f32,
+    /// same as `proc_cpu` (kept for older clients)
     pub proc_cpu_pct: f32,
+    /// server process CPU in % of one core (100 per busy core: 400 = four cores busy)
+    pub proc_cpu_cores: f32,
     /// server process threads
     pub proc_threads: usize,
     pub mem_total: u64,
@@ -96,9 +99,9 @@ pub fn spawn(hub: Hub, data_dir: PathBuf, interval_ms: u64, latest: Arc<parking_
             let ncpu = sys.cpus().len().max(1);
             let la = System::load_average();
             let s = Stats {
-                cpu: sys.global_cpu_usage(),
+                cpu: sys.global_cpu_usage().clamp(0.0, 100.0),
                 cores: sys.cpus().len(),
-                per_core: sys.cpus().iter().map(|c| c.cpu_usage()).collect(),
+                per_core: sys.cpus().iter().map(|c| c.cpu_usage().clamp(0.0, 100.0)).collect(),
                 cpu_name: sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default(),
                 cpu_mhz: sys.cpus().first().map(|c| c.frequency()).unwrap_or(0),
                 load1: la.one,
@@ -111,8 +114,9 @@ pub fn spawn(hub: Hub, data_dir: PathBuf, interval_ms: u64, latest: Arc<parking_
                 disk_fs,
                 net_rx_total: rxt,
                 net_tx_total: txt,
-                proc_cpu: pcpu,
-                proc_cpu_pct: (pcpu / ncpu as f32).min(100.0),
+                proc_cpu: machine_pct(pcpu, ncpu),
+                proc_cpu_pct: machine_pct(pcpu, ncpu),
+                proc_cpu_cores: pcpu.max(0.0),
                 proc_threads: nthreads,
                 mem_total: sys.total_memory(),
                 mem_used: sys.used_memory(),
@@ -130,4 +134,22 @@ pub fn spawn(hub: Hub, data_dir: PathBuf, interval_ms: u64, latest: Arc<parking_
             }
         }
     });
+}
+
+/// A process CPU reading in % of one core → % of the whole machine (0–100).
+pub fn machine_pct(per_core_pct: f32, ncpu: usize) -> f32 {
+    if !per_core_pct.is_finite() {
+        return 0.0;
+    }
+    (per_core_pct / ncpu.max(1) as f32).clamp(0.0, 100.0)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn process_cpu_is_a_share_of_the_machine() {
+        assert_eq!(super::machine_pct(400.0, 8), 50.0);
+        assert_eq!(super::machine_pct(1600.0, 8), 100.0);
+        assert_eq!(super::machine_pct(f32::NAN, 8), 0.0);
+    }
 }

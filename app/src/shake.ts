@@ -62,6 +62,33 @@ export function loadStations(): Promise<ShakeSta[]> {
   return loading;
 }
 
+/* radio/dash 0.8: open the viewer at a time with stations in compare (seismic events layer) */
+export const shakeGoto = signal<{ t: number; before?: number; after?: number; compare?: boolean } | null>(null);
+/** resolve "NET.STA" keys or {net, sta} objects to stations (unknown ones are skipped) */
+export async function resolveStations(list: any[]): Promise<ShakeSta[]> {
+  const all = await loadStations().catch(() => [] as ShakeSta[]);
+  const out: ShakeSta[] = [];
+  for (const x of list ?? []) {
+    const key = typeof x === "string" ? x : x?.net && x?.sta ? `${x.net}.${x.sta}` : x?.id ?? x?.key ?? "";
+    const k = String(key);
+    const s = all.find((a) => staKey(a) === k || a.sta === k);
+    if (s) out.push(s);
+    else if (x && typeof x === "object" && Number.isFinite(+x.lat) && Number.isFinite(+x.lon) && x.sta) out.push({ net: x.net ?? "AM", sta: x.sta, lat: +x.lat, lon: +x.lon, name: x.name });
+  }
+  return out;
+}
+/** Open the Seismographs viewer around time t with these stations compared. */
+export async function openShakeAt(t: number, stations: any[]) {
+  const ss = await resolveStations(stations);
+  if (!ss.length) return false;
+  shakeCompare.value = ss.slice(1, 12);
+  shakeSel.value = ss[0];
+  shakeGoto.value = { t, before: 2 * 60000, after: 6 * 60000, compare: ss.length > 1 };
+  shakeOpen.value = true;
+  return true;
+}
+/* end radio/dash 0.8 */
+
 export function openShake(s: ShakeSta | null) {
   shakeSel.value = s;
   shakeOpen.value = true;

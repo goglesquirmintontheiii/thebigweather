@@ -538,28 +538,65 @@ fn note_file(st: &AppState, id: &str, bytes: u64, t: i64) {
     st.hub.send(json!({"type": "recording", "id": id}));
 }
 
+/// How far before the start a radar frame may begin and still be recorded: the volume being
+/// scanned (or just finished) when recording starts is the first frame.
+const RADAR_LEAD_MS: i64 = 15 * 60_000;
+
+/// Name a recorded Level II file: archive keys keep their file name; real-time chunk volumes get
+/// the archive naming (`SITEyyyymmdd_HHMMSS_V06`).
+fn l2_file_name(site: &str, key: &str, t: i64) -> String {
+    if key.starts_with("chunks:") {
+        let ts = chrono::DateTime::from_timestamp_millis(t).map(|d| d.format("%Y%m%d_%H%M%S").to_string()).unwrap_or_default();
+        return format!("{}{ts}_V06", site.to_ascii_uppercase());
+    }
+    safe(key.rsplit(['/', ':']).next().unwrap_or(key))
+}
+
+/// Volumes / products to record now: newer than the start (minus the lead) and not recorded yet
+/// (a chunk volume and its later archive copy are the same frame: times within 60 s).
+fn radar_new(entries: Vec<crate::radar::service::VolEntry>, start: i64, have_t: &[i64]) -> Vec<crate::radar::service::VolEntry> {
+    let mut v: Vec<crate::radar::service::VolEntry> = entries.into_iter().filter(|e| e.time >= start - RADAR_LEAD_MS && !have_t.iter().any(|t| (t - e.time).abs() < 60_000)).collect();
+    v.sort_by_key(|e| e.time);
+    v.dedup_by(|a, b| (a.time - b.time).abs() < 60_000);
+    v
+}
+
 async fn radar_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<()> {
     let spec = r.radar.clone().unwrap_or_default();
     let dir = st.rec.rec_dir(&r.id);
     let mut have: HashSet<String> = std::fs::read_dir(&dir).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default();
+    // frame times already recorded, per L3 product ("" = Level II)
+    let mut have_t: HashMap<String, Vec<i64>> = HashMap::new();
+    for n in &have {
+        let t = file_time(n);
+        if t > 0 {
+            let prod = n.strip_prefix("L3_").and_then(|x| x.split('_').next()).unwrap_or("").to_string();
+            have_t.entry(prod).or_default().push(t);
+        }
+    }
     let mut fails = 0;
     while !stop.load(Ordering::SeqCst) {
         let mut ok = true;
         if spec.source == "L3" {
             let site3 = if spec.site.len() == 4 { spec.site[1..].to_string() } else { spec.site.clone() };
             for p in &spec.products {
-                match st.radar.l3_list(&site3, p, 3).await {
+                match st.radar.l3_list(&site3, p, 8).await {
                     Ok(list) => {
-                        for v in list.into_iter().filter(|v| v.time >= r.start - 60_000) {
+                        let ht = have_t.entry(p.clone()).or_default();
+                        for v in radar_new(list, r.start, ht) {
                             let ts = chrono::DateTime::from_timestamp_millis(v.time).map(|t| t.format("%Y%m%d_%H%M%S").to_string()).unwrap_or_default();
                             let name = format!("L3_{p}_{ts}.bin");
                             if have.contains(&name) {
                                 continue;
                             }
-                            if let Ok(b) = st.radar.l3_raw(&v.key).await {
-                                tokio::fs::write(dir.join(&name), &b).await?;
-                                note_file(st, &r.id, b.len() as u64, v.time);
-                                have.insert(name);
+                            match st.radar.l3_raw(&v.key).await {
+                                Ok(b) if !b.is_empty() => {
+                                    tokio::fs::write(dir.join(&name), &b).await?;
+                                    note_file(st, &r.id, b.len() as u64, v.time);
+                                    have.insert(name);
+                                    ht.push(v.time);
+                                }
+                                _ => ok = false,
                             }
                         }
                     }
@@ -567,29 +604,49 @@ async fn radar_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<
                 }
             }
         } else {
-            match st.radar.latest(&spec.site, 3).await {
-                Ok(list) => {
-                    for v in list.into_iter().filter(|v| v.time >= r.start - 60_000) {
-                        let name = safe(v.key.rsplit(['/', ':']).next().unwrap_or(&v.key));
-                        if have.contains(&name) {
-                            continue;
-                        }
-                        if let Ok(b) = st.radar.raw(&v.key).await {
-                            tokio::fs::write(dir.join(&name), &b).await?;
-                            note_file(st, &r.id, b.len() as u64, v.time);
-                            have.insert(name);
-                        }
+            // the archive (re-listed on every poll) plus the real-time chunks, whichever is newer
+            st.radar.forget_recent_listing(&spec.site);
+            let mut entries = match st.radar.latest(&spec.site, 6).await {
+                Ok(l) => l,
+                Err(_) => {
+                    ok = false;
+                    vec![]
+                }
+            };
+            if let Ok(Some(e)) = st.ml.fetch.latest(&spec.site).await {
+                entries.push(e);
+            }
+            if entries.is_empty() {
+                ok = false;
+            }
+            let ht = have_t.entry(String::new()).or_default();
+            for v in radar_new(entries, r.start, ht) {
+                let name = l2_file_name(&spec.site, &v.key, v.time);
+                if have.contains(&name) {
+                    ht.push(v.time);
+                    continue;
+                }
+                match st.ml.fetch.raw(&v.key).await {
+                    Ok(b) if !b.is_empty() => {
+                        tokio::fs::write(dir.join(&name), &b).await?;
+                        note_file(st, &r.id, b.len() as u64, v.time);
+                        have.insert(name);
+                        ht.push(v.time);
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::debug!("recording {}: {}: {e:#}", r.id, v.key);
+                        ok = false;
                     }
                 }
-                Err(_) => ok = false,
             }
         }
         fails = if ok { 0 } else { fails + 1 };
-        if fails > 60 {
+        if fails > 120 {
             bail!("radar data unavailable for an hour");
         }
-        // volumes arrive every ~4–10 minutes; check each minute
-        for _ in 0..12 {
+        // volumes arrive every ~4–10 minutes; check every 30 s
+        for _ in 0..6 {
             if stop.load(Ordering::SeqCst) {
                 break;
             }
@@ -862,6 +919,22 @@ mod tests {
         assert_eq!(file_time("1760000000000.jpg"), 1760000000000);
         assert!(file_time("L3_N0B_20261011_123456.bin") > 0);
         assert!(file_time("KTLX20130520_200356_V06") > 0);
+    }
+
+    #[test]
+    fn radar_frames_include_the_current_one() {
+        use crate::radar::service::VolEntry;
+        let start = 1_760_000_000_000i64;
+        let e = |t: i64, k: &str| VolEntry { key: k.into(), time: t, size: 0, source: "aws" };
+        // the volume scanning when the recording started (6 min before) is the first frame;
+        // the chunk copy of an archived volume is not recorded twice
+        let got = radar_new(vec![e(start - 40 * 60_000, "a"), e(start - 6 * 60_000, "b"), e(start + 300_000, "c"), e(start + 300_020, "chunks:x/KTLX/12")], start, &[]);
+        assert_eq!(got.iter().map(|v| v.key.as_str()).collect::<Vec<_>>(), vec!["b", "c"]);
+        let got = radar_new(vec![e(start + 300_000, "c"), e(start + 600_000, "d")], start, &[start + 300_010]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(l2_file_name("ktlx", "chunks:b/KTLX/12", 1_760_000_000_000), "KTLX20251009_085320_V06");
+        assert_eq!(l2_file_name("KTLX", "aws:unidata-nexrad-level2/2025/10/09/KTLX/KTLX20251009_084320_V06", 0), "KTLX20251009_084320_V06");
+        assert!(file_time("KTLX20251009_084320_V06") > 0);
     }
 
     #[test]

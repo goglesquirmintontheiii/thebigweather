@@ -363,6 +363,11 @@ export function ConfigModal() {
           <button class={`icon-btn ${captureFor.value === id ? "on" : ""}`} title="Keyboard shortcut to toggle this layer" onClick={() => (captureFor.value = captureFor.value === id ? null : id)}>
             <Keyboard size={14} />
           </button>
+          {/* data 0.8 */ !id.startsWith("base:") && (
+            <button class="icon-btn" title="Export this layer's data (CSV / GeoJSON / KML)" onClick={() => (openExport(id.startsWith("file:") ? null : id), close())}>
+              <FileDown size={14} />
+            </button>
+          )}
           {reload && (
             <button class="icon-btn" title="Reload now" onClick={reload}>
               <RefreshCw size={14} />
@@ -747,3 +752,7 @@ export function MyFiles({ collapsible, open = true, onToggle }: { collapsible?: 
     </section>
   );
 }
+
+/* data 0.8: export from a layer's settings */
+import { FileDown } from "lucide-preact";
+import { openExport } from "../export/export";

@@ -159,7 +159,19 @@ function RuleEditor({ r }: { r: Rule }) {
           )}
         </div>
       )}
+      {/* data 0.8: where the rule runs + server channels */}
+      <div class="row">
+        <span>Run on</span>
+        <div class="seg sm">
+          {(["app", "server", "both"] as const).map((k) => (
+            <button key={k} class={(r.run_on ?? "app") === k ? "on" : ""} disabled={k !== "app" && rulesStore.value !== "server"} title={k === "app" ? "This computer, while the app is open" : rulesStore.value !== "server" ? "The server doesn't store rules" : k === "server" ? "The server, even when the app is closed (channels only)" : "Both: sounds etc. here, channels from the server"} onClick={() => set((x) => (x.run_on = k === "app" ? undefined : k))}>
+              {k === "app" ? "This app" : k === "server" ? "Server" : "Both"}
+            </button>
+          ))}
+        </div>
+      </div>
       <label class="lbl">Then</label>
+      {r.run_on && r.run_on !== "app" && <P8Channels r={r} set={set} />}
       <div class="row">
         <span>Sound</span>
         <select value={r.act.sound ?? "off"} onChange={(e) => set((x) => (x.act.sound = (e.target as HTMLSelectElement).value as any))}>
@@ -232,6 +244,10 @@ export function RulesPanel() {
             <Plus size={13} /> Add rule
           </button>
         </div>
+        {/* data 0.8 */}
+        <button class="btn sm ghost p8-notify-btn" onClick={() => (notifyOpen.value = true)}>
+          <BellRing size={13} /> Notification channels…
+        </button>
         <div class="muted small rl-store">
           {rulesStore.value === "server" ? <Cloud size={12} /> : <HardDrive size={12} />}
           {rulesStore.value === "server" ? " Rules are saved on the server." : " Saved on this computer (the server has no rules store)."} Checked when data updates, at most every 30 s.
@@ -296,3 +312,37 @@ export function RulesPanel() {
     </div>
   );
 }
+
+/* ---------- data 0.8: server channel actions ---------- */
+import { BellRing } from "lucide-preact";
+import { useEffect } from "preact/hooks";
+import { notifyOpen, channels, chanState, loadChannels } from "./NotifyPanel";
+function P8Channels({ r, set }: { r: Rule; set: (fn: (x: Rule) => void) => void }) {
+  useEffect(() => {
+    if (chanState.value.supported == null) loadChannels();
+  }, []);
+  const on = new Set(r.act.channels ?? []);
+  const toggle = (id: string) =>
+    set((x) => {
+      const s = new Set(x.act.channels ?? []);
+      s.has(id) ? s.delete(id) : s.add(id);
+      x.act.channels = [...s];
+    });
+  return (
+    <div class="row p8-rl-ch">
+      <span>Send to</span>
+      <div class="d6-chips">
+        {channels.value.map((c) => (
+          <button key={c.id} class={`chip ${on.has(c.id) ? "on" : ""} ${c.enabled ? "" : "off"}`} title={c.type} onClick={() => toggle(c.id)}>
+            {c.name}
+          </button>
+        ))}
+        {!channels.value.length && <span class="muted small">{chanState.value.supported === false ? "Server has no channels." : "No channels yet."}</span>}
+        <button class="chip" onClick={() => (notifyOpen.value = true)}>
+          Manage…
+        </button>
+      </div>
+    </div>
+  );
+}
+/* ---------- end data 0.8 ---------- */

@@ -1,17 +1,33 @@
 // Detection models → Models: list, search/filter, detail (metrics, charts, importance, spec), manage.
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { Search, Upload, Download, Copy, Trash2, Pencil, Check, X, RefreshCw, Play, Server, Laptop, Tag, RotateCcw, FastForward } from "lucide-preact";
-import { models, modelsErr, modelsLoading, loadModels, loadModel, selModel, mkey, patchModel, deleteModel, exportModel, importModel, copyModel, trainDraft, mlTab, runningOn, catalog, canLocal, localIsMain } from "../../ml/client";
+import { Search, Upload, Download, Copy, Trash2, Pencil, Check, X, RefreshCw, Server, Laptop, Tag, RotateCcw, FastForward, HardDrive, History as HistoryIcon, Globe2, ArrowRightLeft, Radar, Combine, Loader } from "lucide-preact";
+import { models, modelsErr, modelsLoading, loadModels, loadModel, selModel, mkey, patchModel, deleteModel, exportModel, importModel, copyModel, trainDraft, mlTab, runningOn, catalog, canLocal, localIsMain, exportState, moveModel, localUrl } from "../../ml/client";
+import { fmtBytes, INTENSITIES, runOf, stoppedModels } from "../../ml/m8"; // models 0.8
+import { ModelRun } from "./ModelRun"; // models 0.8
+import { update, settings } from "../../store";
 import { tmeta, TARGETS } from "../../ml/targets";
 import type { Model, Ep } from "../../ml/types";
 import { TIcon, EpBadge, pct, f2, fmtDay, scoresAt, Help } from "./common";
 import { ThresholdChart, RocChart, ReliabilityChart } from "./charts";
-import { runPreset } from "./RunTab";
 import { openRetrain, continueFor, ModelHistory } from "./Retrain"; // models 0.7
 
 /** models 0.7: what running the model produces */
 const OUT_LABEL: Record<string, string> = { detections: "detections", grid: "weather layer", outlook: "outlook" };
+
+/** models 0.8: "Europe · medium confidence" */
+export function CoverageBadge({ m }: { m: Model }) {
+  const c = m.coverage;
+  if (!c?.region || /^(us|usa|conus|united states)$/i.test(String(c.region))) return null;
+  const conf = typeof c.confidence === "number" ? (c.confidence >= 0.75 ? "high" : c.confidence >= 0.45 ? "medium" : "low") : String(c.confidence ?? "");
+  return (
+    <span class={`m8-cov ${conf}`} title={`Trained / validated for ${c.region}${conf ? ` · ${conf} confidence outside the US` : ""}`}>
+      <Globe2 size={11} /> {c.region}
+      {conf ? ` · ${conf}` : ""}
+    </span>
+  );
+}
+const INT_NAME: Record<string, string> = Object.fromEntries(INTENSITIES);
 
 export function ModelsTab() {
   const [q, setQ] = useState("");
@@ -23,7 +39,11 @@ export function ModelsTab() {
   }, []);
   const all = models.value;
   const labels = useMemo(() => [...new Set(all.flatMap((m) => m.labels))].sort(), [all]);
+  // models 0.8: where the models live
+  const loc = settings.value.ml?.loc ?? "both";
+  const twoPlaces = !localIsMain.value && (all.some((m) => m.ep === "local") || canLocal() || !!localUrl.value);
   const list = all.filter((m) => {
+    if (twoPlaces && loc !== "both" && m.ep !== loc) return false;
     if (tgt && m.target !== tgt) return false;
     if (lab && !m.labels.includes(lab)) return false;
     if (q) {
@@ -32,7 +52,8 @@ export function ModelsTab() {
     }
     return true;
   });
-  const sel = all.find((m) => mkey(m) === selModel.value) ?? (selModel.value ? undefined : list[0]);
+  const sel0 = all.find((m) => mkey(m) === selModel.value) ?? (selModel.value ? undefined : list.find((m) => !m.training));
+  const sel = sel0?.training ? undefined : sel0;
   return (
     <div
       class="ml-models"
@@ -67,6 +88,22 @@ export function ModelsTab() {
             }}
           />
         </div>
+        {twoPlaces && (
+          <div class="seg m8-loc" title="Where the models live">
+            {(
+              [
+                ["both", "Both"],
+                ["main", "Server"],
+                ["local", "This computer"],
+              ] as const
+            ).map(([k, l]) => (
+              <button key={k} class={loc === k ? "on" : ""} onClick={() => update((s) => (s.ml = { ...(s.ml ?? {}), loc: k }))}>
+                {k === "main" ? <Server size={12} /> : k === "local" ? <Laptop size={12} /> : null} {l}
+                <small>{k === "both" ? all.length : all.filter((m) => m.ep === k).length}</small>
+              </button>
+            ))}
+          </div>
+        )}
         <div class="ml-filters">
           <select value={tgt} onChange={(e) => setTgt((e.target as HTMLSelectElement).value)}>
             <option value="">All targets</option>
@@ -84,9 +121,7 @@ export function ModelsTab() {
         </div>
         {modelsErr.value && <div class="ml-err">{modelsErr.value}</div>}
         <div class="ml-cards">
-          {list.map((m) => (
-            <ModelCard key={mkey(m)} m={m} on={!!sel && mkey(sel) === mkey(m)} />
-          ))}
+          {list.map((m) => (m.training ? <TrainingCard key={mkey(m)} m={m} /> : <ModelCard key={mkey(m)} m={m} on={!!sel && mkey(sel) === mkey(m)} />))}
           {!list.length && !modelsLoading.value && (
             <div class="ml-empty">
               {all.length ? "No models match." : "No models yet."}
@@ -103,8 +138,46 @@ export function ModelsTab() {
   );
 }
 
+/** models 0.8: a model still training: greyed, progress bar, not selectable until done */
+function TrainingCard({ m }: { m: Model }) {
+  const p = Math.max(0, Math.min(1, m.progress ?? 0));
+  const paused = m.state === "paused";
+  return (
+    <div class={`ml-card m8-training ${paused ? "paused" : ""}`} title="Still training — opens when it's done (see Jobs)" aria-disabled="true">
+      <TIcon t={m.target} size={26} />
+      <div class="ml-card-main">
+        <div class="ml-card-title">
+          <b>{m.name}</b>
+          <span class="m8-tr-st">
+            <Loader size={11} class={paused ? "" : "spin"} /> {paused ? "paused" : m.state === "queued" ? "queued" : "training"}
+          </span>
+        </div>
+        <div class="ml-card-sub">
+          <span>{tmeta(m.target).name}</span>
+          {m.intensity && <span class={`m8-int ${m.intensity}`}>{INT_NAME[m.intensity] ?? m.intensity}</span>}
+          {m.ep === "local" && !localIsMain.value && <EpBadge ep="local" />}
+        </div>
+        <div class="m8-tr-bar">
+          <div class={`ml-bar ${paused ? "" : "live"}`}>
+            <i style={{ width: `${p * 100}%` }} />
+          </div>
+          <small>{Math.round(p * 100)}%</small>
+          <a
+            onClick={(e) => {
+              e.stopPropagation();
+              mlTab.value = "jobs";
+            }}
+          >
+            Jobs
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModelCard({ m, on }: { m: Model; on: boolean }) {
-  const n = runningOn.value.get(mkey(m));
+  const n = runningOn.value.get(mkey(m)) ?? (runOf(m)?.enabled ? 0 : undefined);
   const mt = m.metrics ?? {};
   return (
     <button class={`ml-card ${on ? "on" : ""}`} onClick={() => (selModel.value = mkey(m))}>
@@ -124,7 +197,19 @@ function ModelCard({ m, on }: { m: Model; on: boolean }) {
           <span>{fmtDay(m.created)}</span>
           {(m.version ?? 1) > 1 && <span class="ml-ver">v{m.version}</span>}
           {m.output && m.output !== "detections" && <span class="ml-out">→ {OUT_LABEL[m.output]}</span>}
+          {m.intensity && <span class={`m8-int ${m.intensity}`}>{INT_NAME[m.intensity] ?? m.intensity}</span>}
+          {m.virtual && (
+            <span class="m8-ens" title="Ensemble of other models">
+              <Combine size={11} /> ensemble
+            </span>
+          )}
+          {m.size_bytes != null && (
+            <span class="m8-size" title={`On disk${m.cache_bytes ? ` · + ${fmtBytes(m.cache_bytes)} cache` : ""}`}>
+              {fmtBytes(m.size_bytes)}
+            </span>
+          )}
           {m.ep === "local" && !localIsMain.value && <EpBadge ep="local" />}
+          <CoverageBadge m={m} />
         </div>
         {m.labels.length > 0 && (
           <div class="ml-chips">
@@ -230,6 +315,11 @@ function ModelDetail({ m }: { m: Model }) {
   };
   const other: Ep = m.ep === "local" ? "main" : "local";
   const n = runningOn.value.get(mkey(m));
+  const [confirmMove, setConfirmMove] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const ex = exportState.value[mkey(m)];
+  // models 0.8: the same model (family) at other intensities
+  const fam = m.family_key ? models.value.filter((x) => x.family_key === m.family_key && !x.training && x.ep === m.ep) : [];
   return (
     <div class="ml-det">
       <div class="ml-det-head">
@@ -271,11 +361,51 @@ function ModelDetail({ m }: { m: Model }) {
               </span>
             )}
           </div>
+          <div class="ml-det-sub m8-tags">
+            {m.size_bytes != null && (
+              <span class="m8-size" title="Size of the model file on disk (plus its feature cache)">
+                <HardDrive size={11} /> {fmtBytes(m.size_bytes)}
+                {m.cache_bytes ? <small> + {fmtBytes(m.cache_bytes)} cache</small> : null}
+              </span>
+            )}
+            {m.history_compatible === true && (
+              <span class="m8-hc" title="Can run on past data: use “Run on this range” in history mode">
+                <HistoryIcon size={11} /> History compatible
+              </span>
+            )}
+            {m.history_compatible === false && (
+              <span class="m8-hc no" title={m.history_reason ?? "Needs live-only inputs"}>
+                <HistoryIcon size={11} /> Live only{m.history_reason ? ` · ${m.history_reason}` : ""}
+              </span>
+            )}
+            {m.virtual && (
+              <span class="m8-ens">
+                <Combine size={11} /> ensemble{m.ensemble?.members?.length ? ` of ${m.ensemble.members.length}` : ""}
+                {m.ensemble?.method ? ` · ${m.ensemble.method}` : ""}
+              </span>
+            )}
+            <CoverageBadge m={m} />
+          </div>
+          {fam.length > 1 && (
+            <div class="m8-intsw" title="The same model trained at other intensities">
+              <small class="muted">Intensity</small>
+              <span class="seg">
+                {INTENSITIES.filter(([k]) => fam.some((x) => x.intensity === k)).map(([k, l]) => {
+                  const x = fam.find((y) => y.intensity === k)!;
+                  return (
+                    <button key={k} class={x.id === m.id ? "on" : ""} title={`${x.name}${x.metrics?.auc != null ? ` · AUC ${f2(x.metrics.auc, 3)}` : ""}${x.metrics?.csi != null ? ` · CSI ${f2(x.metrics.csi)}` : ""}`} onClick={() => (selModel.value = mkey(x))}>
+                      {l}
+                    </button>
+                  );
+                })}
+              </span>
+            </div>
+          )}
           <LabelEditor m={m} />
         </div>
         <div class="ml-det-actions">
-          <button class="btn sm" title="Run this model on radars" onClick={() => runPreset([mkey(m)])}>
-            <Play size={13} /> Run
+          <button class="btn sm" title="Run settings, Enable / Stop, Run now, history runs and detections" onClick={() => document.getElementById(`m8run-${m.ep}-${m.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+            <Radar size={13} /> Run…
           </button>
           <button class="btn sm ghost" title="Retrain from scratch: opens the training form with this model's settings (replace it or save a new model)" onClick={() => openRetrain(m)}>
             <RotateCcw size={13} /> Retrain…
@@ -283,8 +413,8 @@ function ModelDetail({ m }: { m: Model }) {
           <button class="btn sm ghost" title="Continue training with more events / rounds (works for imported models too)" onClick={() => (continueFor.value = m)}>
             <FastForward size={13} /> Train further…
           </button>
-          <button class="btn sm ghost" title="Download as a .tbwmodel file" onClick={() => exportModel(m)}>
-            <Download size={13} /> Export
+          <button class="btn sm ghost" disabled={ex?.busy} title={(window as any).tbw?.saveFile ? "Save as a .tbwmodel file in Downloads/TheBigWeather" : "Download as a .tbwmodel file"} onClick={() => exportModel(m)}>
+            <Download size={13} /> {ex?.busy ? "Exporting…" : "Export"}
           </button>
           <button
             class="btn sm ghost"
@@ -296,11 +426,36 @@ function ModelDetail({ m }: { m: Model }) {
           >
             <Copy size={13} /> Duplicate settings
           </button>
-          {canLocal() && (
+          {canLocal() && !m.virtual && (
             <button class="btn sm ghost" title={other === "main" ? "Copy this model to the main server" : "Copy this model to this computer"} onClick={() => copyModel(m, other)}>
               {other === "main" ? <Server size={13} /> : <Laptop size={13} />} Copy to {other === "main" ? "server" : "this computer"}
             </button>
           )}
+          {canLocal() && !m.virtual &&
+            (confirmMove ? (
+              <span class="ml-confirm">
+                Move to {other === "main" ? "the server" : "this computer"}? It's exported, imported there, then deleted here.
+                <button
+                  class="btn sm"
+                  disabled={moving}
+                  onClick={async () => {
+                    setMoving(true);
+                    await moveModel(m, other);
+                    setMoving(false);
+                    setConfirmMove(false);
+                  }}
+                >
+                  {moving ? "Moving…" : "Move"}
+                </button>
+                <button class="btn sm ghost" onClick={() => setConfirmMove(false)}>
+                  Keep
+                </button>
+              </span>
+            ) : (
+              <button class="btn sm ghost" title={`Move this model to ${other === "main" ? "the server" : "this computer"} (export → import → delete here)`} onClick={() => setConfirmMove(true)}>
+                <ArrowRightLeft size={13} /> Move to {other === "main" ? "server" : "this computer"}
+              </button>
+            ))}
           {confirmDel ? (
             <span class="ml-confirm">
               Delete?
@@ -317,6 +472,22 @@ function ModelDetail({ m }: { m: Model }) {
             </button>
           )}
         </div>
+      </div>
+
+      {(ex?.path || ex?.error) && (
+        <div class={`m8-exp ${ex.error ? "err" : ""}`}>
+          {ex.error ? `Export failed: ${ex.error}` : `Exported to ${ex.path}`}
+          <button class="icon-btn" title="Dismiss" onClick={() => (exportState.value = { ...exportState.value, [mkey(m)]: {} })}>
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      <div class="ml-box m8-runbox" id={`m8run-${m.ep}-${m.id}`}>
+        <h4>
+          Run <small class="muted">{stoppedModels.value.has(mkey(m)) ? "stopped" : ""}</small>
+        </h4>
+        <ModelRun m={m} />
       </div>
 
       {m.task === "regression" ? (

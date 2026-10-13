@@ -1,17 +1,21 @@
-// Multi-pane layout: the main map plus up to three extra panes, and the layout picker.
+// Multi-pane layout: the main map plus extra panes, and the layout picker.
+// panes 0.8: grid layouts (built-in + custom, see PaneLayoutEditor.tsx) with drawn icons, per-pane
+// links (position / time / layers), pane pop-out windows and pane windows linked to the main one.
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { settings, update, openPanel, type PaneCfg } from "../store";
-import { mountPane, paneConfigured, paneStatus, resizePanes } from "../map/panes";
+import { settings, update, openPanel, type PaneCfg, type PaneLink, type PaneLayoutDef, type PaneLayoutId } from "../store";
+import { mountPane, paneConfigured, paneStatus, resizePanes, paneLink, paneMap } from "../map/panes";
 import { L2_MOMENTS, l3Products, sites, productName } from "../radar/controller";
 import { gridLayers, selectWeather, activeLabel, GIBS } from "../weather";
-import { SwipeDivider } from "./CompareSwipe"; // data 0.6
+import { SwipeDivider, swipeGeom, type SwipeMode } from "./CompareSwipe"; // data 0.6
 import { noLevel3 } from "../intl/sites";
 import { fmtTime } from "../util";
-import { LayoutGrid, Columns2, Rows2, Square, Grid2x2, Link2, Link2Off, AppWindow, MonitorSmartphone, SquareSplitHorizontal } from "lucide-preact";
-import { popout, canPopout } from "../popout";
+import { AppWindow, Move, Clock, Layers, ExternalLink, SquarePlus, Pencil, Link2, Link2Off } from "lucide-preact";
+import { popout, popoutSpec } from "../popout";
 import { mapRef } from "../map/mapview";
-import { linkOn, linkLayers, peers, isSecondWindow, setLink } from "../linkwin";
+import { myKind, myLink, peerList, setMyLink, setPeerLink, linkMap } from "../linkwin";
+import { startAlerts } from "../alerts";
+import { jumpToSetting } from "../a11y/jump";
 
 /** Product dropdown options: Level II moments, Level III families (for the site's radar type), gridded layers. */
 function ProductOptions({ site, current, value, label, sat }: { site: string; current?: string; value: string; label?: string; /* data 0.6 */ sat?: boolean }) {
@@ -80,23 +84,44 @@ function ProductOptions({ site, current, value, label, sat }: { site: string; cu
   );
 }
 
-/** Link toggle for a second map window (shown when another map window is open). */
-function LinkControls() {
-  if (!(peers.value > 0 || isSecondWindow || linkOn.value)) return null;
+type Sty = Record<string, any>;
+
+/* ---------- links ---------- */
+const LINK_KINDS: [keyof PaneLink, any, string][] = [
+  ["pos", Move, "position"],
+  ["time", Clock, "time"],
+  ["layers", Layers, "layers"],
+];
+
+/** Three small toggles: position / time / layers. */
+export function LinkToggles({ lk, set, what, chips }: { lk: PaneLink; set: (l: PaneLink) => void; what: string; chips?: boolean }) {
   return (
-    <>
-      <button class={`ph-btn ${linkOn.value ? "on" : ""}`} title={linkOn.value ? "Linked with the other window: view, time, radar site (click to unlink)" : "Link with the other map window (view, time, radar site)"} onClick={() => setLink(!linkOn.value)}>
-        {linkOn.value ? <Link2 size={13} /> : <Link2Off size={13} />}
-        <span>Link</span>
-      </button>
-      {linkOn.value && (
-        <label class="ph-chk" title="Also sync overlay layers (Layers menu)">
-          <input type="checkbox" checked={linkLayers.value} onChange={(e) => setLink(true, (e.target as HTMLInputElement).checked)} />
-          Sync layers
-        </label>
-      )}
-    </>
+    <span class={chips ? "lk8-chips" : "lk8-icons"} role="group" aria-label={`${what} links`}>
+      {LINK_KINDS.map(([k, I, name]) => (
+        <button
+          key={k}
+          class={`lk8 ${lk[k] ? "on" : ""}`}
+          aria-pressed={lk[k]}
+          title={`${what}: ${lk[k] ? "follows" : "doesn't follow"} the main map's ${name} (click to ${lk[k] ? "unlink" : "link"})`}
+          aria-label={`Link ${name} for ${what}`}
+          onClick={(e) => (e.stopPropagation(), set({ ...lk, [k]: !lk[k] }))}
+        >
+          <I size={chips ? 12 : 11} />
+          {chips && <span>{name === "position" ? "Pos" : name === "time" ? "Time" : "Layers"}</span>}
+        </button>
+      ))}
+    </span>
   );
+}
+
+function setPaneLink(idx: number, lk: PaneLink) {
+  update((s) => (s.panes.links = { ...(s.panes.links ?? {}), [idx]: lk }));
+}
+
+/** Second map window / pane window: what this window follows. */
+function LinkControls() {
+  if (myKind === "main") return null;
+  return <LinkToggles lk={myLink.value} set={setMyLink} what="This window" />;
 }
 
 /** Publish the header's bottom edge as --hdr-b so the pane dropdowns and the scan bar sit just
@@ -133,8 +158,62 @@ function useHeaderVar() {
   }, [panel]);
 }
 
+/* ---------- layouts ---------- */
+export type GridSpec = { rows: number; cols: number; cells: { r: number; c: number; rs: number; cs: number }[] };
+const cell = (r: number, c: number, rs = 1, cs = 1) => ({ r, c, rs, cs });
+export const BUILTIN_LAYOUTS: (GridSpec & { id: PaneLayoutId; name: string })[] = [
+  { id: "1", name: "One map", rows: 1, cols: 1, cells: [cell(0, 0)] },
+  { id: "2", name: "Two side by side", rows: 1, cols: 2, cells: [cell(0, 0), cell(0, 1)] },
+  { id: "2v", name: "Two stacked", rows: 2, cols: 1, cells: [cell(0, 0), cell(1, 0)] },
+  { id: "3", name: "Three: one large + two stacked", rows: 2, cols: 2, cells: [cell(0, 0, 2, 1), cell(0, 1), cell(1, 1)] },
+  { id: "3c", name: "Three side by side", rows: 1, cols: 3, cells: [cell(0, 0), cell(0, 1), cell(0, 2)] },
+  { id: "4", name: "Four (2 × 2)", rows: 2, cols: 2, cells: [cell(0, 0), cell(0, 1), cell(1, 0), cell(1, 1)] },
+];
+export const MAX_MAPS = 6;
+
+export function layoutSpec(id: string): (GridSpec & { name: string }) | null {
+  if (id === "swipe") return null;
+  if (id.startsWith("custom:")) return settings.value.paneLayouts?.find((l) => `custom:${l.id}` === id) ?? null;
+  return BUILTIN_LAYOUTS.find((l) => l.id === id) ?? null;
+}
+export function paneCountOf(id: string): number {
+  if (id === "swipe") return 1;
+  const s = layoutSpec(id);
+  return s ? Math.min(MAX_MAPS, s.cells.length) - 1 : 0;
+}
+/** kept for older imports */
+export const PANE_COUNT: Record<string, number> = { "1": 0, "2": 1, "2v": 1, "3": 2, "3c": 2, "4": 3, swipe: 1 };
+export function layoutName(id: string): string {
+  return id === "swipe" ? "Swipe compare" : layoutSpec(id)?.name ?? id;
+}
+
+/** A layout drawn as its panes (main map shaded). */
+export function LayoutIcon({ spec, size = 18, swipe }: { spec?: GridSpec | null; size?: number; swipe?: SwipeMode }) {
+  const pad = 2.5, W = 24 - 2 * pad, gap = 1.6;
+  if (swipe) {
+    const line = swipe === "v" ? "M12 3.5V20.5" : swipe === "h" ? "M3.5 12H20.5" : "M8 3.5L16 20.5";
+    const half = swipe === "v" ? "M12 3.5H19a1.5 1.5 0 0 1 1.5 1.5V19a1.5 1.5 0 0 1-1.5 1.5H12Z" : swipe === "h" ? "M3.5 12H20.5V19a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5Z" : "M8 3.5H19a1.5 1.5 0 0 1 1.5 1.5V19a1.5 1.5 0 0 1-1.5 1.5H16Z";
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+        <path d={half} fill="currentColor" fill-opacity="0.35" stroke="none" />
+        <path d={line} stroke-width="2" />
+      </svg>
+    );
+  }
+  const g = spec ?? BUILTIN_LAYOUTS[0];
+  const cw = (W - gap * (g.cols - 1)) / g.cols, ch = (W - gap * (g.rows - 1)) / g.rows;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      {g.cells.slice(0, MAX_MAPS).map((c, i) => (
+        <rect key={i} x={pad + c.c * (cw + gap)} y={pad + c.r * (ch + gap)} width={c.cs * cw + (c.cs - 1) * gap} height={c.rs * ch + (c.rs - 1) * gap} rx="1.4" fill={i === 0 ? "currentColor" : "none"} fill-opacity={i === 0 ? 0.35 : 0} />
+      ))}
+    </svg>
+  );
+}
+
 /** Product dropdown for the main map (top-centre of its pane, just below the header). */
-export function MainPaneHead() {
+export function MainPaneHead({ style }: { style?: Sty }) {
   const s = settings.value;
   const w = s.weather;
   const value = w.kind === "radar" ? `r:${s.radar.source}:${s.radar.product}` : w.kind === "grid" ? `g:${w.id}` : `x:${w.id}`;
@@ -164,8 +243,8 @@ export function MainPaneHead() {
     return () => (ro.disconnect(), window.removeEventListener("resize", upd), clearInterval(t));
   }, []);
   return (
-    <div class={`pane-head main-head glass ${openPanel.value ? "shift" : ""}`}>
-      <select value={value} onChange={(e) => pick((e.target as HTMLSelectElement).value)} title="Product (1–6 for Level II)">
+    <div class={`pane-head main-head glass ${openPanel.value ? "shift" : ""}`} style={style}>
+      <select value={value} onChange={(e) => pick((e.target as HTMLSelectElement).value)} title="Product (1–6 for Level II)" aria-label="Main map product">
         <ProductOptions site={s.radar.site} current={s.radar.product} value={value} label={w.kind === "radar" ? productName(s.radar.product) : activeLabel.value.title} />
       </select>
       <LinkControls />
@@ -173,16 +252,53 @@ export function MainPaneHead() {
   );
 }
 
-export const PANE_COUNT: Record<string, number> = { "1": 0, "2": 1, "2v": 1, "3": 2, "4": 3, swipe: 1 /* data 0.6 */ };
-
-function defaultCfg(i: number): PaneCfg {
-  const second = ["VEL", "ZDR", "RHO"][i - 1] ?? "VEL";
+export function defaultCfg(i: number): PaneCfg {
+  const second = ["VEL", "ZDR", "RHO", "SW", "PHI"][i - 1] ?? "VEL";
   return { weather: { kind: "radar" }, product: second, source: "L2", tilt: 0.5 };
 }
 
-function PaneBox({ idx }: { idx: number }) {
+/** Open a pane in its own window (only the map and its product selector). */
+export function openPaneWindow(cfg: PaneCfg, link: PaneLink, view?: { center: [number, number]; zoom: number }, title?: string) {
+  const m = mapRef.value;
+  const c = m?.getCenter();
+  const v = view ?? { center: c ? ([c.lng, c.lat] as [number, number]) : settings.value.view.center, zoom: m?.getZoom() ?? settings.value.view.zoom };
+  const t = title ?? `Pane · ${cfgLabel(cfg)}`;
+  popout({ kind: "pane", title: t, width: 760, height: 560, data: { view: v, panes: { layout: "1", sync: false, list: [cfg], links: {} }, paneWin: { link, title: t } } });
+}
+
+function cfgLabel(cfg: PaneCfg) {
+  if (cfg.weather.kind === "grid") return gridLayers.value.find((l) => l.id === (cfg.weather as any).id)?.name ?? cfg.weather.id;
+  if (cfg.weather.kind === "gibs") return GIBS.find((g) => g.id === (cfg.weather as any).id)?.name ?? cfg.weather.id;
+  return productName(cfg.product ?? "REF");
+}
+
+/** Move pane idx out of the window into a pane window; the layout shrinks by one. */
+export function popOutPane(idx: number) {
+  const s0 = settings.value;
+  const cfg = s0.panes.list[idx - 1] ?? defaultCfg(idx);
+  const pm = paneMap(idx);
+  const c = pm?.getCenter();
+  openPaneWindow(cfg, paneLink(idx), c ? { center: [c.lng, c.lat], zoom: pm!.getZoom() } : undefined);
+  const n = paneCountOf(s0.panes.layout);
+  update((s) => {
+    s.panes.list.splice(idx - 1, 1);
+    const old = s.panes.links ?? {};
+    const links: Record<string, PaneLink> = {};
+    for (const [k, v] of Object.entries(old)) if (+k < idx) links[k] = v;
+    else if (+k > idx) links[+k - 1] = v;
+    s.panes.links = links;
+    const BY_COUNT: PaneLayoutId[] = ["1", "2", "3", "4"];
+    if (s.panes.layout === "swipe" || !s.panes.layout.startsWith("custom:") || n - 1 <= 3) s.panes.layout = BY_COUNT[Math.max(0, Math.min(3, n - 1))];
+  });
+}
+
+function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: string; headStyle?: Sty; standalone?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => mountPane(idx, ref.current!), [idx]);
+  useEffect(() => {
+    const off = mountPane(idx, ref.current!);
+    if (standalone) linkMap.value = paneMap(idx);
+    return off;
+  }, [idx]);
   const cfg = settings.value.panes.list[idx - 1] ?? defaultCfg(idx);
   const st = paneStatus.value[idx] ?? {};
   const value = cfg.weather.kind === "grid" ? `g:${cfg.weather.id}` : cfg.weather.kind === "gibs" ? `s:${cfg.weather.id}` /* data 0.6 */ : `r:${cfg.source ?? "L2"}:${cfg.product ?? "REF"}`;
@@ -194,15 +310,47 @@ function PaneBox({ idx }: { idx: number }) {
       s.panes.list[idx - 1] = next;
     });
     paneConfigured(idx, next);
+    if (standalone) document.title = `Pane · ${cfgLabel(next)}`;
   };
+  const swipe = settings.value.panes.layout === "swipe" && !standalone;
+  const g = swipe ? swipeGeom.value : null;
+  const hs: Sty | undefined = g?.pane ? { left: `${g.pane.x}px`, top: `${g.pane.y}px` } : g ? { display: "none" } : headStyle;
+  const lk = paneLink(idx);
   return (
-    <div class="pane">
+    <div class={`pane ${standalone ? "pane-solo" : ""}`} style={{ gridArea: area, clipPath: g?.clip }} aria-label={`Map pane ${idx + 1}`}>
       <div ref={ref} class="pane-map" />
-      <div class="pane-head glass">
-        <select value={value} onChange={(e) => set((e.target as HTMLSelectElement).value)} title="Product for this pane">
+      <div class="pane-head glass" style={hs}>
+        <select value={value} onChange={(e) => set((e.target as HTMLSelectElement).value)} title="Product for this pane" aria-label={standalone ? "Product" : `Product for pane ${idx + 1}`}>
           <ProductOptions site={cfg.site ?? settings.value.radar.site} current={cfg.product} value={value} sat />
         </select>
         <span class="pane-time" title={st.error ?? ""}>{st.loading ? "Loading…" : st.error ? st.error : st.time ? fmtTime(st.time, true) : ""}</span>
+        {standalone ? (
+          <LinkControls />
+        ) : (
+          <>
+            {!swipe && <LinkToggles lk={lk} set={(l) => setPaneLink(idx, l)} what={`Pane ${idx + 1}`} />}
+            {swipe && <LinkToggles lk={{ ...lk, pos: true }} set={(l) => setPaneLink(idx, { ...l, pos: true })} what={`Pane ${idx + 1}`} />}
+            <button class="lk8 pop" title="Pop this pane out into its own window" aria-label={`Pop out pane ${idx + 1}`} onClick={() => popOutPane(idx)}>
+              <ExternalLink size={11} />
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Pane window (pop-out): just one map pane and its product selector. */
+export function PaneWindowApp() {
+  useEffect(() => {
+    document.title = popoutSpec?.title ?? "Pane";
+    document.documentElement.style.setProperty("--hdr-b", "8px");
+    startAlerts();
+  }, []);
+  return (
+    <div class="app pane-window">
+      <div class="panes layout-1">
+        <PaneBox idx={1} standalone />
       </div>
     </div>
   );
@@ -211,81 +359,189 @@ function PaneBox({ idx }: { idx: number }) {
 /** The main map element plus extra panes in a grid. */
 export function PaneGrid({ mapEl }: { mapEl: any }) {
   const layout = settings.value.panes.layout;
-  const n = PANE_COUNT[layout] ?? 0;
+  const n = paneCountOf(layout);
+  const spec = layoutSpec(layout);
+  const panel = !!openPanel.value;
   useHeaderVar();
   useEffect(() => {
     // make sure every pane has a config
-    if (settings.value.panes.list.length < n) update((s) => {
-      while (s.panes.list.length < n) s.panes.list.push(defaultCfg(s.panes.list.length + 1));
-    });
+    if (settings.value.panes.list.length < n)
+      update((s) => {
+        while (s.panes.list.length < n) s.panes.list.push(defaultCfg(s.panes.list.length + 1));
+      });
     const t = setTimeout(resizePanes, 30);
     return () => clearTimeout(t);
-  }, [layout]);
+  }, [layout, n]);
+  const grid = !!spec && layout !== "1";
+  const style: Sty | undefined = grid ? { gridTemplateRows: `repeat(${spec!.rows}, minmax(0, 1fr))`, gridTemplateColumns: `repeat(${spec!.cols}, minmax(0, 1fr))` } : undefined;
+  const areaOf = (i: number) => {
+    const c = spec?.cells[i];
+    return grid && c ? `${c.r + 1} / ${c.c + 1} / span ${c.rs} / span ${c.cs}` : undefined;
+  };
+  // selectors: below the header in the top row; left-column panes centre in what the side panel leaves visible
+  const headOf = (i: number): Sty | undefined => {
+    const c = spec?.cells[i];
+    if (!grid || !c) return undefined;
+    const st: Sty = { top: c.r === 0 ? "var(--hdr-b, 62px)" : "8px" };
+    if (panel && c.c === 0 && c.cs < spec!.cols) st.left = "calc((var(--rail) + 18px + 316px + 100%) / 2)";
+    else st.left = "50%";
+    return st;
+  };
+  const g = layout === "swipe" ? swipeGeom.value : null;
+  const mainHead: Sty | undefined = g ? (g.main ? { left: `${g.main.x}px`, top: `${g.main.y}px` } : { display: "none" }) : headOf(0);
   return (
-    <div class={`panes layout-${layout} ${openPanel.value ? "panel-open" : ""}`}>
-      <div class="pane main">
-        <div ref={mapEl} class="map" />
-        <MainPaneHead />
+    <div class={`panes layout-${layout.startsWith("custom:") ? "custom" : layout} ${grid ? "pg8" : ""} ${panel ? "panel-open" : ""}`} style={style}>
+      <div class="pane main" style={{ gridArea: areaOf(0) }}>
+        <div ref={mapEl} class="map" role="application" aria-label="Weather map" tabIndex={-1} id="tbw-map" />
+        <MainPaneHead style={mainHead} />
       </div>
       {Array.from({ length: n }, (_, i) => (
-        <PaneBox key={`${layout}-${i + 1}`} idx={i + 1} />
+        <PaneBox key={`${layout}-${i + 1}`} idx={i + 1} area={areaOf(i + 1)} headStyle={headOf(i + 1)} />
       ))}
       {layout === "swipe" && <SwipeDivider /> /* data 0.6 */}
     </div>
   );
 }
 
-const LAYOUTS: [PaneCfgLayout, any, string][] = [
-  ["1", Square, "One map"],
-  ["2", Columns2, "Two side by side"],
-  ["2v", Rows2, "Two stacked"],
-  ["3", LayoutGrid, "Three"],
-  ["4", Grid2x2, "Four"],
-  ["swipe", SquareSplitHorizontal, "Swipe compare: drag the divider to compare two layers"], // data 0.6
-];
-type PaneCfgLayout = "1" | "2" | "2v" | "3" | "4" | "swipe";
+/** The toolbar's panes button: a drawn grid icon (the current layout, or 2×2). */
+function PanesGlyph({ size = 19 }: { size?: number }) {
+  const p = settings.value.panes;
+  if (p.layout === "swipe") return <LayoutIcon swipe={p.swipeMode ?? "v"} size={size} />;
+  const spec = layoutSpec(p.layout);
+  return <LayoutIcon spec={!spec || p.layout === "1" ? BUILTIN_LAYOUTS[5] : spec} size={size} />;
+}
 
 export function PaneButton() {
   const [open, setOpen] = useState(false);
   const p = settings.value.panes;
-  const Icon = LAYOUTS.find((l) => l[0] === p.layout)?.[1] ?? Square;
+  const popRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const setLayout = (k: PaneLayoutId) => update((s) => (s.panes.layout = k));
+  const close = () => (setOpen(false), btnRef.current?.focus());
+  useEffect(() => {
+    if (!open) return;
+    (popRef.current?.querySelector<HTMLElement>("button.on") ?? popRef.current?.querySelector<HTMLElement>("button"))?.focus();
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && (e.stopPropagation(), close());
+    window.addEventListener("keydown", esc, true);
+    return () => window.removeEventListener("keydown", esc, true);
+  }, [open]);
+  const n = paneCountOf(p.layout);
+  const custom = settings.value.paneLayouts ?? [];
+  const lb = (k: PaneLayoutId, icon: any, title: string) => (
+    <button key={k} class={`tb sm ${p.layout === k ? "on" : ""}`} title={title} aria-label={title} aria-pressed={p.layout === k} onClick={() => setLayout(k)}>
+      {icon}
+    </button>
+  );
+  const allLinked = (k: keyof PaneLink) => Array.from({ length: n }, (_, i) => paneLink(i + 1)[k]).every(Boolean);
+  const linkAll = (on: boolean) =>
+    update((s) => {
+      const l: Record<string, PaneLink> = {};
+      for (let i = 1; i <= n; i++) l[i] = { pos: on, time: on, layers: on };
+      s.panes.links = { ...(s.panes.links ?? {}), ...l };
+      s.panes.sync = on;
+    });
+  const others = peerList.value;
   return (
     <div class="pane-btn-wrap">
       {open && (
-        <div class="pane-pop glass">
-          {LAYOUTS.map(([k, I, t]) => (
-            <button key={k} class={`tb sm ${p.layout === k ? "on" : ""}`} title={t} onClick={() => (update((s) => (s.panes.layout = k)), setOpen(false))}>
-              <I size={16} />
-            </button>
-          ))}
-          <span class="tl-sep" />
-          {canPopout() && (
-            <button
-              class="tb sm"
-              title="Open another map window (its own layers; good for a second monitor)"
-              onClick={() => {
-                const m = mapRef.value;
-                const c = m?.getCenter();
-                popout({ kind: "map", title: "TheBigWeather · map", width: 1100, height: 750, data: { view: { center: c ? [c.lng, c.lat] : settings.value.view.center, zoom: m?.getZoom() ?? 6 }, panes: { layout: "1", sync: true, list: [] } } });
-                setOpen(false);
-              }}
-            >
-              <AppWindow size={16} />
-            </button>
-          )}
-          {(peers.value > 0 || linkOn.value) && (
-            <button class={`tb sm ${linkOn.value ? "on" : ""}`} title={linkOn.value ? "Map windows linked (click to unlink)" : "Link the other map window: view, time, radar site"} onClick={() => setLink(!linkOn.value)}>
-              <MonitorSmartphone size={16} />
-            </button>
-          )}
-          <button class={`tb sm ${p.sync ? "on" : ""}`} title={p.sync ? "Panes move together (click to unlink)" : "Panes move on their own (click to link)"} onClick={() => update((s) => (s.panes.sync = !s.panes.sync))}>
-            {p.sync ? <Link2 size={16} /> : <Link2Off size={16} />}
-          </button>
-        </div>
+        <>
+          <div class="ws-scrim" onPointerDown={close} />
+          <div class="pane-pop pp8 glass" ref={popRef} role="dialog" aria-label="Map panes">
+            <div class="pp8-h">Layout</div>
+            <div class="pp8-row" role="toolbar" aria-label="Pane layouts">
+              {BUILTIN_LAYOUTS.map((l) => lb(l.id, <LayoutIcon spec={l} />, l.name))}
+              {lb("swipe", <LayoutIcon swipe={p.swipeMode ?? "v"} />, "Swipe compare: drag the divider to compare two layers")}
+            </div>
+            {p.layout === "swipe" && (
+              <div class="pp8-row pp8-sub" role="radiogroup" aria-label="Swipe divider">
+                {(["v", "h", "d"] as SwipeMode[]).map((m) => (
+                  <button key={m} role="radio" aria-checked={(p.swipeMode ?? "v") === m} class={`pp8-chip ${(p.swipeMode ?? "v") === m ? "on" : ""}`} onClick={() => update((s) => (s.panes.swipeMode = m))}>
+                    <LayoutIcon swipe={m} size={14} />
+                    {m === "v" ? "Vertical" : m === "h" ? "Horizontal" : "Diagonal"}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div class="pp8-h">
+              My layouts
+              <button
+                class="pp8-edit"
+                title="Create and edit layouts (Settings → Pane layouts)"
+                onClick={() => {
+                  setOpen(false);
+                  jumpToSetting("pane-layouts");
+                }}
+              >
+                <Pencil size={11} /> Edit
+              </button>
+            </div>
+            <div class="pp8-row" role="toolbar" aria-label="My layouts">
+              {custom.length ? custom.map((l) => lb(`custom:${l.id}`, <LayoutIcon spec={l} />, `${l.name} (${Math.min(MAX_MAPS, l.cells.length)} maps)`)) : <span class="muted small">None yet: Edit to make one</span>}
+            </div>
+            {(n > 0 || others.length > 0) && (
+              <>
+                <div class="pp8-h">
+                  Linked to the main map
+                  {n > 0 && (
+                    <button class="pp8-edit" onClick={() => linkAll(!(allLinked("pos") && allLinked("time") && allLinked("layers")))} title="Link or unlink every pane">
+                      {allLinked("pos") && allLinked("time") && allLinked("layers") ? <Link2Off size={11} /> : <Link2 size={11} />}
+                      {allLinked("pos") && allLinked("time") && allLinked("layers") ? "Unlink all" : "Link all"}
+                    </button>
+                  )}
+                </div>
+                <div class="pp8-links">
+                  {Array.from({ length: n }, (_, i) => {
+                    const cfg = p.list[i] ?? defaultCfg(i + 1);
+                    return (
+                      <div class="pp8-lrow" key={`p${i}`}>
+                        <span class="pp8-ln" title={cfgLabel(cfg)}>
+                          <b>Pane {i + 2}</b> {cfgLabel(cfg)}
+                        </span>
+                        {p.layout === "swipe" ? (
+                          <LinkToggles chips lk={{ ...paneLink(i + 1), pos: true }} set={(l) => setPaneLink(i + 1, { ...l, pos: true })} what={`Pane ${i + 2}`} />
+                        ) : (
+                          <LinkToggles chips lk={paneLink(i + 1)} set={(l) => setPaneLink(i + 1, l)} what={`Pane ${i + 2}`} />
+                        )}
+                      </div>
+                    );
+                  })}
+                  {myKind === "main" &&
+                    others.map((w) => (
+                      <div class="pp8-lrow" key={w.id}>
+                        <span class="pp8-ln" title={w.title}>
+                          <b>{w.kind === "pane" ? "Window" : "Map win"}</b> {w.title.replace(/^Pane · /, "")}
+                        </span>
+                        <LinkToggles chips lk={w.lk} set={(l) => setPeerLink(w.id, l)} what={w.title} />
+                      </div>
+                    ))}
+                </div>
+              </>
+            )}
+            <div class="pp8-h">Windows</div>
+            <div class="pp8-row">
+              <button
+                class="pp8-chip"
+                title="Open another full map window (its own layers; good for a second monitor)"
+                onClick={() => {
+                  const m = mapRef.value;
+                  const c = m?.getCenter();
+                  popout({ kind: "map", title: "TheBigWeather · map", width: 1100, height: 750, data: { view: { center: c ? [c.lng, c.lat] : settings.value.view.center, zoom: m?.getZoom() ?? 6 }, panes: { layout: "1", sync: true, list: [] } } });
+                }}
+              >
+                <AppWindow size={14} /> Map window
+              </button>
+              <button class="pp8-chip" title="Open a window that acts like a pane: only a product selector, linked to this window" onClick={() => openPaneWindow(defaultCfg(1), { pos: true, time: true, layers: true })}>
+                <SquarePlus size={14} /> Pane window
+              </button>
+            </div>
+          </div>
+        </>
       )}
-      <button class={`tb ${p.layout !== "1" ? "on" : ""}`} title="Map panes (dual / quad)" onClick={() => setOpen(!open)}>
-        <Icon size={19} />
+      <button ref={btnRef} class={`tb ${p.layout !== "1" ? "on" : ""}`} title={`Map panes · ${layoutName(p.layout)}`} aria-label="Map panes" aria-haspopup="dialog" aria-expanded={open} onClick={() => (open ? close() : setOpen(true))}>
+        <PanesGlyph />
       </button>
     </div>
   );
 }
+
+export type { PaneLayoutDef };

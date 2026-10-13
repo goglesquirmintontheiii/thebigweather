@@ -1,8 +1,10 @@
 // Detection models → Train: Quick (presets, a few clicks) and Custom (every knob, from the catalog).
 
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { Rocket, Sparkles, SlidersHorizontal, SquareDashed, X, Info } from "lucide-preact";
-import { catalog, catalogErr, loadCatalog, startTraining, trainDraft, mlTab, mlPrefs, canLocal, retrainModel, models, type RetrainMode } from "../../ml/client";
+import { Rocket, Sparkles, SlidersHorizontal, SquareDashed, X, Info, Cpu, Globe2, Server, Laptop } from "lucide-preact";
+import { catalog, catalogErr, loadCatalog, startTraining, trainDraft, mlTab, mlPrefs, canLocal, retrainModel, models, type RetrainMode, localIsMain, localUrl, jobs } from "../../ml/client";
+import { mlSettings, loadMlSettings, setMaxJobs, INTENSITIES } from "../../ml/m8"; // models 0.8
+import type { Resources } from "../../ml/types";
 import { tmeta, outputOf, taskOf } from "../../ml/targets";
 import { ModeSwitch } from "./Retrain"; // models 0.7
 import { OptInput, optChoices } from "./RunOptions"; // models 0.7: generic option inputs
@@ -142,6 +144,95 @@ export function estimateMin(s: Partial<TrainSpec>): number {
   return Math.max(5, (vols * (1 + nprod * 0.25)) / 60 + (s.cv_folds ?? 5) * 2);
 }
 
+/* ---------- models 0.8: max training jobs per machine (GET/PUT /api/ml/settings) ---------- */
+function MaxJobs() {
+  useEffect(() => {
+    loadMlSettings();
+  }, [localUrl.value]);
+  const st = mlSettings.value;
+  const paused = jobs.value.filter((j) => j.state === "paused");
+  const row = (ep: "main" | "local", label: string, Icon: any) => {
+    const v = st[ep];
+    const off = ep === "local" && !localUrl.value && !localIsMain.value;
+    const pz = paused.filter((j) => j.ep === ep).length;
+    return (
+      <label class={`m8-mj ${off || (v && !v.supported) ? "off" : ""}`} title={off ? "The built-in server isn't running" : v && !v.supported ? "This server has no job limit setting yet" : `At most this many training jobs at once on ${label.toLowerCase()} (1–8). Lowering it pauses the newest jobs.`}>
+        <Icon size={13} /> {label}
+        <input
+          type="number"
+          min={1}
+          max={8}
+          disabled={off || !v?.supported}
+          value={v?.max_jobs ?? 2}
+          onChange={(e) => setMaxJobs(ep, +(e.target as HTMLInputElement).value)}
+        />
+        {pz > 0 && <small class="m8-paused">{pz} paused</small>}
+      </label>
+    );
+  };
+  return (
+    <div class="m8-maxjobs">
+      <span class="ml-flabel">
+        Max training jobs <Help text="How many training jobs run at the same time on each machine (default 2). Extra jobs wait; lowering the limit pauses running ones until a slot frees up." />
+      </span>
+      {localIsMain.value ? row("main", "This computer", Laptop) : (
+        <>
+          {row("local", "App", Laptop)}
+          {row("main", "Server", Server)}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ---------- models 0.8: training resources (spec.resources) ---------- */
+const RES_PRESETS: [string, string, (cpu: number) => Resources][] = [
+  ["light", "Light", (c) => ({ cpu_threads: Math.max(1, Math.round(c / 4)), ram_mb: 2048, download_concurrency: 2, io_concurrency: 2 })],
+  ["balanced", "Balanced", (c) => ({ cpu_threads: Math.max(1, Math.round(c / 2)), ram_mb: 4096, download_concurrency: 6, io_concurrency: 4 })],
+  ["max", "Max", (c) => ({ cpu_threads: c, ram_mb: 16384, download_concurrency: 16, io_concurrency: 8 })],
+];
+export function ResourcesEditor({ cat, value, onChange }: { cat: Catalog; value?: Resources; onChange: (r: Resources | undefined) => void }) {
+  const cpu = Math.max(1, cat.server?.cpu_threads ?? (navigator.hardwareConcurrency || 8));
+  const v = value ?? {};
+  const set = (k: keyof Resources, x: number | undefined) => {
+    const n = { ...v, [k]: x };
+    for (const kk of Object.keys(n) as (keyof Resources)[]) if (n[kk] == null || !Number.isFinite(n[kk]!)) delete n[kk];
+    onChange(Object.keys(n).length ? n : undefined);
+  };
+  const same = (r: Resources) => (Object.keys(r) as (keyof Resources)[]).every((k) => r[k] === v[k]);
+  const num = (k: keyof Resources, label: string, min: number, max: number, step: number, unit: string, help: string) => (
+    <Field label={label} help={help}>
+      <span class="ml-num">
+        <input type="number" min={min} max={max} step={step} placeholder="auto" value={v[k] ?? ""} onChange={(e) => {
+          const t = (e.target as HTMLInputElement).value;
+          set(k, t === "" ? undefined : Math.max(min, Math.min(max, Math.round(+t))));
+        }} />
+        {unit && <small class="muted">{unit}</small>}
+      </span>
+    </Field>
+  );
+  return (
+    <div class="m8-res">
+      <div class="ml-chips">
+        <button class={`chip ${!value ? "on" : ""}`} onClick={(e) => (e.preventDefault(), onChange(undefined))}>
+          Auto
+        </button>
+        {RES_PRESETS.map(([k, l, f]) => (
+          <button key={k} class={`chip ${value && same(f(cpu)) ? "on" : ""}`} onClick={(e) => (e.preventDefault(), onChange(f(cpu)))}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <div class="ml-grid">
+        {num("cpu_threads", "CPU threads", 1, Math.max(cpu, 64), 1, `of ${cpu}`, "Threads for feature extraction and training")}
+        {num("ram_mb", "RAM limit", 256, 262144, 256, "MB", "Memory the job may use (samples are streamed to disk past it)")}
+        {num("download_concurrency", "Downloads at once", 1, 64, 1, "", "Parallel archive downloads (radar volumes, MRMS, satellite)")}
+        {num("io_concurrency", "Disk I/O at once", 1, 32, 1, "", "Parallel cache reads / writes")}
+      </div>
+    </div>
+  );
+}
+
 export function TrainTab() {
   const [mode, setMode] = useState<"quick" | "custom">(trainDraft.value ? "custom" : "quick");
   useEffect(() => {
@@ -153,6 +244,7 @@ export function TrainTab() {
   const cat = catalog.value;
   return (
     <div class="ml-train">
+      <MaxJobs />
       <div class="ml-train-top">
         <div class="seg ml-mode">
           <button class={mode === "quick" ? "on" : ""} onClick={() => setMode("quick")}>
@@ -211,34 +303,91 @@ function useWhere(): [Ep, (e: Ep) => void] {
   return [w, (e: Ep) => update((s) => (s.ml = { ...(s.ml ?? {}), trainWhere: e }))];
 }
 
+/** models 0.8: presets grouped by family; intensity from the preset (or its id / name suffix) */
+const INT_RE = /[\s_·:-]*(quick|medium|thorough|intensive)\s*$/i;
+export interface Family {
+  key: string;
+  name: string;
+  target: string;
+  presets: Preset[];
+}
+export function presetFamilies(presets: Preset[]): Family[] {
+  const out = new Map<string, Family>();
+  for (const p of presets) {
+    const int = (p.intensity ? String(p.intensity) : p.id.match(INT_RE)?.[1] ?? p.name.match(INT_RE)?.[1] ?? "").toLowerCase();
+    const key = p.family ?? (int ? p.id.replace(INT_RE, "") : p.id);
+    const name = p.family_name ?? (int ? p.name.replace(INT_RE, "") : p.name);
+    if (!out.has(key)) out.set(key, { key, name, target: p.target, presets: [] });
+    out.get(key)!.presets.push({ ...p, intensity: int || undefined });
+  }
+  return [...out.values()];
+}
+const INT_ORDER = (i?: string) => INTENSITIES.findIndex(([k]) => k === i);
+
 function Quick({ cat }: { cat: Catalog }) {
   const presets = cat.presets;
-  const [sel, setSel] = useState<Preset | null>(presets[0] ?? null);
+  const fams = useMemo(() => presetFamilies(presets), [presets]);
+  const [sel, setSel] = useState<Preset | null>(() => {
+    const f = fams[0];
+    return f ? f.presets.find((p) => p.intensity === "medium") ?? f.presets[0] : null;
+  });
   const [name, setName] = useState("");
   const [limit, setLimit] = useState<number | null>(null);
   const [where, setWhere] = useWhere();
   const [busy, setBusy] = useState(false);
-  const autoName = sel ? `${sel.name.replace(/\s*\(.*\)$/, "")} · ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}` : "";
+  const [res, setRes] = useState<Resources | undefined>(undefined);
+  const [showRes, setShowRes] = useState(false);
+  const fam = sel ? fams.find((f) => f.presets.some((p) => p.id === sel.id)) : undefined;
+  const autoName = sel ? `${(fam?.name ?? sel.name).replace(/\s*\(.*\)$/, "")}${sel.intensity ? ` · ${sel.intensity}` : ""} · ${new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}` : "";
   if (!presets.length) return <div class="ml-empty">The server offers no presets — use Custom.</div>;
   return (
     <div class="ml-quick">
-      <div class="ml-presets">
-        {presets.map((p) => {
-          const est = p.est_min ?? estimateMin(p.spec ?? {});
+      <div class="ml-presets m8-fams">
+        {fams.map((f) => {
+          const cur = f.presets.find((p) => p.id === sel?.id);
+          const shown = cur ?? f.presets.find((p) => p.intensity === "medium") ?? f.presets[0];
+          const est = shown.est_min ?? estimateMin(shown.spec ?? {});
+          const td = cat.targets.find((t) => t.id === f.target);
+          const o = outputOf(f.target, td?.output);
+          const ints = [...f.presets].sort((a, b) => INT_ORDER(a.intensity) - INT_ORDER(b.intensity));
+          const hasInts = ints.some((p) => p.intensity);
           return (
-            <button key={p.id} class={`ml-preset ${sel?.id === p.id ? "on" : ""}`} style={{ "--tc": tmeta(p.target).color }} onClick={() => setSel(p)}>
-              <TIcon t={p.target} size={34} />
-              <div>
-                <b>{p.name}</b>
-                <span>{p.description ?? cat.targets.find((t) => t.id === p.target)?.description ?? tmeta(p.target).name}</span>
-                <small>≈ {fmtDur(est * 60)}{p.spec?.years ? ` · ${p.spec.years[0]}–${p.spec.years[1]}` : ""}{p.spec?.max_events ? ` · ${p.spec.max_events} events` : ""}</small>
-                {(() => {
-                  const td = cat.targets.find((t) => t.id === p.target);
-                  const o = outputOf(p.target, td?.output);
-                  return o !== "detections" ? <em class="ml-out">{o === "grid" ? "→ weather layer" : "→ outlook"}</em> : null;
-                })()}
+            <div key={f.key} class={`ml-preset m8-fam ${cur ? "on" : ""}`} style={{ "--tc": tmeta(f.target).color }} onClick={() => !cur && setSel(shown)}>
+              <div class="m8-fam-top">
+                <TIcon t={f.target} size={34} />
+                <div>
+                  <b>{f.name}</b>
+                  <span>{shown.description ?? td?.description ?? tmeta(f.target).name}</span>
+                  <small>
+                    ≈ {fmtDur(est * 60)}
+                    {shown.spec?.years ? ` · ${shown.spec.years[0]}–${shown.spec.years[1]}` : ""}
+                    {shown.spec?.max_events ? ` · ${shown.spec.max_events.toLocaleString()} events` : ""}
+                  </small>
+                  {o !== "detections" && <em class="ml-out">{o === "grid" ? "→ weather layer" : "→ outlook"}</em>}
+                  {(td?.non_us || td?.regions?.some((r) => !/^(us|conus)$/i.test(r))) && (
+                    <em class="m8-cov">
+                      <Globe2 size={10} /> outside the US too
+                    </em>
+                  )}
+                </div>
               </div>
-            </button>
+              <div class="m8-ints">
+                {hasInts ? (
+                  INTENSITIES.map(([k, l]) => {
+                    const p = ints.find((x) => x.intensity === k);
+                    return (
+                      <button key={k} class={`m8-intb ${k} ${p && sel?.id === p.id ? "on" : ""}`} disabled={!p} title={p ? `${p.name} · ≈ ${fmtDur((p.est_min ?? estimateMin(p.spec ?? {})) * 60)}${p.spec?.max_events ? ` · ${p.spec.max_events} events` : ""}` : "Not offered for this model"} onClick={(e) => (e.stopPropagation(), p && setSel(p))}>
+                        {l}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <button class={`m8-intb ${cur ? "on" : ""}`} onClick={(e) => (e.stopPropagation(), setSel(shown))}>
+                    Select
+                  </button>
+                )}
+              </div>
+            </div>
           );
         })}
       </div>
@@ -252,13 +401,18 @@ function Quick({ cat }: { cat: Catalog }) {
         <Field label="Time limit" help="Stop after this long and keep the best model so far. No limit = train until done.">
           <TimeLimit value={limit} onChange={setLimit} />
         </Field>
+        <Field label="Resources" help="CPU threads, memory and download / disk concurrency for this job (Auto = the server decides)">
+          <button class={`btn sm ghost ${showRes ? "on" : ""}`} onClick={(e) => (e.preventDefault(), setShowRes(!showRes))}>
+            <Cpu size={13} /> {res ? `${res.cpu_threads ?? "auto"} threads · ${res.ram_mb ? `${Math.round(res.ram_mb / 1024)} GB` : "auto"}` : "Auto"}
+          </button>
+        </Field>
         <button
           class="btn ml-start"
           disabled={!sel || busy}
           onClick={async () => {
             if (!sel) return;
             setBusy(true);
-            const id = await startTraining(where, { preset: sel.id, name: name.trim() || autoName, time_limit_min: limit });
+            const id = await startTraining(where, { preset: sel.id, name: name.trim() || autoName, time_limit_min: limit, ...(res ? { resources: res } : {}) } as any);
             setBusy(false);
             if (id) mlTab.value = "jobs";
           }}
@@ -266,6 +420,7 @@ function Quick({ cat }: { cat: Catalog }) {
           <Rocket size={15} /> Start training
         </button>
       </div>
+      {showRes && <ResourcesEditor cat={cat} value={res} onChange={setRes} />}
     </div>
   );
 }
@@ -583,7 +738,21 @@ function Custom({ cat }: { cat: Catalog }) {
               <button class="chip" onClick={pickRegion}>
                 <SquareDashed size={12} /> Draw box on map
               </button>
+              {/* models 0.8: targets the server can train outside the US */}
+              {(tdef?.non_us || tdef?.regions?.some((r) => !/^(us|conus)$/i.test(r))) && (
+                <button
+                  class={`chip ${(s.region as any).outside_us ? "on" : ""}`}
+                  title={`Train on a region outside the US (${(tdef?.regions ?? ["global"]).filter((r) => !/^(us|conus)$/i.test(r)).join(", ")}): draw its box on the map`}
+                  onClick={async () => {
+                    const b = await pickBox();
+                    if (b) set({ region: { bbox: b, states: [], outside_us: true } as any });
+                  }}
+                >
+                  <Globe2 size={12} /> Outside the US…
+                </button>
+              )}
             </div>
+            {(s.region as any).outside_us && <small class="muted m8-nonus">Outside the US: labels and inputs come from global sources (fewer reports, coarser data) — the model shows its coverage and confidence.</small>}
             <div class="ml-states">
               {STATES.map((st) => {
                 const on = s.region.states?.includes(st);
@@ -809,6 +978,12 @@ function Custom({ cat }: { cat: Catalog }) {
           <Field label="Time limit" help="None by default: training runs until it's done. Stop early any time from Jobs.">
             <TimeLimit value={s.time_limit_min ?? null} onChange={(v) => set({ time_limit_min: v })} />
           </Field>
+          <div class="m8-res-wrap">
+            <span class="ml-flabel">
+              <Cpu size={12} /> Resources <Help text="CPU threads, memory and download / disk concurrency for this job (Auto = the server decides)" />
+            </span>
+            <ResourcesEditor cat={cat} value={(s as any).resources} onChange={(r) => set({ resources: r } as any)} />
+          </div>
           <div class="ml-est">
             Rough estimate <b>≈ {fmtDur(est * 60)}</b> <Help text="Depends mostly on how many radar volumes must be downloaded and on the server's CPU. Cached data makes later runs faster." />
           </div>

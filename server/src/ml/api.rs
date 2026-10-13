@@ -36,11 +36,13 @@ fn nf(what: &str) -> E {
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/ml/catalog", get(catalog))
+        .route("/ml/settings", get(settings_get).put(settings_put))
         .route("/ml/train", post(train))
         .route("/ml/jobs", get(jobs))
         .route("/ml/jobs/{id}", get(job).delete(job_delete))
         .route("/ml/jobs/{id}/stop", post(job_stop))
         .route("/ml/jobs/{id}/resume", post(job_resume))
+        .route("/ml/jobs/{id}/retry", post(job_resume))
         .route("/ml/models", get(models))
         .route("/ml/models/import", post(import))
         .route("/ml/models/{id}", get(model).patch(model_patch).delete(model_delete))
@@ -48,24 +50,59 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/ml/models/{id}/retrain", post(retrain))
         .route("/ml/models/{id}/continue", post(continue_))
         .route("/ml/models/{id}/history", get(history))
+        .route("/ml/models/{id}/run", get(model_run_get).put(model_run_put))
+        .route("/ml/models/{id}/detections", get(model_detections))
         .route("/ml/run", get(run_get).post(run_post))
         .route("/ml/run/test", post(run_test))
+        .route("/ml/run/now", post(run_now))
+        .route("/ml/run/history", post(run_history))
         .route("/ml/detections", get(detections))
         .route("/ml/outlook", get(outlook))
+        .route("/ml/reports", get(reports))
+        .route("/ml/reports/export", get(reports_export))
+        .route("/ml/ensembles", get(ensembles).post(ensemble_create))
+        .route("/ml/compare", post(compare))
+        .route("/ml/compare/{id}", get(compare_get))
 }
 
 async fn catalog(State(st): St) -> Json<Value> {
     let mut c = super::spec::catalog();
     let cfg = st.ml.cfg.read().clone();
+    let (cores, mem) = st.ml.machine();
     c["server"] = json!({
         "enabled": cfg.enabled,
-        "max_jobs": cfg.max_jobs.max(1),
+        "max_jobs": st.ml.jobs.max_jobs(),
         "download_concurrency": st.ml.download_concurrency(),
         "cpu_threads": st.profile.threads,
+        "cores": cores,
+        "memory_budget_mb": mem,
+        "resources_default": st.ml.default_resources(),
         "profile": st.profile.name,
         "version": crate::api::VERSION,
     });
     Json(c)
+}
+
+async fn settings_get(State(st): St) -> Json<Value> {
+    Json(st.ml.settings_json())
+}
+
+/// `PUT /api/ml/settings {max_jobs?, resources?: {cpu_threads, ram_mb, download_concurrency,
+/// io_concurrency}, history_keep_min?, history_grid_runs?, history_run_keep_h?, report_cycles?,
+/// cache_retention_days?, auto_resume?}` — applied live and saved to the config file.
+async fn settings_put(State(st): St, Json(body): Json<Value>) -> Result<Json<Value>, E> {
+    let mut c = st.cfg.read().clone();
+    let changed = super::Ml::patch_settings(&mut c.ml, &body)?;
+    if !changed.is_empty() {
+        let (path, c2) = (st.cfg_path.clone(), c.clone());
+        tokio::task::spawn_blocking(move || c2.save(&path)).await.map_err(|e| E(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?.map_err(|e| E(StatusCode::INTERNAL_SERVER_ERROR, format!("saving the config: {e:#}")))?;
+        st.cfg.write().ml = c.ml.clone();
+        st.ml.configure(&c.ml, st.profile.budget.radar_mb);
+    }
+    let mut v = st.ml.settings_json();
+    v["changed"] = json!(changed);
+    st.hub.send(json!({"type": "ml_settings", "settings": v}));
+    Ok(Json(v))
 }
 
 async fn train(State(st): St, body: Option<Json<Value>>) -> Result<Json<Value>, E> {
@@ -86,7 +123,7 @@ async fn job(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, E> {
 async fn job_stop(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, E> {
     let c = st.ml.jobs.get(&id).ok_or_else(|| nf("job"))?;
     match c.state().as_str() {
-        "running" | "stopping" => c.request_stop(),
+        "running" | "stopping" | "paused" => c.request_stop(),
         "queued" => {
             c.request_cancel();
         }
@@ -95,14 +132,24 @@ async fn job_stop(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, 
     Ok(Json(c.json(false)))
 }
 
+/// Resume / retry a failed, cancelled or interrupted job in place (same id, same spec; cached
+/// downloads and samples are reused).
 async fn job_resume(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, E> {
+    let c = st.ml.jobs.get(&id).ok_or_else(|| nf("job"))?;
+    if jobs_active(&c.state()) {
+        return Err(E(StatusCode::CONFLICT, format!("job is {}", c.state())));
+    }
     let new = st.ml.resume(&id)?;
-    Ok(Json(json!({"job_id": new})))
+    Ok(Json(json!({"job_id": new, "job": c.json(false)})))
+}
+
+fn jobs_active(s: &str) -> bool {
+    super::jobs::is_active(s)
 }
 
 async fn job_delete(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, E> {
     let c = st.ml.jobs.get(&id).ok_or_else(|| nf("job"))?;
-    let active = matches!(c.state().as_str(), "queued" | "running" | "stopping");
+    let active = jobs_active(&c.state());
     if active {
         // cancel; the record is removed once the worker has wound down
         c.request_cancel();
@@ -111,7 +158,7 @@ async fn job_delete(State(st): St, Path(id): Path<String>) -> Result<Json<Value>
         tokio::spawn(async move {
             for _ in 0..600 {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                if !matches!(c.state().as_str(), "queued" | "running" | "stopping") {
+                if !jobs_active(&c.state()) {
                     break;
                 }
             }
@@ -123,8 +170,49 @@ async fn job_delete(State(st): St, Path(id): Path<String>) -> Result<Json<Value>
     Ok(Json(json!({"ok": true, "id": id, "cancelled": active})))
 }
 
-async fn models(State(st): St) -> Json<Value> {
-    Json(json!(st.ml.store.list().iter().map(|m| m.summary()).collect::<Vec<_>>()))
+/// `GET /api/ml/models?family=&kind=model|ensemble&include_training=1`
+async fn models(State(st): St, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+    let fam = q.get("family").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let kind = q.get("kind").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let mut out: Vec<Value> = st
+        .ml
+        .store
+        .list()
+        .iter()
+        .filter(|m| fam.as_ref().map(|f| m.family() == *f).unwrap_or(true))
+        .filter(|m| kind.as_ref().map(|k| (k == "ensemble") == m.is_ensemble()).unwrap_or(true))
+        .map(|m| m.summary())
+        .collect();
+    if q.get("include_training").map(|v| v == "1" || v == "true").unwrap_or(false) {
+        // placeholders for models being trained
+        for c in st.ml.jobs.list() {
+            let s = c.snapshot();
+            if !super::jobs::is_training(&s.kind) || !jobs_active(&s.state) {
+                continue;
+            }
+            let spec = super::spec::resolve(&{
+                let mut r = s.spec.clone();
+                if let Some(o) = r.as_object_mut() {
+                    o.remove("preset");
+                }
+                r
+            })
+            .ok();
+            let family = spec.as_ref().map(super::spec::family_key).unwrap_or_default();
+            if fam.as_ref().map(|f| *f != family).unwrap_or(false) {
+                continue;
+            }
+            let j = c.json(false);
+            out.insert(0, json!({
+                "id": format!("job:{}", s.id), "job_id": s.id, "name": s.name, "target": s.target, "training": true,
+                "progress": j["progress"], "state": s.state, "phase": s.phase, "eta_s": j["eta_s"], "kind": "training",
+                "candidate": spec.as_ref().map(|x| x.candidate.clone()), "task": spec.as_ref().map(|x| x.task.clone()),
+                "intensity": spec.as_ref().map(|x| if x.intensity.is_empty() { "custom".to_string() } else { x.intensity.clone() }),
+                "family_key": family, "base_model": s.base_model, "job_kind": j["kind"], "usage": j["usage"], "started": s.started,
+            }));
+        }
+    }
+    Json(json!(out))
 }
 
 async fn model(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, E> {
@@ -140,10 +228,11 @@ async fn model_patch(State(st): St, Path(id): Path<String>, Json(body): Json<Val
 
 async fn model_delete(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, E> {
     st.ml.store.delete(&id)?;
-    // stop running it; drop its layers
+    // stop running it; drop its layers, detections and saved run options
     let mut c = st.ml.runner.cfg.read().clone();
-    if c.has(&id) {
+    if c.has(&id) || c.saved.contains_key(&id) {
         c.models.retain(|m| m.id != id);
+        c.saved.remove(&id);
         st.ml.runner.set_cfg(c);
     }
     st.ml.runner.forget_model(&id);
@@ -157,13 +246,20 @@ fn file_name(name: &str) -> String {
     format!("{}.tbwmodel", if s.is_empty() { "model" } else { s })
 }
 
+/// `GET /api/ml/models/{id}/export` → the `.tbwmodel` file (zstd JSON) as an attachment. Auth
+/// as every API call: `Authorization: Bearer <token>` or `?token=<token>` (so a plain link /
+/// `window.open` download works too).
 async fn export(State(st): St, Path(id): Path<String>) -> Result<Response, E> {
     let m = st.ml.store.get(&id).ok_or_else(|| nf("model"))?;
     let b = tokio::task::spawn_blocking(move || super::model::export(&m).map(|b| (b, file_name(&m.name)))).await.map_err(|e| E(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let len = b.0.len();
     let mut r = Response::new(Body::from(b.0));
     let h = r.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
-    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"", b.1)) {
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    h.insert(header::ACCESS_CONTROL_EXPOSE_HEADERS, HeaderValue::from_static("Content-Disposition, Content-Length"));
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", b.1, b.1)) {
         h.insert(header::CONTENT_DISPOSITION, v);
     }
     Ok(r)
@@ -209,28 +305,27 @@ async fn run_get(State(st): St) -> Json<Value> {
 }
 
 fn parse_models(st: &AppState, m: &Value) -> Result<Vec<super::runner::ModelRun>, E> {
-    let arr = m.as_array().ok_or_else(|| E(StatusCode::BAD_REQUEST, "models must be an array of model ids or {id, …options}".into()))?;
-    let mut out = vec![];
-    for x in arr {
-        let r = super::runner::ModelRun::parse(x).map_err(|e| E(StatusCode::BAD_REQUEST, format!("{e:#}")))?;
-        if st.ml.store.get(&r.id).is_none() {
-            return Err(nf(&format!("model {}", r.id)));
-        }
-        if !out.iter().any(|o: &super::runner::ModelRun| o.id == r.id) {
-            out.push(r);
-        }
-    }
-    Ok(out)
+    super::parse_runs(&st.ml.store, m).map_err(E::from)
 }
 
 async fn run_post(State(st): St, Json(body): Json<Value>) -> Result<Json<Value>, E> {
     let mut c = st.ml.runner.cfg.read().clone();
     if let Some(m) = body.get("models") {
-        c.models = parse_models(&st, m)?;
+        let runs = parse_models(&st, m)?;
+        // models dropped from the list keep their options (saved) for later
+        for old in c.models.clone() {
+            if !runs.iter().any(|r| r.id == old.id) {
+                c.saved.insert(old.id.clone(), old);
+            }
+        }
+        for r in &runs {
+            c.saved.remove(&r.id);
+        }
+        c.models = runs;
     }
     if let Some(r) = body.get("radars") {
         if !(r.is_string() || r.is_array() || r.is_object()) {
-            return Err(E(StatusCode::BAD_REQUEST, "radars: \"all\" | \"nexrad\" | \"tdwr\" | [ids] | {states:[…]}".into()));
+            return Err(E(StatusCode::BAD_REQUEST, "radars: \"all\" | [ids] | {states:[…]} | {bbox:[w,s,e,n]}".into()));
         }
         c.radars = r.clone();
     }
@@ -396,13 +491,10 @@ async fn outlook(State(st): St, Query(q): Query<HashMap<String, String>>) -> Res
     Ok(Json(gj))
 }
 
-async fn detections(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>, E> {
-    let since = match q.get("since").map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        Some(s) => s.parse::<i64>().map_err(|_| E(StatusCode::BAD_REQUEST, "since must be unix ms".into()))?,
-        None => 0,
-    };
-    let models: Vec<String> = q.get("models").map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
-    let bbox = match q.get("bbox").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+fn det_query(q: &HashMap<String, String>) -> Result<super::runner::DetQuery, E> {
+    let g = |k: &str| q.get(k).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let ms = |k: &str| -> Result<Option<i64>, E> { g(k).map(|v| v.parse::<i64>().map_err(|_| E(StatusCode::BAD_REQUEST, format!("{k} must be unix ms")))).transpose() };
+    let bbox = match g("bbox") {
         Some(b) => {
             let v: Vec<f64> = b.split(',').filter_map(|x| x.trim().parse().ok()).collect();
             if v.len() != 4 {
@@ -412,5 +504,104 @@ async fn detections(State(st): St, Query(q): Query<HashMap<String, String>>) -> 
         }
         None => None,
     };
-    Ok(Json(st.ml.runner.geojson(since, &models, bbox)))
+    Ok(super::runner::DetQuery {
+        since: ms("since")?.unwrap_or(0),
+        from: ms("from")?,
+        to: ms("to")?,
+        models: g("models").map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
+        bbox,
+        run: g("run"),
+        limit: g("limit").and_then(|v| v.parse().ok()).unwrap_or(0),
+    })
+}
+
+/// `GET /api/ml/detections?since=&from=&to=&models=&bbox=&run=&limit=` — `since`: created at /
+/// after; `from` / `to`: data time range (includes historical-run detections); `run`: one
+/// historical / one-shot run (job id) or `live`. The response lists the distinct `times`.
+async fn detections(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>, E> {
+    Ok(Json(st.ml.runner.query(&det_query(&q)?)))
+}
+
+async fn model_detections(State(st): St, Path(id): Path<String>, Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>, E> {
+    st.ml.store.get(&id).ok_or_else(|| nf("model"))?;
+    let mut dq = det_query(&q)?;
+    dq.models = vec![id];
+    Ok(Json(st.ml.runner.query(&dq)))
+}
+
+async fn model_run_get(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, E> {
+    st.ml.store.get(&id).ok_or_else(|| nf("model"))?;
+    Ok(Json(st.ml.runner.model_run(&id)))
+}
+
+/// `PUT /api/ml/models/{id}/run {enabled?, options?, radars?}`: this model's run config (kept
+/// while disabled). Enabling starts the runner; disabling removes its detections and layers.
+async fn model_run_put(State(st): St, Path(id): Path<String>, Json(body): Json<Value>) -> Result<Json<Value>, E> {
+    Ok(Json(st.ml.set_model_run(&id, &body)?))
+}
+
+/// `POST /api/ml/run/now {models?, radars?}` → `{job_id}`: one pass over the radars (default all)
+/// and the grid models, independent of the continuous runner.
+async fn run_now(State(st): St, body: Option<Json<Value>>) -> Result<Json<Value>, E> {
+    let b = body.map(|b| b.0).unwrap_or(json!({}));
+    let id = st.ml.run_now(&b)?;
+    Ok(Json(json!({"job_id": id})))
+}
+
+/// `POST /api/ml/run/history {models, radars?, from, to, step_min?}` → `{job_id}`.
+async fn run_history(State(st): St, Json(body): Json<Value>) -> Result<Json<Value>, E> {
+    let id = st.ml.run_history(&body)?;
+    Ok(Json(json!({"job_id": id})))
+}
+
+fn report_query(q: &HashMap<String, String>) -> Result<(Option<i64>, Option<i64>, Option<[f64; 4]>, Vec<String>, usize), E> {
+    let d = det_query(q)?;
+    Ok((d.from, d.to, d.bbox, d.models, q.get("limit").and_then(|v| v.parse().ok()).unwrap_or(1000)))
+}
+
+/// `GET /api/ml/reports?from=&to=&bbox=&models=&limit=`
+async fn reports(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Json<Value>, E> {
+    let (from, to, bbox, models, limit) = report_query(&q)?;
+    let r = st.ml.reports.query(from, to, bbox, &models, limit);
+    Ok(Json(json!({"reports": r, "count": r.len()})))
+}
+
+/// `GET /api/ml/reports/export?format=csv|geojson&from=&to=&bbox=&models=` (attachment).
+async fn reports_export(State(st): St, Query(q): Query<HashMap<String, String>>) -> Result<Response, E> {
+    let (from, to, bbox, models, _) = report_query(&q)?;
+    let r = st.ml.reports.query(from, to, bbox, &models, 0);
+    let fmt = q.get("format").map(|s| s.as_str()).unwrap_or("geojson");
+    let (body, ctype, ext) = match fmt {
+        "csv" => (super::reports::to_csv(&r), "text/csv; charset=utf-8", "csv"),
+        "geojson" | "json" => (super::reports::to_geojson(&r).to_string(), "application/geo+json", "geojson"),
+        _ => return Err(E(StatusCode::BAD_REQUEST, "format must be csv or geojson".into())),
+    };
+    let mut resp = Response::new(Body::from(body));
+    let h = resp.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(ctype));
+    h.insert(header::ACCESS_CONTROL_EXPOSE_HEADERS, HeaderValue::from_static("Content-Disposition"));
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"model-reports-{}.{ext}\"", chrono::Utc::now().format("%Y%m%d-%H%M"))) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    Ok(resp)
+}
+
+async fn ensembles(State(st): St) -> Json<Value> {
+    Json(json!(st.ml.store.list().iter().filter(|m| m.is_ensemble()).map(|m| m.summary()).collect::<Vec<_>>()))
+}
+
+/// `POST /api/ml/ensembles {name?, members:[ids], method: mean|max|vote|weighted, weights?}`
+async fn ensemble_create(State(st): St, Json(body): Json<Value>) -> Result<Json<Value>, E> {
+    let m = st.ml.create_ensemble(&body)?;
+    Ok(Json(m.detail()))
+}
+
+/// `POST /api/ml/compare {models:[ids], events?: {years, region, filters, max_events, …} | job_id?}`
+async fn compare(State(st): St, Json(body): Json<Value>) -> Result<Json<Value>, E> {
+    let id = st.ml.compare(&body)?;
+    Ok(Json(json!({"job_id": id, "compare_id": id})))
+}
+
+async fn compare_get(State(st): St, Path(id): Path<String>) -> Result<Json<Value>, E> {
+    st.ml.compare_result(&id).map(Json).ok_or_else(|| nf("comparison"))
 }

@@ -34,6 +34,7 @@ export function RadarPanel() {
         </div>
       </section>
       {r.source === "L2" ? <L2Products /> : <L3ProductList />}
+      {r.source === "L2" && <P8RadarProducts /> /* data 0.8 */}
       {r.source === "L2" && <TiltPicker />}
       <DisplayOptions />
       <ColorTablePicker />
@@ -102,7 +103,7 @@ function L2Products() {
     <section>
       <label class="lbl">Product</label>
       <div class="grid2">
-        {L2_MOMENTS.map((m) => (
+        {L2_MOMENTS.filter((m) => !P8_MOMENTS.has(m.id) /* data 0.8: own section */).map((m) => (
           <button key={m.id} class={`opt ${r.product === m.id ? "on" : ""} ${avail.size && !avail.has(m.id) ? "na" : ""}`} onClick={() => update((s) => (s.radar.product = m.id))}>
             {m.name}
           </button>
@@ -170,7 +171,7 @@ function L3_TILT_LABEL(t: number, tdwr: boolean) {
 
 function TiltPicker() {
   const r = settings.value.radar;
-  const ts = tilts.value.filter((t) => t.moments.includes(r.product));
+  const ts = tilts.value.filter((t) => t.moments.includes(DERIVED_TILT[r.product] ?? r.product)); // data 0.8
   const angles = [...new Map(ts.map((t) => [t.angle.toFixed(1), t])).values()];
   if (!angles.length) return null;
   let best = angles[0];
@@ -323,3 +324,41 @@ function DealiasToggle() {
   );
 }
 /* ---------- end radar 0.6 ---------- */
+
+/* ---------- data 0.8: derived radar products, QC filter, beam blockage ---------- */
+import { P8_MOMENTS, DERIVED_TILT } from "../../radar/controller";
+import { blockageState } from "../../overlays/p8defs";
+const P8_HINT: Record<string, string> = {
+  DREF: "Reflectivity change since the previous volume (same tilt): growing cores warm, collapsing cores cool",
+  ZDRCOL: "Height of ZDR ≥ 1 dB above the freezing level: strong updrafts (whole volume)",
+  REFQC: "Reflectivity with non-meteorological echoes removed (CC threshold below)",
+  BIO: "Where the server thinks echoes are birds / insects / ground clutter",
+};
+function P8RadarProducts() {
+  const r = settings.value.radar;
+  const p = settings.value.p8 ?? {};
+  const set = (fn: (x: NonNullable<typeof p>) => void) => update((s) => ((s.p8 = { ...(s.p8 ?? {}) }), fn(s.p8)));
+  const bs = blockageState.value;
+  return (
+    <section class="p8-radar">
+      <label class="lbl">Derived products</label>
+      <div class="grid2">
+        {L2_MOMENTS.filter((m) => P8_MOMENTS.has(m.id)).map((m) => (
+          <button key={m.id} class={`opt ${r.product === m.id ? "on" : ""}`} title={P8_HINT[m.id]} onClick={() => update((s) => (s.radar.product = m.id))}>
+            {m.name}
+          </button>
+        ))}
+      </div>
+      <Toggle label="QC filter (reflectivity)" hint="Show REF through the server's quality control: drops gates with correlation coefficient under the threshold" on={!!p.qc} set={(v) => set((x) => (x.qc = v))} />
+      {(p.qc || r.product === "REFQC") && (
+        <>
+          <Slider label="CC threshold" value={p.cc ?? 0.85} min={0.5} max={0.98} step={0.01} live={false} fmt={(v) => v.toFixed(2)} set={(v) => set((x) => (x.cc = v))} />
+          <Toggle label="Also remove bio / clutter" on={!!p.bio} set={(v) => set((x) => (x.bio = v))} />
+        </>
+      )}
+      <Toggle label="Beam blockage map" hint={`Terrain blocking of the ${r.tiltAngle.toFixed(1)}° beam for ${r.site}`} on={!!p.blockage} set={(v) => set((x) => (x.blockage = v))} />
+      {p.blockage && <div class="row muted small">{bs.loading ? "Loading blockage…" : bs.error ? `Blockage: ${bs.error}` : bs.note}</div>}
+    </section>
+  );
+}
+/* ---------- end data 0.8 ---------- */

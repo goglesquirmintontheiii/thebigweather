@@ -25,6 +25,8 @@ pub struct Trained {
     pub importance: Vec<Importance>,
     pub params: Value,
     pub quantiles: Vec<QuantLearner>,
+    /// out-of-sample margin per sample with a finite label (NaN where not evaluated)
+    pub oof: Vec<f64>,
 }
 
 fn params_of<T: serde::de::DeserializeOwned + serde::Serialize + Default>(v: &Value) -> T {
@@ -110,6 +112,7 @@ fn importance(l: &Learner, data: &Data) -> Vec<f64> {
         Learner::Gbdt(g) => g.importance.clone(),
         Learner::Logreg(m) => m.importance(),
         Learner::Mlp(m) => m.importance(data),
+        Learner::Ensemble(e) => vec![0.0; e.n],
     }
 }
 
@@ -191,6 +194,10 @@ pub fn train_with(spec: &TrainSpec, schema: &Schema, ids: &[String], samples: &[
         move |it: usize, max: usize, tl: f64, vl: f64| -> bool {
             let f = (part as f64 + it as f64 / max.max(1) as f64) / parts;
             ctl.train_progress(f, it, tl, vl);
+            // max_jobs lowered: wait here (the partial model stays in memory)
+            if !ctl.granted() {
+                ctl.gate_blocking();
+            }
             !ctl.stopping()
         }
     };
@@ -200,8 +207,10 @@ pub fn train_with(spec: &TrainSpec, schema: &Schema, ids: &[String], samples: &[
     let final_learner;
     let mut calib_m: Vec<f64> = vec![];
     let mut calib_y: Vec<f32> = vec![];
+    // storm tracks: several regressions on the same samples must share their folds
+    let fold_y: Vec<f32> = if spec.target == "storm_track" { vec![0.0; data.n] } else { data.y.clone() };
     if folds >= 2 {
-        let f = group_folds(&groups, &data.y, folds, seed);
+        let f = group_folds(&groups, &fold_y, folds, seed);
         let mut last: Option<Learner> = None;
         for k in 0..folds {
             if ctl.stopping() && last.is_some() {
@@ -210,7 +219,7 @@ pub fn train_with(spec: &TrainSpec, schema: &Schema, ids: &[String], samples: &[
             }
             let tr_idx: Vec<usize> = all.iter().copied().filter(|&i| f[i] != k).collect();
             let te_idx: Vec<usize> = all.iter().copied().filter(|&i| f[i] == k).collect();
-            let (a, v) = inner_split(&tr_idx, &groups, &data.y, seed + k as u64, reg);
+            let (a, v) = inner_split(&tr_idx, &groups, &fold_y, seed + k as u64, reg);
             let tr = data.take(&a);
             let va = v.map(|v| data.take(&v));
             let prog = mk_prog(k);
@@ -244,11 +253,11 @@ pub fn train_with(spec: &TrainSpec, schema: &Schema, ids: &[String], samples: &[
             }
         }
     } else {
-        let (tr_idx, te_idx) = group_holdout(&groups, &data.y, 0.2, seed);
+        let (tr_idx, te_idx) = group_holdout(&groups, &fold_y, 0.2, seed);
         let te_pos = te_idx.iter().filter(|&&i| data.y[i] > 0.5).count();
         let few = if reg { te_idx.len() < 10 || tr_idx.len() < 10 } else { te_pos == 0 || tr_idx.iter().filter(|&&i| data.y[i] > 0.5).count() < 2 };
         let (tr_idx, te_idx, kind) = if few { (all.clone(), all.clone(), "training data (too few cases for a holdout)".to_string()) } else { (tr_idx, te_idx, "20% grouped holdout".to_string()) };
-        let (a, v) = inner_split(&tr_idx, &groups, &data.y, seed, reg);
+        let (a, v) = inner_split(&tr_idx, &groups, &fold_y, seed, reg);
         let tr = data.take(&a);
         let va = v.as_ref().map(|v| data.take(v));
         let prog = mk_prog(0);
@@ -332,7 +341,7 @@ pub fn train_with(spec: &TrainSpec, schema: &Schema, ids: &[String], samples: &[
             "dataset": {"samples": data.n, "groups": groups_n, "label_mean": (clim * 1000.0).round() / 1000.0},
         });
         let thr = spec.target_params.get("dbz").and_then(|v| v.as_f64()).filter(|_| spec.target == "storm_forecast").unwrap_or(if spec.target == "precip_forecast" { 1.0 } else { 0.0 });
-        return Ok(Trained { learner: final_learner, calib: Calib::default(), threshold: thr, levels: Levels::from_threshold(0.5), metrics, importance, params: p.json(), quantiles });
+        return Ok(Trained { learner: final_learner, calib: Calib::default(), threshold: thr, levels: Levels::from_threshold(0.5), metrics, importance, params: p.json(), quantiles, oof: oof_m });
     }
     let calib = Calib::fit(&calib_m, &calib_y);
     let ep: Vec<f64> = ev_idx.iter().map(|&i| calib.apply(oof_m[i])).collect();
@@ -352,7 +361,7 @@ pub fn train_with(spec: &TrainSpec, schema: &Schema, ids: &[String], samples: &[
         "dataset": {"samples": data.n, "positives": pos, "negatives": neg, "groups": groups_n},
         "calibration": calib,
     });
-    Ok(Trained { learner: final_learner, calib, threshold, levels: Levels::from_threshold(threshold), metrics, importance, params: p.json(), quantiles: vec![] })
+    Ok(Trained { learner: final_learner, calib, threshold, levels: Levels::from_threshold(threshold), metrics, importance, params: p.json(), quantiles: vec![], oof: oof_m })
 }
 
 /// Quick fit without a job (tests / fixtures).

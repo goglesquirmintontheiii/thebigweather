@@ -13,19 +13,13 @@ import { pluginPanels, type PluginPanel } from "../plugins/host";
 import { alerts, sortedAlerts } from "../alerts";
 import { fmtTime, pointInGeometry } from "../util";
 import { hhmm } from "../wf6data";
+import { VoiceSettings } from "./VoiceSettings"; // radio/dash 0.8
 
 export const briefingCfgOpen = signal(false);
 
 function BriefingSettings() {
   const b = settings.value.wf6.briefing;
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>(() => ("speechSynthesis" in window ? speechSynthesis.getVoices() : []));
   const [t, setT] = useState("07:00");
-  useEffect(() => {
-    if (!("speechSynthesis" in window)) return;
-    const f = () => setVoices(speechSynthesis.getVoices());
-    speechSynthesis.addEventListener("voiceschanged", f);
-    return () => speechSynthesis.removeEventListener("voiceschanged", f);
-  }, []);
   const set = (fn: (x: typeof b) => void) => update((s) => fn(s.wf6.briefing));
   return (
     <div class="bf-cfg">
@@ -41,22 +35,7 @@ function BriefingSettings() {
           <option value="gps">GPS position</option>
         </select>
       </div>
-      <div class="row">
-        <span>Voice</span>
-        <select value={b.voice} onChange={(e) => set((x) => (x.voice = (e.target as HTMLSelectElement).value))}>
-          <option value="">System default</option>
-          {voices.map((v) => (
-            <option key={v.name} value={v.name}>
-              {v.name} ({v.lang})
-            </option>
-          ))}
-        </select>
-      </div>
-      <div class="row">
-        <span>Rate</span>
-        <input type="range" min={0.6} max={1.6} step={0.1} value={b.rate} onInput={(e) => set((x) => (x.rate = +(e.target as HTMLInputElement).value))} />
-        <span class="val">{b.rate.toFixed(1)}×</span>
-      </div>
+      <VoiceSettings /> {/* radio/dash 0.8: engine, voices, rate, Test voice */}
       <div class="row">
         <span>Daily at</span>
         <input type="time" value={t} onInput={(e) => setT((e.target as HTMLInputElement).value)} />

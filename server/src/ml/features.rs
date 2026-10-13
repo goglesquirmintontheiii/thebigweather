@@ -89,6 +89,20 @@ pub fn target_features(target: &str) -> Vec<FeatureDef> {
         "storm_forecast" => vec![f("lead_h", "Forecast lead", "h", "Target"), f("obs_now", "Current max composite reflectivity within the radius", "dBZ", "Target")],
         "tropical_forecast" => vec![f("lead_h", "Formation window", "h", "Target")],
         "outlook" => vec![f("lead_h", "Hours from issue to the window start", "h", "Target"), f("win_h", "Window length", "h", "Target")],
+        "storm_track" => vec![
+            f("lead_min", "Lead time of the predicted position", "min", "Track"),
+            f("motion_u_kt", "Cell motion, east component", "kt", "Track"),
+            f("motion_v_kt", "Cell motion, north component", "kt", "Track"),
+            f("prev_u_kt", "Previous cell motion, east component", "kt", "Track"),
+            f("prev_v_kt", "Previous cell motion, north component", "kt", "Track"),
+            f("track_age_min", "Time the cell has been tracked", "min", "Track"),
+            f("ext_dx_km", "Extrapolated displacement east (motion × lead)", "km", "Track"),
+            f("ext_dy_km", "Extrapolated displacement north (motion × lead)", "km", "Track"),
+            f("steer_u_kt", "Steering wind, east (HRRR storm motion or GFS 0–6 km mean wind)", "kt", "Environment"),
+            f("steer_v_kt", "Steering wind, north", "kt", "Environment"),
+            f("bunkers_u_kt", "Bunkers right-mover motion, east (GFS mean wind + shear)", "kt", "Environment"),
+            f("bunkers_v_kt", "Bunkers right-mover motion, north", "kt", "Environment"),
+        ],
         _ => vec![],
     }
 }
@@ -216,6 +230,10 @@ pub enum VarKind {
     Alt,
     /// accumulation (APCP) over the file's own window ("0-N hour acc")
     Accum,
+    /// mean of all patterns
+    Mean,
+    /// pats[1] − pats[0]
+    Diff,
 }
 
 pub const MODEL_VARS: &[ModelVar] = &[
@@ -257,6 +275,10 @@ pub const MODEL_VARS: &[ModelVar] = &[
     ModelVar { id: "soilw2", name: "Soil moisture 10–40 cm", unit: "fraction", pats: &["SOILW:0.1-0.4 m below ground"], kind: VarKind::Plain },
     ModelVar { id: "weasd", name: "Snow water equivalent", unit: "kg/m²", pats: &["WEASD:surface"], kind: VarKind::Plain },
     ModelVar { id: "snod", name: "Snow depth", unit: "m", pats: &["SNOD:surface"], kind: VarKind::Plain },
+    ModelVar { id: "mwu", name: "0–6 km mean wind, east (850/700/500/300 mb)", unit: "m/s", pats: &["UGRD:850 mb", "UGRD:700 mb", "UGRD:500 mb", "UGRD:300 mb"], kind: VarKind::Mean },
+    ModelVar { id: "mwv", name: "0–6 km mean wind, north", unit: "m/s", pats: &["VGRD:850 mb", "VGRD:700 mb", "VGRD:500 mb", "VGRD:300 mb"], kind: VarKind::Mean },
+    ModelVar { id: "shru", name: "10 m–500 mb shear vector, east", unit: "m/s", pats: &["UGRD:10 m above ground", "UGRD:500 mb"], kind: VarKind::Diff },
+    ModelVar { id: "shrv", name: "10 m–500 mb shear vector, north", unit: "m/s", pats: &["VGRD:10 m above ground", "VGRD:500 mb"], kind: VarKind::Diff },
 ];
 
 /// HRRR "analysis" variables (forecast hour 1 of the run an hour before the time, so hourly
@@ -281,6 +303,8 @@ pub const HRRR_VARS: &[ModelVar] = &[
     ModelVar { id: "hgt0c", name: "Freezing level height", unit: "m", pats: &["HGT:0C isotherm"], kind: VarKind::Plain },
     ModelVar { id: "lcl", name: "LCL height", unit: "m", pats: &["HGT:level of adiabatic condensation from sfc"], kind: VarKind::Plain },
     ModelVar { id: "apcp1h", name: "1 h precipitation", unit: "mm", pats: &["APCP:surface"], kind: VarKind::Accum },
+    ModelVar { id: "ustm", name: "Storm motion (Bunkers right mover), east", unit: "m/s", pats: &["USTM:0-6000 m above ground"], kind: VarKind::Plain },
+    ModelVar { id: "vstm", name: "Storm motion (Bunkers right mover), north", unit: "m/s", pats: &["VSTM:0-6000 m above ground"], kind: VarKind::Plain },
 ];
 
 /// How a forecast field is summarised over the target window.
@@ -622,6 +646,34 @@ impl FeatMap {
     /// Vector in schema order.
     pub fn vector(&self, ids: &[String]) -> Vec<f32> {
         ids.iter().map(|k| self.get(k)).collect()
+    }
+}
+
+/// Storm-track features of a cell for a lead (minutes): motion components, extrapolation and
+/// steering winds from the environment features present.
+pub fn track_features(fm: &mut FeatMap, lead_min: f64) {
+    const KT: f32 = 1.943_844;
+    fm.set("lead_min", lead_min as f32);
+    let (u, v) = (fm.get("motion_u_kt"), fm.get("motion_v_kt"));
+    if u.is_finite() && v.is_finite() {
+        let h = lead_min as f32 / 60.0;
+        fm.set("ext_dx_km", u * 1.852 * h);
+        fm.set("ext_dy_km", v * 1.852 * h);
+    }
+    let (su, sv) = match (fm.get("hrrr_ustm"), fm.get("hrrr_vstm")) {
+        (a, b) if a.is_finite() && b.is_finite() => (a, b),
+        _ => (fm.get("gfs_mwu"), fm.get("gfs_mwv")),
+    };
+    if su.is_finite() && sv.is_finite() {
+        fm.set("steer_u_kt", su * KT);
+        fm.set("steer_v_kt", sv * KT);
+    }
+    let (mu, mv, shu, shv) = (fm.get("gfs_mwu"), fm.get("gfs_mwv"), fm.get("gfs_shru"), fm.get("gfs_shrv"));
+    if [mu, mv, shu, shv].iter().all(|x| x.is_finite()) {
+        let n = (shu * shu + shv * shv).sqrt().max(0.1);
+        // right mover: 7.5 m/s to the right of the shear vector
+        fm.set("bunkers_u_kt", (mu + 7.5 * shv / n) * KT);
+        fm.set("bunkers_v_kt", (mv - 7.5 * shu / n) * KT);
     }
 }
 

@@ -29,6 +29,8 @@ export const TARGETS: Record<string, TargetMeta> = {
   tropical_forecast: { code: "TCF", name: "Tropical development", color: "#f472b6" },
   outlook: { code: "OTLK", name: "Severe outlook", color: "#facc15" },
   flood_forecast: { code: "FLD", name: "Flood forecast", color: "#0ea5e9" },
+  // models 0.8
+  storm_track: { code: "TRK", name: "Storm track", color: "#e879f9" },
 };
 /** models 0.7: what running a model produces when the catalog/model doesn't say */
 const OUTPUT: Record<string, "detections" | "grid" | "outlook"> = { instability: "grid", temp_forecast: "grid", precip_forecast: "grid", storm_forecast: "grid", tropical_forecast: "grid", flood_forecast: "grid", outlook: "outlook" };
@@ -421,6 +423,39 @@ const floodGauge: Draw = (c, s) => {
   c.fill();
 };
 /* ---------- end models 0.7 icons ---------- */
+/** models 0.8: storm track: a cell with a forecast cone */
+const trackIcon: Draw = (c, s) => {
+  rounded(c, s, "#3b0764");
+  c.fillStyle = "rgba(232,121,249,.35)";
+  c.beginPath();
+  c.moveTo(s * 0.26, s * 0.7);
+  c.lineTo(s * 0.86, s * 0.14);
+  c.lineTo(s * 0.92, s * 0.42);
+  c.closePath();
+  c.fill();
+  c.strokeStyle = "#f5d0fe";
+  c.lineWidth = s * 0.07;
+  c.setLineDash([s * 0.1, s * 0.07]);
+  c.beginPath();
+  c.moveTo(s * 0.26, s * 0.7);
+  c.lineTo(s * 0.86, s * 0.3);
+  c.stroke();
+  c.setLineDash([]);
+  c.fillStyle = "#f43f5e";
+  c.beginPath();
+  c.arc(s * 0.26, s * 0.7, s * 0.13, 0, Math.PI * 2);
+  c.fill();
+};
+/** models 0.8: colour of a predicted storm strength (EF / kt / dBZ / probability scales) */
+export function strengthColor(v: number | undefined, units = ""): string {
+  if (v == null || !Number.isFinite(v)) return "#e5e7eb";
+  const u = units.toLowerCase();
+  const f = u === "ef" ? v / 5 : u === "kt" || u === "mph" ? (v - (u === "kt" ? 30 : 35)) / (u === "kt" ? 80 : 90) : u === "dbz" ? (v - 40) / 30 : u === "%" || u === "prob" ? (v > 1 ? v / 100 : v) : u === "in" ? v / 3 : v > 1 ? v / 100 : v;
+  const x = Math.max(0, Math.min(1, f));
+  const stops: [number, string][] = [[0, "#22c55e"], [0.3, "#facc15"], [0.55, "#fb923c"], [0.8, "#ef4444"], [1, "#e879f9"]];
+  for (let i = 1; i < stops.length; i++) if (x <= stops[i][0]) return stops[i - (x - stops[i - 1][0] < stops[i][0] - x ? 1 : 0)][1];
+  return stops[stops.length - 1][1];
+}
 
 const DRAW: Record<string, Draw> = {
   tornado,
@@ -442,6 +477,7 @@ const DRAW: Record<string, Draw> = {
   tropical_forecast: cycloneClock,
   outlook: outlookMap,
   flood_forecast: floodGauge,
+  storm_track: trackIcon, // models 0.8
 };
 export const drawFor = (t: string): Draw => DRAW[normTarget(t)] ?? reticle;
 export const ICON_TARGETS = Object.keys(DRAW);

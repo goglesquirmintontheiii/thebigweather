@@ -8,6 +8,8 @@ import { ACCENTS } from "../../theme"; // workflow
 import { DesktopSection } from "../../share/DesktopSettings"; // Phase 6
 import { ServerSettingsSection } from "../ServerSettings"; // shake/stats/server 0.6
 import { LookSection, KioskSection, OfflineSection, PluginsSection } from "../Wf6Settings"; // workflow 0.6
+import { AccessibilitySection } from "../../a11y/A11yUI"; // panes/palette/a11y 0.8
+import { PaneLayoutsSection } from "../PaneLayoutEditor"; // panes/palette/a11y 0.8
 
 const KEY_LABELS: Record<string, string> = {
   google_maps: "Google Map Tiles",
@@ -145,6 +147,8 @@ export function SettingsPanel() {
       <ServerSettingsSection /> {/* shake/stats/server 0.6 */}
       <DesktopSection /> {/* Phase 6: tray, auto-start, built-in server */}
       <AppearanceSection />
+      <AccessibilitySection /> {/* panes/palette/a11y 0.8 */}
+      <PaneLayoutsSection /> {/* panes/palette/a11y 0.8 */}
       {/* workflow 0.6 */}
       <KioskSection />
       <OfflineSection />

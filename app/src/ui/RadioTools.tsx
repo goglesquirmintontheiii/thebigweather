@@ -5,7 +5,7 @@ import type { LivePlayer } from "../radio";
 import { saveBlob } from "../radio";
 import { toast } from "../store";
 import { fmtBytes } from "../util";
-import { areaList, sameSound, setSameSound, type SameEntry } from "../same/monitor";
+import { areaList, sameSound, setSameSound, sameAutoMap, setSameAutoMap, LVL_COLOR, type SameEntry } from "../same/monitor";
 import { fipsNames } from "../same/fips";
 import { ORIGINATORS } from "../same/codes";
 import { showCounties, hideCounties, sameKey, sameShown } from "../same/mapshow"; // p7
@@ -13,7 +13,6 @@ import { modelStatus, quality, QUALITY_LABEL, MODELS, type Quality } from "../tr
 import { Siren, Captions, Copy, Download, Bell, BellOff, MapPin, FlaskConical, Trash2, RotateCw, X } from "lucide-preact";
 
 const hm = (d: Date) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const LVL_COLOR: Record<string, string> = { emergency: "#ff00ff", warning: "#ff3b30", watch: "#ffb020", advisory: "#4aa3ff", statement: "#4aa3ff", test: "#8a96a6", admin: "#8a96a6" };
 
 export function ToolButtons({ p }: { p: LivePlayer }) {
   const sOn = p.same.on.value;
@@ -45,6 +44,9 @@ export function SamePanel({ p }: { p: LivePlayer }) {
         <span class="rp-fill" />
         <button class="icon-btn" title="Play and decode a test Tornado Warning header" onClick={() => m.test()}>
           <FlaskConical size={13} />
+        </button>
+        <button class={`icon-btn ${sameAutoMap.value ? "on" : ""}`} aria-pressed={sameAutoMap.value} title={sameAutoMap.value ? "Decoded messages go on the map right away (tests for 60 s) — click to only map on request" : "Map decoded messages automatically"} onClick={() => setSameAutoMap(!sameAutoMap.value)}>
+          <MapPin size={13} />
         </button>
         <button class="icon-btn" title={sameSound.value ? "Alert sound on for warnings" : "Alert sound off"} onClick={() => setSameSound(!sameSound.value)}>
           {sameSound.value ? <Bell size={13} /> : <BellOff size={13} />}
@@ -168,14 +170,16 @@ export function TranscriptPanel({ p }: { p: LivePlayer }) {
   return (
     <div class="rp-tx">
       <div class="rp-sub">
-        <small class="muted rp-txstat">{status}</small>
-        <span class="rp-fill" />
-        <select class="rp-q" value={q ?? ""} title="Model: quality vs speed" onChange={(e) => t.setQuality((e.target as HTMLSelectElement).value as Quality)}>
-          {!q && <option value="">Auto</option>}
+        {/* radio/dash 0.8: model picker as a segmented control (the native select was clipped) */}
+        <span class="rp-qseg" role="radiogroup" aria-label="Transcription model">
           {(Object.keys(MODELS) as Quality[]).map((k) => (
-            <option value={k}>{QUALITY_LABEL[k]}</option>
+            <button key={k} role="radio" aria-checked={q === k} class={q === k ? "on" : ""} title={`${QUALITY_LABEL[k]}${q ? "" : " · currently picked automatically"}`} onClick={() => t.setQuality(k)}>
+              {k === "fast" ? "Fast" : k === "better" ? "Better" : "Best"}
+            </button>
           ))}
-        </select>
+        </span>
+        {!q && <small class="muted rp-qauto">auto</small>}
+        <span class="rp-fill" />
         <button class="icon-btn" title="Copy transcript" disabled={!lines.length} onClick={() => navigator.clipboard?.writeText(t.text()).then(() => toast("Transcript copied"))}>
           <Copy size={13} />
         </button>
@@ -188,6 +192,7 @@ export function TranscriptPanel({ p }: { p: LivePlayer }) {
           <Download size={13} />
         </button>
       </div>
+      <small class="muted rp-txstat">{status}</small>
       <div
         ref={box}
         class="rp-txbox"

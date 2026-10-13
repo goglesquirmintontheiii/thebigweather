@@ -1,6 +1,7 @@
 // Alert styling (NWS hazard map colors), priority, and point-based notification logic.
 
 import { signal } from "@preact/signals";
+import { say } from "./tts"; // radio/dash 0.8
 import { api } from "./api";
 import { settings, toast } from "./store";
 import { pointInGeometry } from "./util";
@@ -155,16 +156,17 @@ function typeSounds(fs: any[]) {
 
 /** Read new warnings aloud (Settings → alerts gear → "Read aloud"). */
 function speak(fs: any[]) {
-  if (!settings.value.speak || !("speechSynthesis" in window)) return;
+  if (!settings.value.speak) return;
+  // radio/dash 0.8: one utterance through tts.ts (system voice, or the bundled offline voice)
+  const parts: string[] = [];
   for (const f of fs.slice(0, 3)) {
     const p = f.properties;
     if (!String(p.event).endsWith("Warning") || !alertVisible(p.event)) continue;
     if (p.messageType && p.messageType !== "Alert") continue;
     const area = String(p.areaDesc ?? "").split(";").slice(0, 4).join(",");
-    const u = new SpeechSynthesisUtterance(`${p.tag ? p.tag.toLowerCase() + ", " : ""}${p.event} for ${area}`);
-    u.volume = settings.value.audio.volume;
-    speechSynthesis.speak(u);
+    parts.push(`${p.tag ? p.tag.toLowerCase() + ", " : ""}${p.event} for ${area}.`);
   }
+  if (parts.length) say(parts.join(" "), { rate: 1 });
 }
 
 function notifyNew(fs: any[]) {

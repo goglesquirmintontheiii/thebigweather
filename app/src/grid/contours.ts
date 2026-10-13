@@ -265,12 +265,21 @@ export const linesTarget = computed(() => {
     const alt = `model/${d.model}/${o.cfield}`;
     if (gridLayers.value.some((l) => l.id === alt)) cid = alt;
   }
-  return { layer: d, cdef: gridDef(cid)!, model: d.source === "model" ? d.model : undefined, wave: !!d.model && /wave/.test(d.model) };
+  /* data 0.8: severe parameter layers (svr/<src>/<param>) contour their siblings; barbs from the source model */
+  if (w.id.startsWith("svr/")) {
+    const src = w.id.split("/")[1];
+    const alt = o.cfield ? `svr/${src}/${o.cfield}` : "";
+    if (alt && gridLayers.value.some((l) => l.id === alt)) cid = alt;
+    return { layer: d, cdef: gridDef(cid)!, model: d.model ?? src, wave: false, svr: true };
+  }
+  /* end data 0.8 */
+  return { layer: d, cdef: gridDef(cid)!, model: d.source === "model" ? d.model : undefined, wave: !!d.model && /wave/.test(d.model), svr: false };
 });
 
 /** fields of the current model that can be contoured over it */
 export function contourFields(): GridLayerDef[] {
   const t = linesTarget.value;
+  if (t?.svr) return gridLayers.value.filter((l) => l.id.startsWith(`svr/${t.layer.id.split("/")[1]}/`)); // data 0.8
   if (!t?.model) return t ? [t.layer] : [];
   return gridLayers.value.filter((l) => l.model === t.model && l.cmap !== "RGB");
 }

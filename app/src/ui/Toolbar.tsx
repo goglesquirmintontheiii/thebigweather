@@ -28,6 +28,13 @@ import { enterKiosk } from "../kiosk";
 import { Share2, Users } from "lucide-preact"; // share & collab
 import { shareDialog } from "../share/share"; // share & collab
 import { teamOpen, team, unread } from "../share/collab"; // share & collab
+/* data 0.8 */
+import { FileDown, Car, BellRing } from "lucide-preact";
+import { exportOpen } from "../export/export";
+import { chaseOpen } from "../chase/chase";
+import { activeLog } from "../chase/log";
+import { notifyOpen } from "./NotifyPanel";
+/* end data 0.8 */
 
 let locMarker: maplibregl.Marker | null = null;
 
@@ -137,11 +144,14 @@ export function Toolbar() {
             {item(settings.value.ui.cursorValue, "Value under mouse", "V", () => update((s) => (s.ui.cursorValue = !s.ui.cursorValue)), <MousePointer2 size={16} />)}
             {item(loopDialog.value || !!loopProgress.value, "Export loop (GIF / MP4)", "", () => (loopDialog.value = !loopDialog.value), <Film size={16} />, frameCount.value < 1 || !!loopProgress.value)}
             {item(trackPanel.value, recording.value ? "GPS track · recording" : "GPS track & chasers", "", () => (trackPanel.value = !trackPanel.value), <Route size={16} />)}
+            {/* data 0.8 */ item(exportOpen.value, "Export data", "", () => (exportOpen.value = !exportOpen.value), <FileDown size={16} />)}
+            {/* data 0.8 */ item(chaseOpen.value, activeLog.value ? "Chaser toolkit · logging" : "Chaser toolkit", "", () => (chaseOpen.value = !chaseOpen.value), <Car size={16} />)}
             {/* workflow 0.6 */}
             <div class="tb-more-h">Workflow</div>
             {item(openPanel.value === "route", "Route weather", "", () => (openPanel.value = openPanel.value === "route" ? null : "route"), <Navigation size={16} />)}
             {item(!!briefing.value, "Briefing (spoken summary)", "", () => runBriefing(), <Megaphone size={16} />)}
             {item(openPanel.value === "rules", "Notification rules", "", () => (openPanel.value = openPanel.value === "rules" ? null : "rules"), <ListChecks size={16} class="p6-owner" />)}
+            {/* data 0.8 */ item(notifyOpen.value, "Notification channels", "", () => (notifyOpen.value = !notifyOpen.value), <BellRing size={16} />)}
             {item(openPanel.value === "widgets", "Desktop widgets", "", () => (openPanel.value = openPanel.value === "widgets" ? null : "widgets"), <AppWindow size={16} class="p6-owner" />)}
             {item(wsOpen, "Workspaces", "", () => setWsOpen(!wsOpen), <Bookmark size={16} class="p6-owner" />)}
             {item(false, "Wall / kiosk mode", "", enterKiosk, <Tv size={16} class="p6-owner" />)}

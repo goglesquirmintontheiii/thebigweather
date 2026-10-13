@@ -8,6 +8,7 @@ import { settings } from "../store";
 import { toggle3D } from "./View3D"; // 3D
 
 import { handleKeybind, shortcutsOpen } from "../keybinds";
+import { paletteOpen, openPalette } from "./CommandPalette"; // panes/palette/a11y 0.8
 
 const PRODUCTS = ["REF", "VEL", "SW", "ZDR", "RHO", "PHI"];
 
@@ -39,6 +40,7 @@ export const BUILTIN_HOTKEYS: [string, string][] = [
   ["[", "Info panel: previous item"],
   ["]", "Info panel: next item"],
   ["?", "Keyboard shortcuts"],
+  ["Ctrl+K", "Command palette: search everything"], // panes/palette/a11y 0.8
   [",", "Legend filter down (legend hovered)"],
   [".", "Legend filter up (legend hovered)"],
 ];
@@ -47,6 +49,12 @@ export function useHotkeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
+      /* panes/palette/a11y 0.8: command palette (works from text fields too) */
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        if (!paletteOpen.value) openPalette();
+        return;
+      }
       if (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
       // user layer shortcuts first (they may use modifiers or two-key chords)
       if (handleKeybind(e)) return;

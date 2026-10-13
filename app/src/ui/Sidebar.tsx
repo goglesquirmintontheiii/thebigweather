@@ -37,6 +37,11 @@ import { WidgetsPanel } from "./WidgetHost";
 /* end shake/stats/server 0.6 */
 import { Sun } from "lucide-preact"; // p7
 import { spaceOpen } from "./SpacePanel"; // p7
+/* radio/dash 0.8 */
+import { LayoutDashboard, ChartGantt } from "lucide-preact";
+import { dashOpen } from "./Dashboard";
+import { timelineOpen } from "./AlertTimeline";
+/* end radio/dash 0.8 */
 
 const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "radar", icon: Radar, label: "Radar" },
@@ -93,6 +98,14 @@ export function Rail() {
         <Sun size={20} />
       </button>
       {/* end p7 */}
+      {/* radio/dash 0.8: personal dashboard + alert timeline */}
+      <button class={`rail-btn ${dashOpen.value ? "on" : ""}`} title="Dashboard" onClick={() => (dashOpen.value = !dashOpen.value)}>
+        <LayoutDashboard size={20} />
+      </button>
+      <button class={`rail-btn ${timelineOpen.value ? "on" : ""}`} title="Alert timeline" onClick={() => (timelineOpen.value = !timelineOpen.value)}>
+        <ChartGantt size={20} />
+      </button>
+      {/* end radio/dash 0.8 */}
       <div class="rail-fill" />
       <button class={`rail-btn ${openPanel.value === "settings" ? "on" : ""}`} title="Settings" onClick={() => (openPanel.value = openPanel.value === "settings" ? null : "settings")}>
         <Settings size={20} />

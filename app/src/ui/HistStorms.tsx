@@ -4,7 +4,8 @@
 import { signal } from "@preact/signals";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { History, Search, Play, ExternalLink, Trash2, RotateCcw, Wind, TriangleAlert, Clock, Tornado, X } from "lucide-preact";
-import { mapRef } from "../map/mapview";
+import { mapRef, mapClickHooks } from "../map/mapview";
+import { effect } from "@preact/signals"; // radio/dash 0.8
 import { api } from "../api";
 import { settings, update } from "../store";
 import { CenterModal } from "./CenterModal";
@@ -863,18 +864,62 @@ function drawTor() {
   const sel = torSel.value?.item;
   const list = torShowAll.value ? torRes.value.items : sel ? [sel] : [];
   if (!list.length) return clearPreview();
-  const feats = list.map((t) => ({ type: "Feature", geometry: t.geom, properties: { _c: efColor(t), _sel: sel && t.key === sel.key ? 1 : 0 } }));
+  const feats = list.map((t) => ({ type: "Feature", geometry: t.geom, properties: { _c: efColor(t), _sel: sel && t.key === sel.key ? 1 : 0, _key: t.key } }));
   showPreview({ kind: "tornado", fc: { type: "FeatureCollection", features: feats }, id: sel?.key ?? "tor-all", pinned: false, title: "Tornadoes" });
 }
 
-function pickTornado(t: TorItem) {
+function pickTornado(t: TorItem, fit = true) {
   const { before, after } = beforeAfter();
   const [a, b] = torSpan(t);
   torSel.value = { item: t, win: [a - before * 60_000, b + after * 60_000] };
   drawTor();
   const bb = bboxOf(t.geom);
-  if (bb) fitBox([bb[0] - 0.15, bb[1] - 0.15, bb[2] + 0.15, bb[3] + 0.15], 10);
+  if (fit && bb) fitBox([bb[0] - 0.15, bb[1] - 0.15, bb[2] + 0.15, bb[3] + 0.15], 10);
 }
+
+/* ---------- radio/dash 0.8: click a tornado track on the map to select it ---------- */
+const TOR_LAYERS = ["hs-tor", "hs-tor-case", "hs-torpt"];
+/** the tornado track (key) nearest a map point, within a few pixels (tracks are thin) */
+function torAt(pt: { x: number; y: number }): string | null {
+  const m = mapRef.value;
+  if (!m || preview.value?.kind !== "tornado") return null;
+  const layers = TOR_LAYERS.filter((l) => m.getLayer(l));
+  if (!layers.length) return null;
+  for (const r of [3, 7]) {
+    const fs = m.queryRenderedFeatures([[pt.x - r, pt.y - r], [pt.x + r, pt.y + r]], { layers });
+    // the selected one wins ties; otherwise the first (top) one
+    const k = fs.find((f) => f.properties?._sel === 1)?.properties?._key ?? fs[0]?.properties?._key;
+    if (k) return String(k);
+  }
+  return null;
+}
+mapClickHooks.push((e) => {
+  const k = torAt(e.point);
+  if (!k) return false;
+  const t = torRes.value.items.find((x) => x.key === k);
+  if (!t) return false;
+  if (!histStormsOpen.value) histStormsOpen.value = true;
+  if (tab.value !== "tornado") tab.value = "tornado";
+  pickTornado(t, false);
+  // bring the row into view
+  setTimeout(() => document.querySelector(`.hs-tor-row[data-key="${CSS.escape(k)}"]`)?.scrollIntoView({ block: "nearest" }), 30);
+  return true;
+});
+let torHoverOn = false;
+effect(() => {
+  const m = mapRef.value;
+  if (!m || torHoverOn) return;
+  torHoverOn = true;
+  let over = false;
+  m.on("mousemove", (e) => {
+    const hit = preview.value?.kind === "tornado" && !!torAt(e.point);
+    if (hit !== over) {
+      over = hit;
+      m.getCanvas().style.cursor = hit ? "pointer" : "";
+    }
+  });
+});
+/* ---------- end radio/dash 0.8 ---------- */
 
 function openTornado(t: TorItem, win: [number, number]) {
   const bb = bboxOf(t.geom)!;
@@ -1024,7 +1069,7 @@ function TornadoTab() {
                 </thead>
                 <tbody>
                   {r.items.map((t) => (
-                    <tr key={t.key} class={sel?.item.key === t.key ? "on" : ""} onClick={() => pickTornado(t)} onDblClick={() => t.date >= L2_FIRST && openTornado(t, torSel.value?.win ?? torSpan(t))}>
+                    <tr key={t.key} data-key={t.key} class={`hs-tor-row ${sel?.item.key === t.key ? "on" : ""}`} onClick={() => pickTornado(t)} onDblClick={() => t.date >= L2_FIRST && openTornado(t, torSel.value?.win ?? torSpan(t))}>
                       <td class="nowrap">{fmtDate(t.date)}</td>
                       <td>
                         <span class="hs-ef" style={{ background: efColor(t) }}>
@@ -1046,7 +1091,7 @@ function TornadoTab() {
         </div>
         <aside class="hs-detail">
           {!sel ? (
-            <div class="hs-empty muted">Pick a tornado to draw its track on the map, then open it in history mode (1991 and later).</div>
+            <div class="hs-empty muted">Pick a tornado in the list or click a track on the map to see it, then open it in history mode (1991 and later).</div>
           ) : (
             <>
               <h3>

@@ -10,6 +10,41 @@ import { distance, fmtDist } from "../util";
 import { CenterModal } from "./CenterModal";
 import { ShakeViewer } from "./ShakeCenter";
 import { AudioWaveform, Search, Star, Plus, Check, ChevronUp, ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-preact";
+import { update } from "../store"; // radio/dash 0.8
+import { shakeEventsDef } from "../overlays/p8adefs"; // radio/dash 0.8
+import { ovlStatus } from "../overlays/manager"; // radio/dash 0.8
+
+/* radio/dash 0.8: seismic events layer — toggle + its options, right in the Seismographs window */
+function EventsBar() {
+  const o = settings.value.ovl.shakeevents ?? {};
+  const on = !!o.on;
+  const opts = { ...Object.fromEntries((shakeEventsDef.options ?? []).map((x) => [x.key, x.def])), ...(o.opts ?? {}) };
+  const set = (k: string, v: string) => update((s) => (s.ovl.shakeevents = { ...(s.ovl.shakeevents ?? {}), opts: { ...(s.ovl.shakeevents?.opts ?? {}), [k]: v } }));
+  const st = ovlStatus.value.shakeevents;
+  return (
+    <div class={`sk-evbar ${on ? "on" : ""}`}>
+      <label class="toggle compact-l" title="Shaking detected across stations by the server, on the map">
+        <input type="checkbox" checked={on} onChange={(e) => update((s) => (s.ovl.shakeevents = { ...(s.ovl.shakeevents ?? {}), on: (e.target as HTMLInputElement).checked }))} />
+        <i />
+        <span>Seismic events layer</span>
+      </label>
+      {(shakeEventsDef.options ?? []).map((op) => (
+        <label key={op.key} class="sk-evopt">
+          <span class="muted">{op.label}</span>
+          <select value={opts[op.key]} disabled={!on} onChange={(e) => set(op.key, (e.target as HTMLSelectElement).value)}>
+            {op.choices.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
+      ))}
+      <span class="muted small sk-evst">{on ? (st?.loading ? "Loading…" : st?.error ? <span class="err-text">{st.error}</span> : st?.count != null ? `${st.count} event${st.count === 1 ? "" : "s"} · click one to open its seismograms` : "") : "Orange = USGS earthquake, violet = local detection"}</span>
+    </div>
+  );
+}
+/* end radio/dash 0.8 */
 
 type Col = "fav" | "code" | "name" | "region" | "dist" | "elev" | "since";
 interface Row {
@@ -245,6 +280,7 @@ export function ShakeMenu() {
         </>
       }
     >
+      <EventsBar /> {/* radio/dash 0.8 */}
       <div class={`sk-menu ${st ? (hideList ? "solo" : "split") : ""}`}>
         {!(st && hideList) && <Browser compact={!!st} />}
         {st && <ShakeViewer st={st} onClose={() => (shakeSel.value = null)} />}

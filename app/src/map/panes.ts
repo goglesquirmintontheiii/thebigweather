@@ -6,7 +6,7 @@ import * as maplibregl from "maplibre-gl";
 import type { Map as MLMap, GeoJSONSource } from "maplibre-gl";
 import { signal, effect } from "@preact/signals";
 import { api, lastHello } from "../api";
-import { settings, type PaneCfg } from "../store";
+import { settings, type PaneCfg, type PaneLink } from "../store";
 import { buildStyle, isDarkBasemap } from "./basemaps";
 import { RadarLayer } from "../radar/RadarLayer";
 import { GridLayer } from "../grid/GridLayer";
@@ -18,12 +18,21 @@ import type { Sweep } from "../radar/sweep";
 import { activeTime } from "../active";
 import { alerts } from "../alerts";
 import { mapRef } from "./mapview";
+import { myKind, myLink, linkedTime } from "../linkwin"; // panes 0.8
+import { alertStyle } from "../alertstyle"; // panes 0.8: colour-vision palettes reach the panes too
 
 export const paneStatus = signal<Record<number, { loading?: boolean; error?: string; time?: number; label?: string }>>({});
 const panes = new Map<number, PaneView>();
 let syncing = false;
 /* ---------- data 0.6: swipe compare always follows the main map; satellite imagery in panes ---------- */
-const synced = () => settings.value.panes.sync || settings.value.panes.layout === "swipe";
+/* panes 0.8: per-pane links (position / time / layers); swipe compare always shares the position */
+export function paneLink(idx: number): PaneLink {
+  if (myKind === "pane") return { ...myLink.value, pos: false }; // a pane window links through linkwin.ts
+  const p = settings.value.panes;
+  const l = p.links?.[idx] ?? { pos: p.sync, time: true, layers: true };
+  return p.layout === "swipe" ? { ...l, pos: true } : l;
+}
+const synced = (idx: number) => paneLink(idx).pos;
 function gibsTiles(id: string, t: number): { tiles: string[]; maxzoom: number; key: string } | null {
   const g = GIBS.find((x) => x.id === id);
   if (!g) return null;
@@ -89,11 +98,11 @@ class PaneView {
     this.grid.id = "pane-grid";
     this.map.on("style.load", () => this.addLayers());
     this.map.on("move", () => {
-      if (syncing || !synced()) return; // data 0.6
+      if (syncing || !synced(this.idx)) return; // data 0.6, panes 0.8
       syncing = true;
       const c = this.map.getCenter();
       mapRef.value?.jumpTo({ center: c, zoom: this.map.getZoom() });
-      for (const p of panes.values()) if (p !== this) p.map.jumpTo({ center: c, zoom: this.map.getZoom() });
+      for (const p of panes.values()) if (p !== this && synced(p.idx)) p.map.jumpTo({ center: c, zoom: this.map.getZoom() });
       syncing = false;
     });
     this.map.on("zoom", () => this.siteDensity());
@@ -117,6 +126,7 @@ class PaneView {
       m.addSource("alerts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       m.addLayer({ id: "p-alerts", type: "line", source: "alerts", paint: { "line-color": ["get", "color"], "line-width": ["match", ["get", "kind"], "warning", 2.2, 1.2] } });
     }
+    this.layerVis();
     this.refreshAlerts();
     this.refreshSites();
     this.show();
@@ -124,7 +134,7 @@ class PaneView {
 
   /** radar site markers (same look and click behaviour as the main map) */
   refreshSites() {
-    const show = settings.value.overlays.sites && this.cfg?.weather.kind === "radar";
+    const show = settings.value.overlays.sites && paneLink(this.idx).layers && this.cfg?.weather.kind === "radar"; // panes 0.8
     if (!show) {
       for (const m of this.siteMarkers.values()) m.remove();
       this.siteMarkers.clear();
@@ -165,7 +175,9 @@ class PaneView {
   refreshAlerts() {
     const src = this.map.getSource("alerts") as GeoJSONSource | undefined;
     if (!src) return;
-    const feats = [...alerts.value.values()].filter((f) => f.geometry).map((f) => ({ type: "Feature", geometry: f.geometry, properties: { color: f.properties.color, kind: String(f.properties.event).endsWith("Warning") ? "warning" : "other" } }));
+    // panes 0.8: alerts follow the main map's Alerts toggle when layers are linked
+    const on = paneLink(this.idx).layers && settings.value.overlays.alerts;
+    const feats = on ? [...alerts.value.values()].filter((f) => f.geometry).map((f) => ({ type: "Feature", geometry: f.geometry, properties: { color: alertStyle(String(f.properties.event)).border || f.properties.color, kind: String(f.properties.event).endsWith("Warning") ? "warning" : "other" } })) : [];
     src.setData({ type: "FeatureCollection", features: feats } as any);
   }
 
@@ -208,11 +220,20 @@ class PaneView {
     }
   }
 
-  /** Frame at (or just before) the main map's time. */
+  /** panes 0.8: state lines follow the main map's toggle when layers are linked */
+  layerVis() {
+    const m = this.map;
+    if (!m.getLayer("p-states")) return;
+    const on = !paneLink(this.idx).layers || settings.value.overlays.states;
+    m.setLayoutProperty("p-states", "visibility", on ? "visible" : "none");
+  }
+
+  /** Frame at (or just before) the main map's time (panes 0.8: newest frame when time isn't linked). */
   pick(): { key: string; time: number; label?: string } | undefined {
     const fs = this.frames;
     if (!fs.length) return;
-    const t = activeTime.value;
+    const lk = paneLink(this.idx);
+    const t = !lk.time ? 0 : myKind === "pane" ? linkedTime.value : activeTime.value;
     if (!t) return fs[fs.length - 1];
     let best = fs[0];
     for (const f of fs) if (Math.abs(f.time - t) < Math.abs(best.time - t)) best = f;
@@ -318,6 +339,14 @@ export function paneConfigured(idx: number, cfg: PaneCfg) {
   panes.get(idx)?.configure(cfg);
 }
 
+/* panes 0.8 */
+export function paneMap(idx: number): MLMap | null {
+  return panes.get(idx)?.map ?? null;
+}
+export function paneCount() {
+  return panes.size;
+}
+
 export function resizePanes() {
   for (const p of panes.values()) p.map.resize();
   mapRef.value?.resize();
@@ -330,10 +359,10 @@ effect(() => {
   if (!m || hooked) return;
   hooked = true;
   m.on("move", () => {
-    if (syncing || !synced() || !panes.size) return; // data 0.6
+    if (syncing || !panes.size) return; // data 0.6
     syncing = true;
     const c = m.getCenter();
-    for (const p of panes.values()) p.map.jumpTo({ center: c, zoom: m.getZoom() });
+    for (const p of panes.values()) if (synced(p.idx)) p.map.jumpTo({ center: c, zoom: m.getZoom() }); // panes 0.8
     syncing = false;
   });
 });
@@ -341,11 +370,29 @@ effect(() => {
 // time follows the main timeline
 effect(() => {
   void activeTime.value;
+  void linkedTime.value; // panes 0.8: pane windows
+  void myLink.value;
   for (const p of panes.values()) p.show();
 });
 effect(() => {
   void alerts.value;
-  for (const p of panes.values()) p.refreshAlerts();
+  void settings.value.overlays; // panes 0.8
+  void settings.value.panes.links;
+  void settings.value.alertCfg;
+  void myLink.value;
+  for (const p of panes.values()) (p.refreshAlerts(), p.layerVis(), p.refreshSites());
+});
+/* panes 0.8: a pane whose position link is switched on jumps to the main map */
+let lastLinks = "";
+effect(() => {
+  const p = settings.value.panes;
+  const sig = JSON.stringify([p.links, p.sync, p.layout]);
+  if (sig === lastLinks) return;
+  const first = !lastLinks;
+  lastLinks = sig;
+  const m = mapRef.peek();
+  if (first || !m) return;
+  for (const v of panes.values()) if (synced(v.idx)) v.map.jumpTo({ center: m.getCenter(), zoom: m.getZoom() });
 });
 // radar panes that follow the main radar reload when it changes
 let lastSite = "";

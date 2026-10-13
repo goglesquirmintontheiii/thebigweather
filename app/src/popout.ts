@@ -1,7 +1,7 @@
 // Pop-out windows (Electron): a camera, the radio player or a second map in its own OS window.
 
 export interface PopoutSpec {
-  kind: "camera" | "radio" | "map" | "radiocenter" | "metar" /* workflow */;
+  kind: "camera" | "radio" | "map" | "radiocenter" | "metar" /* workflow */ | "pane" /* panes 0.8: one map pane + its product selector */;
   title?: string;
   width?: number;
   height?: number;

@@ -3,14 +3,17 @@
 // layer lives in overlays/mldefs.ts, the API client in ml/client.ts.
 
 import { useEffect } from "preact/hooks";
-import { BrainCircuit, Boxes, GraduationCap, Activity, Radar, Check, X } from "lucide-preact";
+import { BrainCircuit, Boxes, GraduationCap, Activity, Check, X, FileText, Scale } from "lucide-preact";
 import { CenterModal } from "./CenterModal";
 import { mlOpen, mlTab, activeJobs, loadJobs, loadRun, runState, models, type MlTab, catalog, loadCatalog, localUrl, detections, selModel, trainDraft, jobs, runningOn, pollDetections } from "../ml/client";
 import { pickMode, finishPick } from "../ml/pick";
 import { ModelsTab } from "./ml/ModelsTab";
 import { TrainTab } from "./ml/TrainTab";
 import { JobsTab } from "./ml/JobsTab";
-import { RunTab } from "./ml/RunTab";
+import { ReportsTab } from "./ml/ReportsTab"; // models 0.8
+import { CompareTab } from "./ml/CompareTab"; // models 0.8
+import { modelRuns, timeDets, reports, compareRes, mlSettings, runJobs } from "../ml/m8"; // models 0.8
+import { setHistory } from "../anim";
 import { ProbGates } from "./ml/ProbGate"; // models 0.7
 import { RetrainHost } from "./ml/Retrain"; // models 0.7
 
@@ -61,15 +64,20 @@ function ModelsWindow() {
     const t = window.setInterval(() => document.visibilityState !== "hidden" && mlTab.value !== "jobs" && loadJobs(), 15_000);
     return () => clearInterval(t);
   }, [open]);
+  // models 0.8: running moved into each model's page ("run" = old links)
+  useEffect(() => {
+    if (mlTab.value === "run") mlTab.value = "models";
+  }, [mlTab.value]);
   if (!open) return null;
-  const t = mlTab.value;
+  const t = mlTab.value === "run" ? "models" : mlTab.value;
   const nAct = activeJobs.value.length;
-  const nRun = Object.values(runState.value).filter((r) => r?.enabled).length;
+  const nTraining = models.value.filter((m) => m.training).length;
   const tabs: [MlTab, string, any, any][] = [
-    ["models", "Models", Boxes, models.value.length || null],
+    ["models", "Models", Boxes, models.value.length - nTraining || null],
     ["train", "Train", GraduationCap, null],
     ["jobs", "Jobs", Activity, nAct ? <small class="ml-badge live">{nAct}</small> : null],
-    ["run", "Run", Radar, nRun ? <small class="ml-badge live">on</small> : null],
+    ["reports", "Reports", FileText, null],
+    ["compare", "Ensembles & A/B", Scale, null],
   ];
   const picking = !!pickMode.value;
   return (
@@ -88,7 +96,8 @@ function ModelsWindow() {
         {t === "models" && <ModelsTab />}
         {t === "train" && <TrainTab />}
         {t === "jobs" && <JobsTab />}
-        {t === "run" && <RunTab />}
+        {t === "reports" && <ReportsTab />}
+        {t === "compare" && <CompareTab />}
       </div>
       <RetrainHost />
     </CenterModal>
@@ -97,4 +106,4 @@ function ModelsWindow() {
 }
 
 // console / screenshot handle
-(window as any).__tbwML = { mlOpen, mlTab, models, jobs, runState, detections, catalog, selModel, trainDraft, localUrl, pickMode, runningOn, pollDetections };
+(window as any).__tbwML = { mlOpen, mlTab, models, jobs, runState, detections, catalog, selModel, trainDraft, localUrl, pickMode, runningOn, pollDetections, modelRuns, timeDets, reports, compareRes, mlSettings, runJobs, setHistory };
