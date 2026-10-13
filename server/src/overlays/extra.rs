@@ -407,6 +407,7 @@ pub async fn geocode(o: &Overlays, q: &str) -> Result<Value> {
 const PRESETS: &[(&str, &str)] = &[
     ("hospital", r#"nwr["amenity"="hospital"]"#),
     ("shelter", r#"nwr["social_facility"="shelter"];nwr["emergency"="assembly_point"]"#),
+    ("centers", r#"nwr["social_facility"="shelter"];nwr["cooling_center"];nwr["cooling_centre"];nwr["warming_center"];nwr["warming_centre"];nwr["emergency"="assembly_point"]"#),
     ("storm_shelter", r#"nwr["shelter_type"="storm_shelter"];nwr["building"="bunker"]["access"!="private"]"#),
     ("fuel", r#"nwr["amenity"="fuel"]"#),
     ("police", r#"nwr["amenity"="police"]"#),

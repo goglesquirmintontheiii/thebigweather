@@ -5,6 +5,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 mod admin;
 mod alerts;
 mod caches;
+mod export;
 mod logbuf;
 mod overlays;
 mod platform;

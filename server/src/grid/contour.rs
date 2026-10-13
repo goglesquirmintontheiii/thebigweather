@@ -262,7 +262,7 @@ pub fn contour_features(g: &Grid, bbox: [f64; 4], interval: f32, base: f32, pass
     Ok(feats.into_iter().flatten().collect())
 }
 
-fn bbox_param(q: &HashMap<String, String>) -> Result<[f64; 4]> {
+pub fn bbox_param(q: &HashMap<String, String>) -> Result<[f64; 4]> {
     let b: Vec<f64> = q.get("bbox").map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_default();
     if b.len() != 4 || b[0] >= b[2] || b[1] >= b[3] || b[1] < -90.0 || b[3] > 90.0 || b[2] - b[0] > 360.0 {
         bail!("bbox=w,s,e,n required");
@@ -279,7 +279,7 @@ pub async fn contours_api(gs: &GridService, q: &HashMap<String, String>) -> Resu
     let key = match g("key") {
         Some(k) => k.to_string(),
         None => {
-            let fr = gs.frames(layer_id, 60, g("run"), g("storm"), None).await?;
+            let fr = gs.frames_thr(layer_id, 60, g("run"), g("storm"), None, g("thr").and_then(|t| t.parse::<f64>().ok())).await?;
             let t = g("time").and_then(|t| t.parse::<i64>().ok());
             let best = match t {
                 Some(t) => fr.frames.iter().min_by_key(|f| (f.time - t).abs()),
@@ -291,8 +291,10 @@ pub async fn contours_api(gs: &GridService, q: &HashMap<String, String>) -> Resu
     if key.starts_with("goesrgb|") {
         bail!("RGB composites have no values to contour");
     }
+    let key = super::ens_key_thr(&key, g("thr").and_then(|t| t.parse::<f64>().ok()));
     let grid = gs.grid(&key).await?;
-    let (dint, dbase) = default_interval(layer_id, layer.units).unwrap_or((0.0, 0.0));
+    let hint = layer.contour.as_ref().and_then(|c| Some((c["interval"].as_f64()? as f32, c["base"].as_f64().unwrap_or(0.0) as f32)));
+    let (dint, dbase) = hint.or_else(|| default_interval(layer_id, layer.units)).unwrap_or((0.0, 0.0));
     let interval: f32 = match g("interval") {
         Some(v) => v.parse().ok().filter(|v: &f32| *v > 0.0 && v.is_finite()).ok_or_else(|| anyhow!("interval must be > 0"))?,
         None => dint,

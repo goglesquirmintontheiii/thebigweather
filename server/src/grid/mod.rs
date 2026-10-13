@@ -7,9 +7,13 @@
 
 pub mod contour;
 pub mod decode;
+pub mod ens;
+pub mod export;
 pub mod goes;
 pub mod intl;
 pub mod rgb;
+pub mod satprod;
+pub mod severe;
 pub mod metar;
 pub mod nowcast;
 pub mod service;
@@ -463,6 +467,17 @@ pub fn encode_rgba(time: i64, bbox: (f64, f64, f64, f64), w: usize, h: usize, rg
     out
 }
 
+/// Replace the threshold of an ensemble probability frame key
+/// (`ens|model|run|fh|var|prob…|thr`); other keys are returned unchanged.
+pub fn ens_key_thr(key: &str, thr: Option<f64>) -> String {
+    let Some(t) = thr.filter(|t| t.is_finite()) else { return key.to_string() };
+    let p: Vec<&str> = key.split('|').collect();
+    if p.len() == 7 && p[0] == "ens" && p[5].starts_with("prob") {
+        return format!("{}|{}", p[..6].join("|"), ens::fmt_thr(t));
+    }
+    key.to_string()
+}
+
 pub fn earth_radius() -> f64 {
     R_EARTH
 }
@@ -470,6 +485,14 @@ pub fn earth_radius() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ens_threshold_keys() {
+        assert_eq!(ens_key_thr("ens|gefs|2026101200|24|apcp24|prob|1", Some(0.25)), "ens|gefs|2026101200|24|apcp24|prob|0.25");
+        assert_eq!(ens_key_thr("ens|gefs|2026101200|24|apcp24|mean|", Some(0.25)), "ens|gefs|2026101200|24|apcp24|mean|");
+        assert_eq!(ens_key_thr("mrms|x|y", Some(1.0)), "mrms|x|y");
+        assert_eq!(ens_key_thr("ens|gefs|2026101200|24|t2m|proble|32", None), "ens|gefs|2026101200|24|t2m|proble|32");
+    }
 
     #[test]
     fn lambert_ndfd_corners() {
