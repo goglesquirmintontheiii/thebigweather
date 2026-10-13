@@ -69,6 +69,7 @@ export const L2_MOMENTS = [
   { id: "VIL", name: "VIL" },
   /* data 0.8: derived moments (server) */
   { id: "DREF", name: "Refl. change (ΔREF)" },
+  { id: "DVEL", name: "Vel. change (ΔVEL)" },
   { id: "ZDRCOL", name: "ZDR columns" },
   { id: "REFQC", name: "QC reflectivity" },
   { id: "BIO", name: "Bio / clutter mask" },
@@ -77,12 +78,13 @@ export const L2_MOMENTS = [
 /** Products the server computes from the whole volume (one picture per volume, no tilt). */
 export const DERIVED = new Set(["CREF", "ET", "VIL", "ZDRCOL" /* data 0.8 */]);
 /* ---------- data 0.8: per-tilt derived moments (tilt picked by their base moment) + QC filter ---------- */
-export const DERIVED_TILT: Record<string, string> = { DREF: "REF", REFQC: "REF", BIO: "REF" };
-export const P8_MOMENTS = new Set(["DREF", "ZDRCOL", "REFQC", "BIO"]);
+export const DERIVED_TILT: Record<string, string> = { DREF: "REF", DVEL: "VEL", REFQC: "REF", BIO: "REF" };
+export const P8_MOMENTS = new Set(["DREF", "DVEL", "ZDRCOL", "REFQC", "BIO"]);
 /** moment actually requested + extra query (QC filter turns REF into REFQC with a CC threshold) */
 export function p8Moment(moment: string): { m: string; q: string } {
   const p = settings.value.p8;
-  if ((moment === "REF" && p?.qc) || moment === "REFQC") return { m: "REFQC", q: `&cc=${(p?.cc ?? 0.85).toFixed(2)}${p?.bio ? "&bio=1" : ""}` };
+  // server (radar/qc.rs): cc_min (default 0.88) + texture dB (default 8) for REFQC and BIO
+  if ((moment === "REF" && p?.qc) || moment === "REFQC" || moment === "BIO") return { m: moment === "BIO" ? "BIO" : "REFQC", q: `&cc_min=${(p?.cc ?? 0.88).toFixed(2)}&texture=${(p?.texture ?? 8).toFixed(1)}` };
   return { m: moment, q: "" };
 }
 /* ---------- end data 0.8 ---------- */

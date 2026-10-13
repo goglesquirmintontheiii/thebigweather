@@ -2,7 +2,7 @@
 
 Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted server that does the heavy lifting.
 
-**Status:** Phase 7 of 9 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE7_CHECKLIST.md](docs/PHASE7_CHECKLIST.md). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
+**Status:** Phase 8 of 10 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE8_CHECKLIST.md](docs/PHASE8_CHECKLIST.md). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
 ## Quick start
 
@@ -36,13 +36,54 @@ On Windows, run `start.cmd` (or `start.ps1 -Help` for options) instead of `start
 ### 2. Desktop app
 
 ```bash
-chmod +x TheBigWeather-0.7.0-x86_64.AppImage
-./TheBigWeather-0.7.0-x86_64.AppImage
+chmod +x TheBigWeather-0.8.0-x86_64.AppImage
+./TheBigWeather-0.8.0-x86_64.AppImage
 ```
 
 On first launch, paste the server URL and token. If the server runs on the same computer, click **Use the server on this computer** — no token needed (turn this off with `local_no_auth = false` under `[server]` in the config).
 
 The UI also works in a browser at the server URL (phones too, until the Android app exists).
+
+## Install or update from GitHub
+
+- **Linux:** `curl -fsSL https://github.com/goglesquirmintontheiii/thebigweather/releases/latest/download/install-latest.sh | bash`
+- **Windows:** download `install-latest.cmd` from the latest release and run it.
+- **Updates:** the app updates itself (Settings → Updates). Update the server with `./start.sh --update` (Linux) or `start.ps1 -Update` (Windows), or from Server settings.
+- **Publishing a release:** `tools/release.sh`. It needs the `gh` CLI signed in to the repo.
+
+## Phase 8 features (0.8.0)
+
+- **Forecast data:**
+  - GEFS/ECMWF ensemble probability maps.
+  - SPC-style severe parameters (STP, SCP, SHIP and more) with composites.
+  - Forecast confidence.
+- **Radar:**
+  - Difference products and ZDR columns.
+  - QC reflectivity and a bio/clutter mask.
+  - Beam blockage maps.
+  - Lightning jumps.
+- **Detection models:**
+  - Per-model runs, and runs on history data.
+  - Four training intensities, resource budgets and parallel training.
+  - Storm track predictions.
+  - Model reports, ensembles and A/B scorecards.
+- **Awareness:**
+  - Per-point dashboard and alert timeline.
+  - Chaser toolkit.
+  - Shelters and hospitals.
+  - ShakeMap and tsunami messages.
+  - Seismic events from Raspberry Shake nodes.
+- **Media:**
+  - GOES fires, overshooting tops and fog.
+  - Daily webcam timelapses.
+  - A server-side radio scanner that decodes SAME on many stations at once.
+  - Data export.
+- **Platform:**
+  - Notification channels (ntfy, Pushover, email, Discord, Telegram, webhooks) and server-side rules.
+  - Command palette (Ctrl+K) and accessibility options.
+  - Pane pop-outs and custom pane layouts.
+  - Built-in offline voice.
+  - GitHub auto-update.
 
 ## Phase 7 features (0.7.0)
 

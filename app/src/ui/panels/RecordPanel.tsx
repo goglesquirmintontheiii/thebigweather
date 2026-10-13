@@ -10,6 +10,7 @@ import { ALERT_COLORS } from "../../alerts";
 import { openCamera } from "../CameraPanels";
 import { Circle, Square, Play, Trash2, Download, Upload, RefreshCw, Film } from "lucide-preact";
 import { Toggle } from "./RadarPanel";
+import { TimelapseSection } from "../Timelapses"; // p8: webcam daily timelapses
 
 export interface Rec {
   id: string;
@@ -395,6 +396,7 @@ export function RecordPanel() {
         ))}
         <p class="muted small">Recordings stay on the server until you delete them. Recording or sharing some camera feeds may need the owner's permission.</p>
       </section>
+      <TimelapseSection />
     </div>
   );
 }

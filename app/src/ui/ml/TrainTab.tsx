@@ -316,7 +316,8 @@ export function presetFamilies(presets: Preset[]): Family[] {
   for (const p of presets) {
     const int = (p.intensity ? String(p.intensity) : p.id.match(INT_RE)?.[1] ?? p.name.match(INT_RE)?.[1] ?? "").toLowerCase();
     const key = p.family ?? (int ? p.id.replace(INT_RE, "") : p.id);
-    const name = p.family_name ?? (int ? p.name.replace(INT_RE, "") : p.name);
+    // server names: "Tornado — Quick (2023–2025, 150 cases, …)": the family is the part before the intensity
+    const name = p.family_name ?? (int ? p.name.replace(new RegExp(`\\s*[—–:·-]\\s*${int}\\b.*$`, "i"), "").replace(INT_RE, "") || p.name : p.name);
     if (!out.has(key)) out.set(key, { key, name, target: p.target, presets: [] });
     out.get(key)!.presets.push({ ...p, intensity: int || undefined });
   }

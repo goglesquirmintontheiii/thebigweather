@@ -141,6 +141,7 @@ Synoptic, AirNow, aisstream.io, mPING, Spotter Network, EUMETSAT, KMA, Trafikver
 7. **Detection models + extras** (see "Phase 7 plan"): severe-weather detection models you train and run yourself, power outages, laptop-friendly 3D, radio player size switch.
 8. **Feature phase** (see "Phase 8 plan").
 9. **Android + VR** — only when the user asks (see "Phase 9 plan").
+10. **Publication** — accounts, permissions, tiers, licensing, security review and multi-server connections (see "Phase 10 plan").
 
 Each phase ends with a working AppImage + server and a test checklist (from Phase 6 also a Windows .exe).
 
@@ -202,11 +203,9 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 - **Better laptop support in 3D:** on-screen orbit controls, keyboard, Shift/Alt+drag, Orbit-drag mode and auto-rotate.
 - **Radio player size switch:** small ↔ big media player without interrupting playback.
 
-## Phase 8 plan — features (proposed)
+## Phase 8 plan — features (done in 0.8.0)
 
 **Forecasting and verification**
-- **Warning verification:** each warning scored against later storm reports (hit, miss, false alarm, lead time), with per-office and per-season stats in the Historical Storms menu.
-- **Model verification:** for your saved points, past model runs vs observed METARs, ranking which model has been best lately.
 - **Ensemble probability maps:** chance of ≥ X inches of rain or snow, or ≥ Y mph gusts, from GEFS and ECMWF ensemble members (server-side), with a threshold picker.
 - **Severe-weather parameter maps:** SPC-mesoanalysis-style fields from HRRR/RAP — STP, SCP, bulk shear, SRH, lapse rates, DCAPE — plus composite overlays.
 - **Point forecast confidence:** spread between models on the forecast chart, with a plain-language confidence line.
@@ -228,15 +227,15 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 **Data and media**
 - **Satellite derived products:** GOES fire temperature hotspots, cloud-top cooling (overshooting tops), and fog/low-cloud probability.
 - **Webcam auto-timelapses:** daily timelapses for chosen cameras, with weather-event tags.
-- **Audio radio scanner:** cycle through several NOAA Weather Radio streams and stop on SAME alerts.
+- **Audio radio scanner:** the server decodes SAME on many NOAA Weather Radio streams at once; the app cycles audio and jumps to the station with an alert.
 - **Data export:** any layer's current data to CSV/GeoJSON/KML; radar sweeps to NetCDF; cross-sections and charts to PNG/SVG.
 
 **App and platform**
 - **Notification channels:** push to phone via ntfy.sh or Pushover (self-hostable), email (SMTP), Discord and Telegram, all driven by the rules engine on the server so alerts work when the app is closed.
 - **Server-side rules:** the rules engine can also run on the server (24/7), not just in the app.
-- **Multi-user server:** user accounts with roles (owner, member, viewer), per-user settings sync, and an audit log.
 - **Command palette:** Ctrl+K to search every layer, menu, setting, place, radar and command.
-- **Accessibility:** colour-vision-safe palettes everywhere, screen-reader labels, keyboard-only navigation and larger-text mode.
+- **Accessibility:** colour-vision-safe palettes everywhere, screen-reader labels, keyboard-only navigation and larger-text mode (all off by default; current look unchanged).
+- **Also from the Phase 7 checklist:** GitHub releases with install scripts and auto-update, pane pop-outs, custom pane layouts, per-pane linking and swipe orientations, a seismic events layer, and many detection-model improvements (per-model runs, history-mode runs, intensities, resource budgets, storm track model).
 
 ## Phase 9 plan — Android + VR (only when asked)
 
@@ -249,9 +248,46 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
   - a 3D globe or tabletop terrain with radar volumes, isosurfaces and lightning in true 3D, which you can walk around and scale with hand tracking
   - storm "fly-through"
   - time scrubbing with a hand-held timeline
+- **Immersive weather at a saved point:** pick a saved point and the headset simulates its current weather around you — rain, snow, storms with lightning and thunder, clear skies, overcast, night with scattered clouds and stars, fog and wind — driven by live observations, radar and forecast data.
+- **VR navigation in 3D mode:** fly over the map with the thumbsticks (move, strafe, rise and descend, snap/smooth turn), look around freely, and grab-and-drag the world; teleport to places or storms.
+- **Windows:** full support for at least 6 app windows at once (map panes, cameras, radio, forecast, seismograph, models…), each movable, resizable and anchorable in space.
+- **A true immersive app, not a flat sideloaded panel:** even in 2D mode the UI is laid out in 3D space — curved main map, side panels floating at angles around you, toolbars and legends as separate spatial elements with depth, shadows and hand-reachable controls.
 - **Passthrough (mixed reality):** place the tabletop storm or alert dashboards in your room.
 - **Input:** controllers and hand tracking, voice commands (switch layers, play loop), and keyboard/mouse support.
 - **Performance:** foveated rendering, reduced-resolution volumes, and server-side tiling sized for Quest GPUs.
+
+## Phase 10 plan — publication (only when asked)
+
+A large phase that turns TheBigWeather into a product others can install and use safely.
+
+**Accounts and sign-in**
+- Full registration with email verification, sign-in, sign-out, "remember this device", password reset by email link, and password change.
+- Optional two-factor authentication (TOTP apps, recovery codes) and passkeys/WebAuthn.
+- Sessions list with remote sign-out, login alerts, account lockout and rate limits, and CAPTCHA-free abuse protection (proof-of-work or rate-based).
+- Account deletion and data export (GDPR-style).
+
+**Permissions**
+- Roles (owner, admin, member, viewer, guest) plus fine-grained permissions per feature: radar/history access, recordings, cameras, models (train, run, export), server settings, shares, Team rooms, API keys, notification channels.
+- Per-resource sharing (models, workspaces, recordings, layouts) with view/edit rights.
+- Groups/teams with shared resources, invitations by link or email.
+- An audit log of sign-ins and changes, filterable and exportable.
+
+**Account tiers and licensing**
+- Tiers (e.g. Free, Plus, Pro, Server/Org) with limits on frames, history depth, recordings, model training jobs, concurrent radars and windows.
+- Licence keys for self-hosted servers (offline-verifiable signed licences), trial periods, and a licence management page.
+- Optional payments integration (e.g. Stripe or Paddle) behind a provider interface; invoices and receipts by email.
+- Clear data-source attributions and licence compliance per feed (some feeds are non-commercial or personal-use only and must be disabled or replaced in commercial tiers).
+
+**Multiple servers at once**
+- The app connects to several servers simultaneously (e.g. a home server, a friend's server, a public server) with a combined layer list, per-layer server badges, failover for the same data, and per-server sign-in.
+- Merged alerts, models and detections from all connected servers, with conflict-free IDs.
+
+**Security**
+- A thorough security review: dependency audit, fuzzing of every parser (Level II, GRIB, HDF5, miniSEED, KML, placefiles), SSRF and path-traversal tests, rate limits, CSP hardening, Electron hardening (context isolation, sandbox, no remote code), signed updates, and secrets at rest.
+- Penetration-test checklist, security.txt, a responsible-disclosure policy and release signing (code-signing certificates for Windows, AppImage signatures).
+
+**Distribution**
+- Public website and documentation, onboarding tutorial, crash reporting (opt-in), privacy policy and terms, and a support channel.
 
 ## Status
 - Phase 1: done, user-tested; fixes from testing shipped with Phase 2.
@@ -269,7 +305,9 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 - Phase 6: done (0.6.0). Test with `docs/PHASE6_CHECKLIST.md` (also covers 0.5.1). Not done from the Phase 6 list: "Glow" radar style, RTOFS ocean currents (only huge archives on AWS), surf/rip-current forecasts (no keyless source).
 - Phase 6: user-tested; fixes shipped with Phase 7.
 - Phase 7: done (0.7.0). Test with `docs/PHASE7_CHECKLIST.md`, which also lists the Phase 6 items not yet checked. Canada: ECCC sells single-site volumes (cost-recovered); only per-station GIF images and the national composite are open, so Canadian radars stay composite crops plus a per-station image viewer.
-- Next: Phase 8 (features, plan above) when asked. Phase 9 (Android + VR) only when asked.
+- Phase 7: user-tested; fixes and requested changes shipped with Phase 8.
+- Phase 8: done (0.8.0). Test with `docs/PHASE8_CHECKLIST.md` (also covers the Phase 7 follow-ups and unchecked items).
+- Next: Phase 9 (Android + VR) and Phase 10 (publication) only when asked.
 
 ---
 

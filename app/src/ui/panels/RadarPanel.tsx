@@ -329,10 +329,11 @@ function DealiasToggle() {
 import { P8_MOMENTS, DERIVED_TILT } from "../../radar/controller";
 import { blockageState } from "../../overlays/p8defs";
 const P8_HINT: Record<string, string> = {
+  DVEL: "Radial velocity change since the previous volume (same tilt)",
   DREF: "Reflectivity change since the previous volume (same tilt): growing cores warm, collapsing cores cool",
   ZDRCOL: "Height of ZDR ≥ 1 dB above the freezing level: strong updrafts (whole volume)",
-  REFQC: "Reflectivity with non-meteorological echoes removed (CC threshold below)",
-  BIO: "Where the server thinks echoes are birds / insects / ground clutter",
+  REFQC: "Reflectivity with non-meteorological echoes removed (CC / texture thresholds below)",
+  BIO: "Non-meteorological echo mask: green = biological / low-CC, brown = ground clutter / AP",
 };
 function P8RadarProducts() {
   const r = settings.value.radar;
@@ -350,10 +351,10 @@ function P8RadarProducts() {
         ))}
       </div>
       <Toggle label="QC filter (reflectivity)" hint="Show REF through the server's quality control: drops gates with correlation coefficient under the threshold" on={!!p.qc} set={(v) => set((x) => (x.qc = v))} />
-      {(p.qc || r.product === "REFQC") && (
+      {(p.qc || r.product === "REFQC" || r.product === "BIO") && (
         <>
-          <Slider label="CC threshold" value={p.cc ?? 0.85} min={0.5} max={0.98} step={0.01} live={false} fmt={(v) => v.toFixed(2)} set={(v) => set((x) => (x.cc = v))} />
-          <Toggle label="Also remove bio / clutter" on={!!p.bio} set={(v) => set((x) => (x.bio = v))} />
+          <Slider label="CC threshold" value={p.cc ?? 0.88} min={0.5} max={0.98} step={0.01} live={false} fmt={(v) => v.toFixed(2)} set={(v) => set((x) => (x.cc = v))} />
+          <Slider label="Clutter texture" value={p.texture ?? 8} min={2} max={20} step={0.5} live={false} fmt={(v) => `${v.toFixed(1)} dB`} set={(v) => set((x) => (x.texture = v))} />
         </>
       )}
       <Toggle label="Beam blockage map" hint={`Terrain blocking of the ${r.tiltAngle.toFixed(1)}° beam for ${r.site}`} on={!!p.blockage} set={(v) => set((x) => (x.blockage = v))} />

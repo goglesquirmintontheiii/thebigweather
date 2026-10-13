@@ -17,12 +17,27 @@ const OUT_LABEL: Record<string, string> = { detections: "detections", grid: "wea
 
 /** models 0.8: "Europe · medium confidence" */
 export function CoverageBadge({ m }: { m: Model }) {
-  const c = m.coverage;
-  if (!c?.region || /^(us|usa|conus|united states)$/i.test(String(c.region))) return null;
-  const conf = typeof c.confidence === "number" ? (c.confidence >= 0.75 ? "high" : c.confidence >= 0.45 ? "medium" : "low") : String(c.confidence ?? "");
+  const c: any = m.coverage;
+  if (!c) return null;
+  // server: {region: [w,s,e,n], states, confidence, us_only_sources, outside_us: {allowed, confidence, missing_inputs, trained_outside_us}}
+  const bb: number[] | null = Array.isArray(c.region) && c.region.length === 4 ? c.region.map(Number) : null;
+  const outside = c.outside_us?.trained_outside_us ?? (typeof c.region === "string" && !/^(us|usa|conus|united states)$/i.test(c.region));
+  if (!outside) {
+    // a US model: say only what happens outside the US
+    if (c.outside_us && c.outside_us.allowed === false) return null;
+    if (c.outside_us?.allowed && c.outside_us.confidence)
+      return (
+        <span class="m8-cov low" title={`Trained on US data. Runs outside the US with ${c.outside_us.confidence} confidence${c.outside_us.missing_inputs?.length ? ` (missing: ${c.outside_us.missing_inputs.join(", ")})` : ""}`}>
+          <Globe2 size={11} /> US · {c.outside_us.confidence} outside
+        </span>
+      );
+    return null;
+  }
+  const where = typeof c.region === "string" ? c.region : bb ? `${bb[1].toFixed(0)}–${bb[3].toFixed(0)}°, ${bb[0].toFixed(0)}–${bb[2].toFixed(0)}°` : "outside the US";
+  const conf = typeof c.confidence === "number" ? (c.confidence >= 0.75 ? "high" : c.confidence >= 0.45 ? "medium" : "low") : String(c.outside_us?.confidence ?? c.confidence ?? "");
   return (
-    <span class={`m8-cov ${conf}`} title={`Trained / validated for ${c.region}${conf ? ` · ${conf} confidence outside the US` : ""}`}>
-      <Globe2 size={11} /> {c.region}
+    <span class={`m8-cov ${conf}`} title={`Trained / validated for ${where}${conf ? ` · ${conf} confidence` : ""}`}>
+      <Globe2 size={11} /> {typeof c.region === "string" ? c.region : "Non-US"}
       {conf ? ` · ${conf}` : ""}
     </span>
   );

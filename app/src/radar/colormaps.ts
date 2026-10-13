@@ -273,21 +273,23 @@ Object.assign(BUILTIN, {
   STP: T("STP", "Significant Tornado Parameter", "", 0, 12, [S(0, "#000000", 0), S(0.49, "#000000", 0), S(0.5, "#5a8fc8", 160), S(1, "#2fb6d9"), S(2, "#16c45a"), S(3, "#f2e30c"), S(4, "#f2a105"), S(6, "#e41b14"), S(8, "#ff2ab4"), S(10, "#b02be3"), S(12, "#ffffff")]),
   SCP: T("SCP", "Supercell Composite", "", 0, 20, [S(0, "#000000", 0), S(0.99, "#000000", 0), S(1, "#5a8fc8", 160), S(2, "#2fb6d9"), S(4, "#16c45a"), S(6, "#f2e30c"), S(8, "#f2a105"), S(10, "#e41b14"), S(15, "#ff2ab4"), S(20, "#ffffff")]),
   SHIP: T("SHIP", "Significant Hail Parameter", "", 0, 5, [S(0, "#000000", 0), S(0.49, "#000000", 0), S(0.5, "#5a8fc8", 160), S(1, "#16c45a"), S(1.5, "#f2e30c"), S(2, "#f2a105"), S(3, "#e41b14"), S(4, "#ff2ab4"), S(5, "#ffffff")]),
-  SHEAR: T("SHEAR", "Bulk Shear", "m/s", 0, 40, [S(0, "#000000", 0), S(10, "#3b4d5c", 110), S(12.5, "#2f6fa8"), S(15, "#2fb6d9"), S(20, "#16c45a"), S(25, "#f2e30c"), S(30, "#f2a105"), S(35, "#e41b14"), S(40, "#ff2ab4")]),
+  // server svr/*/shear*, ebwd: knots
+  SHEAR: T("SHEAR", "Bulk Shear", "kt", 0, 80, [S(0, "#000000", 0), S(20, "#3b4d5c", 110), S(25, "#2f6fa8"), S(30, "#2fb6d9"), S(40, "#16c45a"), S(50, "#f2e30c"), S(60, "#f2a105"), S(70, "#e41b14"), S(80, "#ff2ab4")]),
   CIN: T("CIN", "Convective Inhibition", "J/kg", -300, 0, [S(-300, "#3a0b6b"), S(-200, "#5a3fd6"), S(-100, "#2b5fd6"), S(-50, "#3fa0f0", 200), S(-25, "#8fd9f5", 140), S(-10, "#cfe8f5", 70), S(0, "#000000", 0)]),
   LCL: T("LCL", "LCL Height", "m", 0, 3000, [S(0, "#16c45a"), S(500, "#7cc242"), S(1000, "#f2e30c"), S(1500, "#f2a105"), S(2000, "#d6150f", 180), S(2500, "#6b4423", 120), S(3000, "#000000", 0)]),
   LAPSE: T("LAPSE", "Lapse Rate", "°C/km", 4, 10, [S(4, "#000000", 0), S(5.5, "#3b4d5c", 100), S(6.5, "#2fb6d9"), S(7, "#16c45a"), S(7.5, "#f2e30c"), S(8, "#f2a105"), S(8.5, "#e41b14"), S(9.5, "#ff2ab4"), S(10, "#ffffff")]),
   DCAPE: T("DCAPE", "Downdraft CAPE", "J/kg", 0, 2000, [S(0, "#000000", 0), S(200, "#3b4d5c", 100), S(400, "#2fb6d9"), S(600, "#16c45a"), S(800, "#f2e30c"), S(1000, "#f2a105"), S(1200, "#e41b14"), S(1600, "#ff2ab4"), S(2000, "#ffffff")]),
   THETAE: T("THETAE", "Theta-e", "K", 300, 370, [S(300, "#3a0b6b"), S(315, "#2b5fd6"), S(325, "#3fa0f0"), S(335, "#16c45a"), S(345, "#f2e30c"), S(352, "#f2a105"), S(358, "#e41b14"), S(364, "#ff2ab4"), S(370, "#ffffff")]),
+  HGTFZL: T("HGTFZL", "Freezing Level", "m", 0, 5500, [S(0, "#e8e8ff"), S(300, "#c9a7f2"), S(800, "#8b4fd6"), S(1500, "#2b5fd6"), S(2200, "#3fa0f0"), S(3000, "#5fd18a"), S(3600, "#f2e30c"), S(4200, "#f2a105"), S(4800, "#d6150f"), S(5500, "#6b0b2a")]),
   FOG: T("FOG", "Fog / low cloud probability", "%", 0, 100, [S(0, "#000000", 0), S(9.9, "#000000", 0), S(10, "#7a8a99", 70), S(30, "#a8b8c8", 130), S(50, "#d0dae6", 180), S(70, "#eef3f8", 215), S(100, "#ffffff", 245)]),
   // radar derived moments
   DREF: T("DREF", "Reflectivity change", "dBZ", -30, 30, [S(-30, "#0a1f8a"), S(-15, "#1b6cff"), S(-5, "#5ac8fa", 150), S(-1.5, "#000000", 0), S(1.5, "#000000", 0), S(5, "#f2e30c", 150), S(15, "#f2a105"), S(22, "#e41b14"), S(30, "#ff2ab4")]),
+  DVEL: T("DVEL", "Velocity change", "m/s", -40, 40, [S(-40, "#00e5ff"), S(-25, "#1b6cff"), S(-10, "#5ac8fa", 150), S(-2, "#000000", 0), S(2, "#000000", 0), S(10, "#f2a1a1", 150), S(25, "#e41b14"), S(40, "#ff2ab4")]),
   ZDRCOL: T("ZDRCOL", "ZDR column depth", "km", 0, 6, [S(0, "#000000", 0), S(0.49, "#000000", 0), S(0.5, "#2fb6d9", 160), S(1, "#16c45a"), S(2, "#f2e30c"), S(3, "#f2a105"), S(4, "#e41b14"), S(5, "#ff2ab4"), S(6, "#ffffff")]),
   BIO: cat("BIO", "Bio / clutter mask", [
     [0, "#00000000", "Weather"],
     [1, "#22c55e", "Biological"],
     [2, "#a16207", "Ground clutter"],
-    [3, "#94a3b8", "Anomalous prop."],
   ]),
 });
 /* ---------- end data 0.8 ---------- */
@@ -328,6 +330,7 @@ export function defaultTableFor(product: string): string {
   if (["DAA", "DTA", "N1P", "NTP"].includes(p)) return "PRECIP";
   /* data 0.8: derived moments */
   if (p === "DREF") return "DREF";
+  if (p === "DVEL") return "DVEL";
   if (p === "ZDRCOL") return "ZDRCOL";
   if (p === "REFQC") return "REF";
   if (p === "BIO") return "BIO";

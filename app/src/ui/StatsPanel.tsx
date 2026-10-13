@@ -20,7 +20,19 @@ function norm(s: any) {
   const sys = s.system ?? {};
   const pr = s.process ?? s.proc ?? {};
   const o = { ...sys, ...s };
-  o.proc_cpu = s.proc_cpu ?? pr.cpu ?? pr.cpu_percent;
+  // server: proc_cpu = % of the whole machine (0–100) when proc_cpu_cores (% of one core) is sent;
+  // older servers sent proc_cpu per core and proc_cpu_pct per machine
+  const cores = Number(s.cores ?? sys.cores) || 1;
+  if (s.proc_cpu_cores != null) {
+    o.proc_cpu = s.proc_cpu;
+    o.proc_cpu_cores = s.proc_cpu_cores;
+  } else if (s.proc_cpu_pct != null || s.proc_cpu != null) {
+    o.proc_cpu = s.proc_cpu_pct ?? Math.min(100, s.proc_cpu / cores);
+    o.proc_cpu_cores = s.proc_cpu != null ? s.proc_cpu : s.proc_cpu_pct * cores;
+  } else {
+    const c = pr.cpu ?? pr.cpu_percent;
+    o.proc_cpu = c;
+  }
   o.proc_rss = s.proc_rss ?? pr.rss ?? pr.mem ?? pr.rss_bytes;
   o.proc_threads = s.proc_threads ?? pr.threads;
   return o;
@@ -241,7 +253,7 @@ function ServerProcRows({ s }: { s: any }) {
   const rssPct = s.proc_rss && s.mem_total ? (s.proc_rss / s.mem_total) * 100 : 0;
   return (
     <>
-      <div class="srow" data-tip={`TheBigWeather server process\n${s.proc_cpu != null ? `${s.proc_cpu.toFixed(1)}% of the whole machine` : "CPU not reported"}`}>
+      <div class="srow" data-tip={`TheBigWeather server process\n${s.proc_cpu != null ? `${s.proc_cpu.toFixed(1)}% of the whole machine${s.proc_cpu_cores != null ? `\n${(s.proc_cpu_cores / 100).toFixed(2)} cores busy (${s.proc_cpu_cores.toFixed(0)}% of one core)` : ""}` : "CPU not reported"}`}>
         <span>CPU</span>
         <Bar v={s.proc_cpu ?? 0} />
         <b>{s.proc_cpu != null ? `${s.proc_cpu.toFixed(0)}%` : "—"}</b>
@@ -475,7 +487,7 @@ function Merged({ s, c }: { s: any; c: ClientStats | null }) {
       cells: (
         <>
           <C v={sysCpu} t={pc(sysCpu)} tip="Whole machine" />
-          <C v={s?.proc_cpu} t={pc(s?.proc_cpu)} tip="Server process (share of the whole machine)" />
+          <C v={s?.proc_cpu} t={pc(s?.proc_cpu)} tip={`Server process (share of the whole machine)${s?.proc_cpu_cores != null ? ` · ${(s.proc_cpu_cores / 100).toFixed(2)} cores busy` : ""}`} />
           <C v={appCpu} t={pc(appCpu)} tip="App, all processes (share of the whole machine)" />
         </>
       ),

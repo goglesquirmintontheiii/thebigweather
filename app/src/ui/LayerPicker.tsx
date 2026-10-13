@@ -12,7 +12,8 @@ import { predLayers, predModelId, predModelName, runState, mlOpen, mlTab, refres
 import { fmtTime } from "../util"; // models 0.7
 import { Percent, Tornado, Layers2 } from "lucide-preact"; // data 0.8
 import { isEnsId, isSvrId, thrSpec, ensThr, setEnsThr } from "../weather"; // data 0.8
-import { setD6 } from "../grid/contours"; // data 0.8
+import { setD6, toDisplay } from "../grid/contours"; // data 0.8
+import { gridComposites } from "../weather"; // data 0.8
 import { convertUnit } from "../util"; // data 0.8
 
 type Cat = "radar" | "world" | "future" | "mrms" | "sat" | "models" | "ndfd" | "obs" | "water" /* data 0.6 */ | "mine" /* models 0.7 */ | "ens" | "severe" /* data 0.8 */;
@@ -574,15 +575,51 @@ function EnsList({ pick }: { pick: Pick }) {
   );
 }
 
-/** composite presets: a severe parameter + contours / barbs of another */
+/** composite presets (fallback when the server catalog has no `composites`): a severe parameter + contours / barbs of another */
 export const COMPOSITES: { id: string; name: string; sub: string; fill: RegExp; contour?: RegExp; barbs?: string }[] = [
   { id: "stp-srh", name: "STP + SRH contours", sub: "Tornado ingredients", fill: /^stp/, contour: /srh.*(01|1km|0_1)|srh01|srh1/ },
-  { id: "cape-shear", name: "MLCAPE + shear barbs", sub: "0–6 km bulk shear", fill: /^mlcape|^cape_ml|mlcape/, barbs: "shr06" },
+  { id: "cape-shear", name: "MLCAPE + 0–6 km shear", sub: "Bulk shear contours", fill: /^mlcape|^cape_ml|mlcape/, contour: /^shear06|^shr06|bwd6/ },
   { id: "scp-shear", name: "SCP + eff. shear contours", sub: "Supercell potential", fill: /^scp/, contour: /eff.*sh|ebwd|shr_eff|effshear/ },
   { id: "ship-500", name: "SHIP + 500 mb barbs", sub: "Large hail", fill: /^ship/, barbs: "500" },
   { id: "cape-cin", name: "MLCAPE + MLCIN contours", sub: "Instability vs cap", fill: /^mlcape|mlcape/, contour: /mlcin|cin_ml|^cin/ },
 ];
+/** one entry of the composite chooser: the server's list (catalog `composites`) when present, else the presets */
+interface CompositeItem {
+  id: string;
+  name: string;
+  sub: string;
+  src: string;
+}
+/** composites available for severe source `src` (or every source) */
+function compositeItems(src?: string): CompositeItem[] {
+  const sc = gridComposites.value.filter((c) => gridDef(c.fill) && (!src || c.fill.startsWith(`svr/${src}/`)));
+  if (gridComposites.value.length) {
+    return sc.map((c) => {
+      const [srcName, rest] = c.name.includes(": ") ? c.name.split(": ") : ["", c.name];
+      return { id: c.id, name: src ? rest : c.name, sub: c.contours.length ? `${gridDef(c.contours[0].layer)?.name ?? c.contours[0].layer} contours` : srcName, src: c.fill.split("/")[1] };
+    });
+  }
+  const all = gridLayers.value.filter((d) => isSvrId(d.id) && (!src || d.id.startsWith(`svr/${src}/`)));
+  return COMPOSITES.filter((c) => all.some((d) => c.fill.test((d.id.split("/")[2] ?? "").toLowerCase()))).map((c) => ({ id: c.id, name: c.name, sub: c.sub, src: src ?? "" }));
+}
 export function applyComposite(id: string, src?: string) {
+  /* server composites: fill layer + (first) contour layer with its interval / base */
+  const sc = gridComposites.value.find((x) => x.id === id);
+  if (sc && gridDef(sc.fill)) {
+    const ct = sc.contours[0];
+    const cdef = ct ? gridDef(ct.layer) : undefined;
+    selectWeather({ kind: "grid", id: sc.fill });
+    setD6((d) => {
+      d.contours = !!cdef;
+      d.cfield = cdef ? cdef.id.split("/")[2] : "";
+      // server units → the contour panel's display units
+      const iv = cdef && ct.interval ? Math.abs(toDisplay(cdef, ct.interval) - toDisplay(cdef, 0)) : undefined;
+      d.interval = iv ? +iv.toPrecision(4) : undefined;
+      d.base = cdef && ct.base != null && iv ? +toDisplay(cdef, ct.base).toPrecision(6) : undefined;
+      d.barbs = false;
+    });
+    return true;
+  }
   const c = COMPOSITES.find((x) => x.id === id);
   if (!c) return false;
   const all = gridLayers.value.filter((d) => isSvrId(d.id));
@@ -612,7 +649,7 @@ function SevereList({ pick }: { pick: Pick }) {
   const defs = gridLayers.value.filter((d) => catOf(d) === "severe");
   if (!defs.length) return <div class="muted small">No severe parameter layers on this server yet (needs the data 0.8 server).</div>;
   const srcs = [...new Set(defs.map((d) => d.id.split("/")[1] ?? ""))];
-  const avail = COMPOSITES.filter((c) => defs.some((d) => c.fill.test((d.id.split("/")[2] ?? "").toLowerCase())));
+  const avail = compositeItems();
   return (
     <>
       {avail.length > 0 && (
@@ -622,7 +659,7 @@ function SevereList({ pick }: { pick: Pick }) {
           </label>
           <div class="lp-grid">
             {avail.map((c) => (
-              <Item key={c.id} on={false} name={c.name} sub={c.sub} onClick={() => pick(() => applyComposite(c.id))} />
+              <Item key={c.id} on={false} name={c.name} sub={c.sub} onClick={() => pick(() => applyComposite(c.id, c.src || undefined))} />
             ))}
           </div>
         </>
@@ -667,8 +704,7 @@ export function P8LayerDock() {
   if (!d) return null;
   if (isSvrId(w.id)) {
     const src = w.id.split("/")[1];
-    const sib = gridLayers.value.filter((x) => x.id.startsWith(`svr/${src}/`));
-    const avail = COMPOSITES.filter((c) => sib.some((x) => c.fill.test(x.id.split("/")[2].toLowerCase())));
+    const avail = compositeItems(src);
     if (!avail.length) return null;
     return (
       <div class="p8-dock glass" style={{ right: `${pos.right}px`, bottom: `${pos.bottom}px` }}>

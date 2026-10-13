@@ -76,6 +76,47 @@ effect(() => {
   }, 800);
 });
 
+/* ---------- data 0.8: server rules check cond.at — copy the saved point / GPS fix there ---------- */
+/** the point a server rule should use, or null (route rules can't run on the server) */
+export function atFor(c: RuleCond): { lat: number; lon: number; label: string } | null {
+  if (c.kind === "same") return null;
+  if (c.where === "route") return null;
+  const l = whereOf(c)[0];
+  return l ? { lat: +l.lat.toFixed(5), lon: +l.lon.toFixed(5), label: c.where === "gps" ? "my GPS position" : l.label } : null;
+}
+const isServerRule = (r: Rule) => r.run_on === "server" || r.run_on === "both";
+effect(() => {
+  const rules = settings.value.wf6?.rules;
+  void settings.value.points;
+  void fix.value;
+  if (!rules?.some(isServerRule)) return;
+  const changes: [string, RuleCond["at"]][] = [];
+  for (const r of rules) {
+    if (!isServerRule(r)) continue;
+    const at = atFor(r.cond);
+    const cur = r.cond.at;
+    if (!at) continue; // keep the last known point (GPS lost, route)
+    // GPS: move the server's point only when it changed by ~300 m
+    const moved = !cur || (r.cond.where === "gps" ? distance(cur.lat, cur.lon, at.lat, at.lon) > 300 : cur.lat !== at.lat || cur.lon !== at.lon || cur.label !== at.label);
+    if (moved) changes.push([r.id, at]);
+  }
+  if (!changes.length) return;
+  queueMicrotask(() =>
+    update((s) => {
+      for (const [id, at] of changes) {
+        const x = s.wf6.rules.find((y) => y.id === id);
+        if (x) x.cond = { ...x.cond, at };
+      }
+    }),
+  );
+});
+/** run a rule's condition on the server now (POST /api/rules/server-test) */
+export async function serverTestRule(r: Rule): Promise<{ hit: boolean; msg: string; error?: string; results?: any[] }> {
+  const rule = { ...r, cond: { ...r.cond, at: r.cond.at ?? atFor(r.cond) ?? undefined } };
+  return api.send("POST", "/api/rules/server-test", { rule });
+}
+/* ---------- end data 0.8 ---------- */
+
 // ---------- locations ----------
 function whereOf(c: RuleCond): { lat: number; lon: number; label: string }[] {
   if (c.where === "gps") return fix.value ? [{ lat: fix.value.lat, lon: fix.value.lon, label: "your location" }] : [];
@@ -118,6 +159,7 @@ interface Hit {
 }
 export async function check(r: Rule): Promise<Hit | null> {
   const c = r.cond;
+  if (c.kind === "same") return null; // data 0.8: SAME conditions run on the server (its radio monitor)
   const locs = whereOf(c);
   if (!locs.length) return null;
   const R = (c.mi ?? 10) * MI;
@@ -175,7 +217,7 @@ export async function check(r: Rule): Promise<Hit | null> {
     }
     case "metar": {
       for (const l of locs.slice(0, 20)) {
-        const m = await nearestMetar(l.lat, l.lon);
+        const m = c.source === "pws" ? await nearestPws(l.lat, l.lon) : await nearestMetar(l.lat, l.lon);
         if (!m || m.dist > Math.max(R, 15_000)) continue;
         const f = c.field ?? "gust";
         const tF = m.t != null ? m.t * 1.8 + 32 : null;
@@ -221,6 +263,20 @@ export async function check(r: Rule): Promise<Hit | null> {
   return null;
 }
 
+/** data 0.8: nearest personal weather station (temp_c / gust_kt → the METAR shape) */
+async function nearestPws(lat: number, lon: number): Promise<{ id: string; dist: number; t: number | null; wg: number | null } | null> {
+  const d = 0.5;
+  const fc: any = await api.get(`/api/ovl/pws?bbox=${[lon - d, lat - d, lon + d, lat + d].map((x) => x.toFixed(2)).join(",")}&minutes=60`).catch(() => null);
+  let best: { id: string; dist: number; t: number | null; wg: number | null } | null = null;
+  for (const f of fc?.features ?? []) {
+    const [x, y] = f.geometry?.coordinates ?? [];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const dist = distance(lat, lon, y, x);
+    if (!best || dist < best.dist) best = { id: String(f.properties?.id ?? f.properties?.name ?? "PWS"), dist, t: f.properties?.temp_c ?? null, wg: f.properties?.gust_kt ?? null };
+  }
+  return best;
+}
+
 export function describe(c: RuleCond): string {
   const where = c.where === "gps" ? "my GPS position" : c.where === "route" ? "my route" : settings.value.points.find((p) => p.id === c.where)?.name ?? "my first point";
   switch (c.kind) {
@@ -234,7 +290,10 @@ export function describe(c: RuleCond): string {
       return `Storm cell reaching ${where} in < ${c.value ?? 20} min`;
     case "aqi":
       return `AQI > ${c.value ?? 150} near ${where}`;
+    case "same":
+      return `SAME ${c.event ? `“${c.event}”` : "warning"} on the radio${c.fips?.length ? ` for ${c.fips.length} count${c.fips.length === 1 ? "y" : "ies"}` : ""}${c.station ? ` (${c.station})` : ""}`;
     case "metar":
+      if (c.source === "pws") return c.field === "temp_lo" ? `Weather station temperature ≤ ${c.value}°F near ${where}` : c.field === "temp_hi" ? `Weather station temperature ≥ ${c.value}°F near ${where}` : `Weather station gust ≥ ${c.value} mph near ${where}`;
       return c.field === "temp_lo" ? `METAR temperature ≤ ${c.value}°F near ${where}` : c.field === "temp_hi" ? `METAR temperature ≥ ${c.value}°F near ${where}` : `METAR gust ≥ ${c.value} mph near ${where}`;
     case "spc":
       return `SPC day-1 risk ≥ ${SPC_NAME[c.value ?? 2]} at ${where}`;
@@ -395,6 +454,9 @@ export function newRule(kind: RuleCond["kind"] = "alert"): Rule {
     spc: { value: 3, mi: 0 },
     dbz: { value: 50, mi: 0 },
     mldet: { value: 60, mi: 15, model: "" }, // detection models
+    same: { event: "TOR", mi: 0, fips: [] }, // data 0.8
   };
-  return { id: uid(), name: describe({ kind, where, mi: 10, ...presets[kind] } as RuleCond), on: true, cond: { kind, where, mi: 10, ...presets[kind] } as RuleCond, act: { sound: "alarm", desktop: true, tts: "{msg}" }, cooldown: 30 };
+  // data 0.8: SAME conditions only run on the server (its radio monitor)
+  const run_on = kind === "same" && rulesStore.value === "server" ? ("server" as const) : undefined;
+  return { id: uid(), name: describe({ kind, where, mi: 10, ...presets[kind] } as RuleCond), on: true, cond: { kind, where, mi: 10, ...presets[kind] } as RuleCond, act: { sound: "alarm", desktop: true, tts: "{msg}", ...(run_on ? { channels: ["*"] } : {}) }, cooldown: 30, ...(run_on ? { run_on } : {}) };
 }

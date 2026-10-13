@@ -92,12 +92,30 @@ class Api {
   on(type: string, h: Handler): () => void {
     if (!this.handlers.has(type)) this.handlers.set(type, new Set());
     this.handlers.get(type)!.add(h);
+    // modules evaluated lazily (import cycles are initialised on first use) can subscribe after
+    // the socket opened: give a late "connected" listener the event it missed
+    if (type === "connected" && connection.peek() === "online")
+      queueMicrotask(() => {
+        try {
+          if (this.handlers.get(type)?.has(h)) h({ type: "connected" });
+        } catch (e) {
+          console.error('api "connected" listener failed:', e);
+        }
+      });
     return () => this.handlers.get(type)?.delete(h);
   }
 
   private emit(msg: any) {
-    this.handlers.get(msg.type)?.forEach((h) => h(msg));
-    this.handlers.get("*")?.forEach((h) => h(msg));
+    // one failing listener must not stop the others (e.g. "connected" loads sites, catalog, …)
+    const run = (h: Handler) => {
+      try {
+        h(msg);
+      } catch (e) {
+        console.error(`api "${msg?.type}" listener failed:`, e);
+      }
+    };
+    this.handlers.get(msg.type)?.forEach(run);
+    this.handlers.get("*")?.forEach(run);
   }
 
   watch(sites: string[]) {
@@ -174,3 +192,4 @@ class Api {
 export const api = new Api();
 
 effect(() => api.configure(activeServer.value));
+(window as any).__tbwApi = { api, connection }; // debugging / screenshots

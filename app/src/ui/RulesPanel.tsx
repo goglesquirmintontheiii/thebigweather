@@ -4,7 +4,8 @@ import { useState } from "preact/hooks";
 import { Plus, Trash2, Play, ChevronDown, ChevronRight, Cloud, HardDrive } from "lucide-preact";
 import { settings, update, type Rule, type RuleCond } from "../store";
 import { ALERT_SOUNDS } from "../sound";
-import { ruleLog, rulesStore, ruleState, testRule, newRule, describe } from "../rules/engine";
+import { ruleLog, rulesStore, ruleState, testRule, newRule, describe, serverTestRule, atFor } from "../rules/engine";
+import { toast } from "../store"; // data 0.8
 import { Toggle } from "./panels/RadarPanel";
 import { OVERLAYS } from "../overlays/defs";
 import { fmtTime } from "../util";
@@ -20,6 +21,7 @@ const KINDS: [RuleCond["kind"], string][] = [
   ["metar", "METAR value"],
   ["spc", "SPC outlook risk"],
   ["mldet", "Detection model hit nearby"], // detection models
+  ["same", "Weather radio SAME (server)"], // data 0.8
 ];
 const EVENTS = ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning", "Warning", "Tornado Watch", "Severe Thunderstorm Watch", "Winter Storm Warning", "Special Marine Warning", "Extreme Wind Warning", "Watch", "Advisory"];
 
@@ -43,7 +45,15 @@ function RuleEditor({ r }: { r: Rule }) {
       </div>
       <div class="row">
         <span>When</span>
-        <select value={c.kind} onChange={(e) => set((x) => (x.cond = { ...newRule((e.target as HTMLSelectElement).value as any).cond, where: x.cond.where }))}>
+        <select
+          value={c.kind}
+          onChange={(e) =>
+            set((x) => {
+              x.cond = { ...newRule((e.target as HTMLSelectElement).value as any).cond, where: x.cond.where };
+              if (x.cond.kind === "same" && rulesStore.value === "server" && (x.run_on ?? "app") === "app") x.run_on = "server"; // data 0.8: SAME runs on the server
+            })
+          }
+        >
           {KINDS.map(([k, l]) => (
             <option key={k} value={k}>
               {l}
@@ -51,7 +61,7 @@ function RuleEditor({ r }: { r: Rule }) {
           ))}
         </select>
       </div>
-      <div class="row">
+      {c.kind !== "same" && <div class="row">
         <span>Where</span>
         <select value={c.where} onChange={(e) => set((x) => (x.cond.where = (e.target as HTMLSelectElement).value))}>
           {settings.value.points.map((p) => (
@@ -62,7 +72,41 @@ function RuleEditor({ r }: { r: Rule }) {
           <option value="gps">My GPS position</option>
           <option value="route">Along my planned route</option>
         </select>
-      </div>
+      </div>}
+      {/* data 0.8: server rules check one point (cond.at), copied from the saved point / GPS */}
+      {c.kind !== "same" && r.run_on && r.run_on !== "app" && (
+        <div class="muted small rl-at">
+          {c.where === "route"
+            ? "Route rules can't run on the server: pick a saved point or GPS."
+            : c.at
+              ? `Server checks ${c.at.label ?? "the point"} (${c.at.lat.toFixed(3)}, ${c.at.lon.toFixed(3)})${c.where === "gps" ? ", updated while the app has a GPS fix" : ""}.`
+              : atFor(c)
+                ? "Sending the point to the server…"
+                : "No position yet (GPS): the server can't check this rule until the app has one."}
+        </div>
+      )}
+      {c.kind === "same" && (
+        <>
+          <div class="row">
+            <span>Event</span>
+            <input list="rl-same-ev" placeholder="code or name, e.g. TOR / Tornado (empty = any)" value={c.event ?? ""} onChange={(e) => set((x) => (x.cond.event = (e.target as HTMLInputElement).value.trim()))} />
+            <datalist id="rl-same-ev">
+              {["TOR", "SVR", "FFW", "EWW", "SMW", "TOA", "SVA", "FFA", "WSW", "BZW", "HUW", "SPS", "CEM", "CAE"].map((e) => (
+                <option key={e} value={e} />
+              ))}
+            </datalist>
+          </div>
+          <div class="row" title="5-digit county FIPS codes (state + county, e.g. 40109); SS000 = the whole state. Empty = any area">
+            <span>Counties</span>
+            <input placeholder="40109, 40027 (empty = any)" value={(c.fips ?? []).join(", ")} onChange={(e) => set((x) => (x.cond.fips = (e.target as HTMLInputElement).value.split(/[\s,;]+/).map((v) => v.trim()).filter((v) => /^\d{5}$/.test(v))))} />
+          </div>
+          <div class="row">
+            <span>Station</span>
+            <input placeholder="monitor station id (empty = any)" value={c.station ?? ""} onChange={(e) => set((x) => (x.cond.station = (e.target as HTMLInputElement).value.trim() || undefined))} />
+          </div>
+          <div class="muted small">Heard by the server's radio monitor (Radio → Scanner, "Keep on server"). {(r.run_on ?? "app") === "app" ? "Set Run on to Server or Both." : ""}</div>
+        </>
+      )}
       {c.kind === "alert" && (
         <div class="row">
           <span>Alert</span>
@@ -87,6 +131,15 @@ function RuleEditor({ r }: { r: Rule }) {
               {num(c.value, (n) => set((x) => (x.cond.value = n)), 52)}
             </>
           )}
+        </div>
+      )}
+      {c.kind === "metar" && (
+        <div class="row">
+          <span>From</span>
+          <select value={c.source ?? "metar"} onChange={(e) => set((x) => (x.cond.source = (e.target as HTMLSelectElement).value === "pws" ? "pws" : undefined))}>
+            <option value="metar">METAR (airports)</option>
+            <option value="pws">Personal weather stations</option>
+          </select>
         </div>
       )}
       {c.kind === "metar" && (
@@ -146,7 +199,7 @@ function RuleEditor({ r }: { r: Rule }) {
           </select>
         </div>
       )}
-      {c.kind !== "spc" && c.kind !== "dbz" && (
+      {c.kind !== "spc" && c.kind !== "dbz" && c.kind !== "same" && (
         <div class="row">
           <span>{c.kind === "eta" ? "Track within (mi)" : "Distance (mi)"}</span>
           {num(c.mi, (n) => set((x) => (x.cond.mi = n)))}
@@ -170,6 +223,22 @@ function RuleEditor({ r }: { r: Rule }) {
           ))}
         </div>
       </div>
+      {r.run_on && r.run_on !== "app" && (
+        <div class="row">
+          <span />
+          <button
+            class="btn sm ghost"
+            title="Run the condition on the server now and send its channel messages marked as a test"
+            onClick={() =>
+              serverTestRule(r)
+                .then((x) => toast(`Server: ${x.error ? `error: ${x.error}` : x.hit ? `TRUE — ${x.msg}` : "condition false right now"}${x.results?.length ? ` · ${x.results.filter((y: any) => y.ok).length}/${x.results.length} delivered` : ""}`, x.error ? "warn" : "info", 8000))
+                .catch((e) => toast(`Server test failed: ${e.message}`, "warn"))
+            }
+          >
+            <Play size={12} /> Test on server
+          </button>
+        </div>
+      )}
       <label class="lbl">Then</label>
       {r.run_on && r.run_on !== "app" && <P8Channels r={r} set={set} />}
       <div class="row">
@@ -332,8 +401,11 @@ function P8Channels({ r, set }: { r: Rule; set: (fn: (x: Rule) => void) => void 
     <div class="row p8-rl-ch">
       <span>Send to</span>
       <div class="d6-chips">
+        <button class={`chip ${on.has("*") ? "on" : ""}`} title="Every enabled channel (server: act.channels [&quot;*&quot;])" onClick={() => set((x) => (x.act.channels = on.has("*") ? [] : ["*"]))}>
+          All
+        </button>
         {channels.value.map((c) => (
-          <button key={c.id} class={`chip ${on.has(c.id) ? "on" : ""} ${c.enabled ? "" : "off"}`} title={c.type} onClick={() => toggle(c.id)}>
+          <button key={c.id} class={`chip ${on.has(c.id) || on.has("*") ? "on" : ""} ${c.enabled ? "" : "off"}`} title={c.type} disabled={on.has("*")} onClick={() => toggle(c.id)}>
             {c.name}
           </button>
         ))}

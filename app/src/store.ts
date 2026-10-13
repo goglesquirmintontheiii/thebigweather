@@ -274,6 +274,8 @@ export interface P8Settings {
   /** radar QC: REF → REFQC with a CC threshold; bio = also remove biological echoes */
   qc?: boolean;
   cc?: number;
+  /** REFQC / BIO reflectivity texture threshold, dB (server default 8) */
+  texture?: number;
   bio?: boolean;
   /** beam blockage overlay for the current radar / tilt */
   blockage?: boolean;
@@ -306,7 +308,7 @@ export interface Data6Settings {
   ccolor: string;
   labels: boolean;
   barbs: boolean;
-  blevel: "10m" | "850" | "500" | "250" | "shr06" /* data 0.8: 0–6 km bulk shear vectors */;
+  blevel: "10m" | "850" | "500" | "250";
   bcolor: string;
   /** models compared in the forecast center */
   models?: string[];
@@ -330,7 +332,7 @@ export interface WidgetCfg {
   zoom?: number;
 }
 export interface RuleCond {
-  kind: "alert" | "rotation" | "lightning" | "eta" | "aqi" | "metar" | "spc" | "dbz" | "mldet" /* detection models */;
+  kind: "alert" | "rotation" | "lightning" | "eta" | "aqi" | "metar" | "spc" | "dbz" | "mldet" /* detection models */ | "same" /* data 0.8: SAME message from the server's radio monitor (server rules) */;
   /** where: saved point id, "gps" or "route" */
   where: string;
   /** distance (mi) */
@@ -351,6 +353,15 @@ export interface RuleCond {
   maxp?: number;
   /** models 0.7: also require the detection to pass the map's probability gate */
   useGate?: boolean;
+  /* ---------- data 0.8: server rules ---------- */
+  /** the point the server checks (copied from the saved point / GPS by the app; server rules need it) */
+  at?: { lat: number; lon: number; label?: string };
+  /** metar: "pws" = personal weather stations instead of METARs */
+  source?: "metar" | "pws";
+  /** same: 5-digit county FIPS codes ("SS000" = whole state); empty = anywhere */
+  fips?: string[];
+  /** same: radio monitor station id ("" = any) */
+  station?: string;
 }
 export interface RuleAction {
   sound?: "off" | "chime" | "beep" | "alarm" | "siren";

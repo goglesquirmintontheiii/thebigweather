@@ -176,12 +176,16 @@ async function loadItems(from: number, to: number, area: Area): Promise<{ items:
         for (const x of list) {
           const p = x?.properties ?? x ?? {};
           const g = x?.geometry?.type === "Point" ? x.geometry.coordinates : null;
-          const lon = +(p.lon ?? g?.[0]), lat = +(p.lat ?? g?.[1]);
-          const t = tms(p.t ?? p.time ?? p.issued);
+          // server Report: first_t / last_t, max_prob, track [{t, lat, lon, prob}]
+          const tp = Array.isArray(p.track) && p.track.length ? p.track[p.track.length - 1] : null;
+          const lon = +(p.lon ?? g?.[0] ?? tp?.lon), lat = +(p.lat ?? g?.[1] ?? tp?.lat);
+          const t = tms(p.t ?? p.first_t ?? p.time ?? p.issued);
+          const t1 = tms(p.last_t) ?? t;
           if (!Number.isFinite(t) || !inArea(area, null, lon, lat)) continue;
-          let prob = +p.prob;
+          let prob = +(p.prob ?? p.max_prob);
           if (prob > 1) prob /= 100;
-          add({ key: `ml:${p.id ?? x?.id ?? `${p.model_id}${t}${lon}`}`, lane: "ml", t0: t, t1: t, point: true, title: `${p.model_name ?? "Model"} · ${p.target ?? ""}`, sub: Number.isFinite(prob) ? `${Math.round(prob * 100)}%` : "", color: "#c084fc", geom: { type: "Point", coordinates: [lon, lat] }, props: p, src: "ml" });
+          const line = Array.isArray(p.track) && p.track.length > 1 ? { type: "LineString", coordinates: p.track.map((q: any) => [q.lon, q.lat]) } : null;
+          add({ key: `ml:${p.id ?? x?.id ?? `${p.model_id}${t}${lon}`}`, lane: "ml", t0: t, t1: Number.isFinite(t1) && t1 > t ? t1 : t, point: !(Number.isFinite(t1) && t1 > t), title: `${p.model_name ?? "Model"} · ${p.target ?? ""}`, sub: Number.isFinite(prob) ? `${Math.round(prob * 100)}%` : "", color: "#c084fc", geom: line ?? { type: "Point", coordinates: [lon, lat] }, props: p, src: "ml" });
         }
       })
       .catch((e) => (e?.status === 404 ? null : errors.push(`model reports: ${e.message}`))),

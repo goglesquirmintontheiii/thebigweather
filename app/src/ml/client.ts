@@ -289,6 +289,7 @@ export function detectionsFromFeatures(feats: any[], ep: Ep): Detection[] {
   const out: Detection[] = [];
   for (const f of feats) {
     const p = f?.properties ?? {};
+    if (p.kind === "track") continue; // models 0.8: the server's path line duplicates properties.track (drawn from that)
     if (p.kind === "outline") {
       // outline without its point (shouldn't happen): use it alone
       if (feats.some((x) => x !== f && x?.properties?.id === p.id && x?.properties?.kind !== "outline")) continue;

@@ -63,7 +63,9 @@ const ljump: OverlayDef = {
   note: "2σ lightning-jump algorithm on GLM total lightning per tracked storm cell. Rings: jump (yellow 2σ, orange 3σ, red 4σ, magenta 6σ+).",
 };
 
-const COOL: ExpressionSpecification = ["interpolate", ["linear"], ["abs", ["to-number", ["coalesce", ["get", "cooling_k15"], ["get", "dT"]], 0]], 0, "#60a5fa", 5, "#22d3ee", 10, "#facc15", 20, "#f97316", 30, "#ef4444", 45, "#d946ef"];
+// server (overlays/satobs.rs): kind "ot" (bt_k, delta_k = colder than the anvil, cooling_k_15min) or
+// "ctc" (cloud-top cooling only: bt_k, cooling_k_15min)
+const COOL: ExpressionSpecification = ["interpolate", ["linear"], ["abs", ["to-number", ["coalesce", ["get", "cooling_k_15min"], ["get", "delta_k"]], 0]], 0, "#60a5fa", 5, "#22d3ee", 10, "#facc15", 20, "#f97316", 30, "#ef4444", 45, "#d946ef"];
 const ot: OverlayDef = {
   id: "ot",
   name: "Overshooting tops / cooling",
@@ -72,22 +74,22 @@ const ot: OverlayDef = {
   style: { opacity: 0.9, size: 1, labels: true },
   layers: (s, st) => [
     { id: `${s}-glow`, type: "circle", source: s, paint: { "circle-color": COOL, "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 7 * st.size, 9, 15 * st.size], "circle-opacity": 0.25 * st.opacity, "circle-blur": 0.6 } } as LayerSpecification,
-    { id: `${s}-pt`, type: "symbol", source: s, layout: { "text-field": "▲", "text-font": bold, "text-size": ["interpolate", ["linear"], ["zoom"], 4, 13 * st.size, 9, 20 * st.size], "text-allow-overlap": true }, paint: { "text-color": COOL, "text-halo-color": "#000", "text-halo-width": 1.2, "text-opacity": st.opacity } } as LayerSpecification,
-    ...(st.labels ? [{ id: `${s}-text`, type: "symbol", source: s, minzoom: 6, layout: { "text-field": ["concat", ["to-string", ["round", ["to-number", ["get", "tb"], 0]]], " K"], "text-font": font, "text-size": 10, "text-offset": [0, 1.3], "text-anchor": "top" }, paint: halo } as LayerSpecification] : []),
+    { id: `${s}-pt`, type: "symbol", source: s, layout: { "text-field": ["match", ["get", "kind"], "ctc", "▼", "▲"], "text-font": bold, "text-size": ["interpolate", ["linear"], ["zoom"], 4, 13 * st.size, 9, 20 * st.size], "text-allow-overlap": true }, paint: { "text-color": COOL, "text-halo-color": "#000", "text-halo-width": 1.2, "text-opacity": st.opacity } } as LayerSpecification,
+    ...(st.labels ? [{ id: `${s}-text`, type: "symbol", source: s, minzoom: 6, layout: { "text-field": ["concat", ["to-string", ["round", ["to-number", ["get", "bt_k"], 0]]], " K"], "text-font": font, "text-size": 10, "text-offset": [0, 1.3], "text-anchor": "top" }, paint: halo } as LayerSpecification] : []),
   ],
   click: (p) => ({
-    title: "Overshooting top",
+    title: p.kind === "ctc" ? "Rapid cloud-top cooling" : "Overshooting top",
     sub: `GOES · ${ago(p.t)}`,
     color: "#f97316",
     rows: [
-      ["Cloud-top brightness temp.", `${f1(p.tb)} K (${f1(num(p.tb) != null ? +p.tb - 273.15 : null)} °C)`],
-      ["Colder than anvil by", `${f1(p.dT)} K`],
-      ["Cooling, last 15 min", `${f1(p.cooling_k15)} K`],
+      ["Cloud-top brightness temp.", `${f1(p.bt_k)} K (${f1(num(p.bt_k) != null ? +p.bt_k - 273.15 : null)} °C)`],
+      ...(p.delta_k != null ? [["Colder than anvil by", `${f1(Math.abs(+p.delta_k))} K`] as [string, string]] : []),
+      ["Cooling, last 15 min", p.cooling_k_15min != null ? `${f1(p.cooling_k_15min)} K` : "—"],
       ["Time", when(p.t)],
     ],
     text: "Overshooting tops mark very strong updrafts punching into the stratosphere; rapid cloud-top cooling means a storm is intensifying.",
   }),
-  note: "GOES ABI overshooting-top detections and 15-minute cloud-top cooling rate (▲ coloured by cooling: blue weak → magenta ≥ 45 K).",
+  note: "GOES ABI overshooting-top detections and 15-minute cloud-top cooling rate (▲ overshooting top, ▼ rapid cooling only; coloured by cooling: blue weak → magenta ≥ 45 K).",
 };
 
 // ---------- Hazards: fires, ShakeMap, tsunami ----------
@@ -97,33 +99,37 @@ const goesfire: OverlayDef = {
   name: "GOES fire detections (FDC)",
   group: "Hazards",
   refresh: 600,
-  options: [{ key: "conf", label: "Confidence", choices: [["all", "All"], ["high", "Processed / saturated only"]], def: "all" }],
+  // server (overlays/satobs.rs) filters: sat=19|18, conf=high|medium|all (default: all but low probability)
+  options: [
+    { key: "sat", label: "Satellite", choices: [["19", "GOES-East"], ["18", "GOES-West"]], def: "19" },
+    { key: "conf", label: "Confidence", choices: [["medium", "High + medium"], ["high", "High only"], ["all", "All (incl. low)"]], def: "medium" },
+  ],
   style: { opacity: 0.9, size: 1, labels: false },
-  prepare: (fc, o) => ({ ...fc, features: (fc?.features ?? []).filter((f: any) => o.conf !== "high" || [10, 11, 30, 31].includes(+f.properties?.mask)) }),
   layers: (s, st) => [
     {
       id: `${s}-pt`,
       type: "circle",
       source: s,
-      layout: { "circle-sort-key": ["to-number", ["get", "frp"], 0] },
+      layout: { "circle-sort-key": ["to-number", ["get", "frp_mw"], 0] },
       paint: {
-        "circle-color": ["interpolate", ["linear"], ["to-number", ["get", "frp"], 0], 0, "#fde047", 50, "#fb923c", 200, "#ef4444", 1000, "#b91c1c"],
-        "circle-radius": ["interpolate", ["linear"], ["sqrt", ["max", 1, ["to-number", ["get", "frp"], 1]]], 1, 3 * st.size, 10, 6 * st.size, 30, 11 * st.size],
+        "circle-color": ["interpolate", ["linear"], ["to-number", ["get", "frp_mw"], 0], 0, "#fde047", 50, "#fb923c", 200, "#ef4444", 1000, "#b91c1c"],
+        "circle-radius": ["interpolate", ["linear"], ["sqrt", ["max", 1, ["to-number", ["get", "frp_mw"], 1]]], 1, 3 * st.size, 10, 6 * st.size, 30, 11 * st.size],
         "circle-opacity": st.opacity,
         "circle-stroke-color": "#450a0a",
         "circle-stroke-width": 1,
       },
     } as LayerSpecification,
-    ...(st.labels ? [{ id: `${s}-text`, type: "symbol", source: s, minzoom: 8, layout: { "text-field": ["concat", ["to-string", ["round", ["to-number", ["get", "frp"], 0]]], " MW"], "text-font": font, "text-size": 10, "text-offset": [0, 1.2], "text-anchor": "top" }, paint: halo } as LayerSpecification] : []),
+    ...(st.labels ? [{ id: `${s}-text`, type: "symbol", source: s, minzoom: 8, layout: { "text-field": ["concat", ["to-string", ["round", ["to-number", ["get", "frp_mw"], 0]]], " MW"], "text-font": font, "text-size": 10, "text-offset": [0, 1.2], "text-anchor": "top" }, paint: halo } as LayerSpecification] : []),
   ],
   click: (p) => ({
-    title: `Fire hotspot · ${f1(p.frp, 0)} MW`,
-    sub: `GOES Fire Detection & Characterization · ${ago(p.t)}`,
+    title: `Fire hotspot · ${num(p.frp_mw) != null ? `${f1(p.frp_mw, 0)} MW` : String(p.class ?? "")}`,
+    sub: `GOES${p.sat ? `-${p.sat}` : ""} Fire Detection & Characterization · ${ago(p.t)}`,
     color: "#ef4444",
     rows: [
-      ["Fire radiative power", `${f1(p.frp)} MW`],
-      ["Fire temperature", num(p.temp) != null ? `${f1(p.temp, 0)} K` : "—"],
-      ["Mask", FDC_MASK[+p.mask] ?? String(p.mask ?? "—")],
+      ["Fire radiative power", num(p.frp_mw) != null ? `${f1(p.frp_mw)} MW` : "—"],
+      ["Fire temperature", num(p.temp_k) != null ? `${f1(p.temp_k, 0)} K` : "—"],
+      ["Fire area", num(p.area_km2) != null ? `${f1(p.area_km2, 3)} km²` : "—"],
+      ["Mask", FDC_MASK[+p.mask] ?? String(p.class ?? p.mask ?? "—")],
       ["Time", when(p.t)],
     ],
   }),
@@ -133,7 +139,9 @@ const FDC_MASK: Record<number, string> = { 10: "Processed fire", 11: "Saturated 
 
 export const MMI_COLORS = ["#ffffff", "#ffffff", "#bfccff", "#a0e6ff", "#80ffff", "#7aff93", "#ffff00", "#ffc800", "#ff9100", "#ff0000", "#c80000"]; // index = MMI (0..10)
 const ROMAN = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X+"];
-const MMI_C: ExpressionSpecification = ["interpolate", ["linear"], ["to-number", ["get", "mmi"], 0], 1, MMI_COLORS[1], 2, MMI_COLORS[2], 3, MMI_COLORS[3], 4, MMI_COLORS[4], 5, MMI_COLORS[5], 6, MMI_COLORS[6], 7, MMI_COLORS[7], 8, MMI_COLORS[8], 9, MMI_COLORS[9], 10, MMI_COLORS[10]];
+const MMI_C0: ExpressionSpecification = ["interpolate", ["linear"], ["to-number", ["get", "mmi"], 0], 1, MMI_COLORS[1], 2, MMI_COLORS[2], 3, MMI_COLORS[3], 4, MMI_COLORS[4], 5, MMI_COLORS[5], 6, MMI_COLORS[6], 7, MMI_COLORS[7], 8, MMI_COLORS[8], 9, MMI_COLORS[9], 10, MMI_COLORS[10]];
+/** the server's own contour colour (USGS palette) when given, else the MMI ramp */
+const MMI_C: ExpressionSpecification = ["case", ["has", "color"], ["to-color", ["get", "color"], "#ffffff"], MMI_C0];
 const MMI_WORDS = ["", "Not felt", "Weak", "Weak", "Light", "Moderate", "Strong", "Very strong", "Severe", "Violent", "Extreme"];
 const shakemap: OverlayDef = {
   id: "shakemap",
@@ -142,17 +150,25 @@ const shakemap: OverlayDef = {
   refresh: 600,
   params: { recent: "1" },
   style: { opacity: 0.55, size: 1, labels: true },
+  // server (overlays/hazards.rs): contour lines {kind:"contour", value, units, color, weight, param: mmi|pga|pgv}
+  // + one {kind:"epicenter", event, mag, place, time, depth_km, url, maxmmi, …} point per event
   prepare: (fc) => {
-    // the event (epicentre) arrives as a Point feature with kind:"event", or as fc.event
-    const ev = fc?.event;
-    const feats = [...(fc?.features ?? [])].sort((a: any, b: any) => (+a.properties?.mmi || 0) - (+b.properties?.mmi || 0));
-    if (ev && ev.lon != null && ev.lat != null) feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [+ev.lon, +ev.lat] }, properties: { ...ev, kind: "event" } });
+    const feats = [...(fc?.features ?? [])]
+      .map((f: any) => {
+        const p = f.properties ?? {};
+        if (p.kind === "epicenter") {
+          const [lon, lat] = f.geometry?.coordinates ?? [];
+          return { ...f, properties: { ...p, kind: "event", mmi: p.maxmmi, lat, lon, id: p.event } };
+        }
+        return { ...f, properties: { ...p, mmi: p.param === "mmi" || p.param == null ? p.value : null } };
+      })
+      .sort((a: any, b: any) => (+a.properties?.value || 0) - (+b.properties?.value || 0));
     return { ...fc, features: feats };
   },
   layers: (s, st) => [
     { id: `${s}-fill`, type: "fill", source: s, filter: POLY, paint: { "fill-color": MMI_C, "fill-opacity": st.opacity } } as LayerSpecification,
     { id: `${s}-line`, type: "line", source: s, filter: ["any", POLY, LINE], paint: { "line-color": ["case", ["==", ["geometry-type"], "Polygon"], "rgba(0,0,0,0.35)", MMI_C], "line-width": ["case", ["==", ["geometry-type"], "Polygon"], 0.6, 2.2 * st.size] } } as LayerSpecification,
-    ...(st.labels ? [{ id: `${s}-label`, type: "symbol", source: s, filter: ["any", POLY, LINE], minzoom: 5, layout: { "symbol-placement": "line", "text-field": ["match", ["round", ["to-number", ["get", "mmi"], 0]], ...ROMAN.slice(1).flatMap((r, i) => [i + 1, r]), ""] as any, "text-font": bold, "text-size": 11, "symbol-spacing": 260 }, paint: halo } as LayerSpecification] : []),
+    ...(st.labels ? [{ id: `${s}-label`, type: "symbol", source: s, filter: ["any", POLY, LINE], minzoom: 5, layout: { "symbol-placement": "line", "text-field": ["case", ["==", ["get", "param"], "mmi"], ["match", ["round", ["to-number", ["get", "value"], 0]], ...ROMAN.slice(1).flatMap((r, i) => [i + 1, r]), ""], ["concat", ["to-string", ["get", "value"]], " ", ["coalesce", ["get", "units"], ""]]] as any, "text-font": bold, "text-size": 11, "symbol-spacing": 260 }, paint: halo } as LayerSpecification] : []),
     { id: `${s}-epi`, type: "symbol", source: s, filter: ["all", POINT, ["==", ["get", "kind"], "event"]], layout: { "text-field": "★", "text-font": bold, "text-size": 24 * st.size, "text-allow-overlap": true }, paint: { "text-color": "#ef4444", "text-halo-color": "#000", "text-halo-width": 1.5 } } as LayerSpecification,
     ...(st.labels ? [{ id: `${s}-epit`, type: "symbol", source: s, filter: ["all", POINT, ["==", ["get", "kind"], "event"]], layout: { "text-field": ["concat", "M", ["to-string", ["get", "mag"]], "\n", ["coalesce", ["get", "place"], ""]], "text-font": bold, "text-size": 11.5, "text-offset": [0, 1.4], "text-anchor": "top" }, paint: halo } as LayerSpecification] : []),
   ],
@@ -164,17 +180,19 @@ const shakemap: OverlayDef = {
         color: "#ef4444",
         rows: [
           ["Time", when(p.time ?? p.t)],
-          ["Depth", p.depth != null ? `${f1(p.depth)} km` : "—"],
+          ["Depth", (p.depth_km ?? p.depth) != null ? `${f1(p.depth_km ?? p.depth)} km` : "—"],
           ["Max intensity", p.mmi != null ? `${ROMAN[Math.min(10, Math.round(+p.mmi))]} (${MMI_WORDS[Math.min(10, Math.round(+p.mmi))]})` : "—"],
           ["Event", String(p.id ?? p.event ?? "—")],
         ],
         link: ["Seismographs near this quake", `tbw:shake?lat=${p.lat ?? ""}&lon=${p.lon ?? ""}`],
         links: p.url ? [["USGS event page", String(p.url)]] : undefined,
       };
-    const m = Math.min(10, Math.max(1, Math.round(+p.mmi || 1)));
-    return { title: `Intensity ${ROMAN[m]} · ${MMI_WORDS[m]}`, sub: "USGS ShakeMap (Modified Mercalli)", color: MMI_COLORS[m], rows: [["MMI", f1(p.mmi)]], link: ["Open Seismographs", "tbw:shake"] };
+    if (p.param && p.param !== "mmi") return { title: `${String(p.param).toUpperCase()} ${f1(p.value, 2)} ${p.units ?? ""}`, sub: "USGS ShakeMap contour", color: p.color ?? "#ffffff", rows: [["Event", String(p.event ?? "—")]], link: ["Open Seismographs", "tbw:shake"] };
+    const m = Math.min(10, Math.max(1, Math.round(+p.value || +p.mmi || 1)));
+    return { title: `Intensity ${ROMAN[m]} · ${MMI_WORDS[m]}`, sub: "USGS ShakeMap (Modified Mercalli)", color: p.color ?? MMI_COLORS[m], rows: [["MMI", f1(p.value ?? p.mmi)], ["Event", String(p.event ?? "—")]], link: ["Open Seismographs", "tbw:shake"] };
   },
-  note: "USGS ShakeMap shaking intensity (Modified Mercalli, I–X+) for recent significant earthquakes. Click the ★ for the event and to open the Seismographs window.",
+  options: [{ key: "kind", label: "Contours", choices: [["mmi", "Intensity (MMI)"], ["pga", "Peak ground accel."], ["pgv", "Peak ground velocity"]], def: "mmi" }],
+  note: "USGS ShakeMap shaking intensity contours (Modified Mercalli, I–X+) for recent significant earthquakes. Click the ★ for the event and to open the Seismographs window.",
 };
 
 const TSU_COLOR: ExpressionSpecification = ["match", ["downcase", ["to-string", ["get", "level"]]], "warning", "#ef4444", "advisory", "#f97316", "watch", "#facc15", "threat", "#d946ef", "information", "#60a5fa", "info", "#60a5fa", "#94a3b8"];
@@ -184,19 +202,26 @@ const tsunami: OverlayDef = {
   group: "Hazards",
   refresh: 300,
   style: { opacity: 0.6, size: 1, labels: true },
+  // messages without a location come with geometry null: keep them out of the map source
+  prepare: (fc) => ({ ...fc, features: (fc?.features ?? []).filter((f: any) => f?.geometry) }),
   layers: (s, st) => [
     { id: `${s}-fill`, type: "fill", source: s, filter: POLY, paint: { "fill-color": TSU_COLOR, "fill-opacity": st.opacity * 0.6 } } as LayerSpecification,
     { id: `${s}-line`, type: "line", source: s, filter: ["any", POLY, LINE], paint: { "line-color": TSU_COLOR, "line-width": ["case", ["==", ["geometry-type"], "Polygon"], 1.2, 4 * st.size], "line-opacity": 0.95 } } as LayerSpecification,
     { id: `${s}-pt`, type: "circle", source: s, filter: POINT, paint: { "circle-color": TSU_COLOR, "circle-radius": 7 * st.size, "circle-stroke-color": "#000", "circle-stroke-width": 1.2, "circle-opacity": 0.95 } } as LayerSpecification,
-    ...(st.labels ? [{ id: `${s}-text`, type: "symbol", source: s, filter: POINT, layout: { "text-field": ["concat", "Tsunami ", ["to-string", ["get", "level"]]], "text-font": bold, "text-size": 11, "text-offset": [0, 1.3], "text-anchor": "top" }, paint: halo } as LayerSpecification] : []),
+    ...(st.labels ? [{ id: `${s}-text`, type: "symbol", source: s, filter: POINT, layout: { "text-field": ["concat", "Tsunami ", ["to-string", ["get", "level"]], "\n", ["coalesce", ["get", "title"], ""]], "text-font": bold, "text-size": 11, "text-offset": [0, 1.3], "text-anchor": "top" }, paint: halo } as LayerSpecification] : []),
   ],
   click: (p) => ({
     title: `Tsunami ${String(p.level ?? "message").replace(/^./, (c) => c.toUpperCase())}`,
-    sub: `${p.center ?? "Tsunami Warning Center"} · issued ${when(p.issued)}`,
+    sub: `${p.center ?? "Tsunami Warning Center"}${p.title ? ` · ${p.title}` : ""} · ${when(p.updated ?? p.issued)}`,
     color: { warning: "#ef4444", advisory: "#f97316", watch: "#facc15", threat: "#d946ef" }[String(p.level).toLowerCase()] ?? "#60a5fa",
-    rows: [["Issued", when(p.issued)], ["Center", String(p.center ?? "—")]],
-    text: p.message ? String(p.message).slice(0, 1600) : undefined,
-    link: ["tsunami.gov", "https://www.tsunami.gov/"],
+    rows: [
+      ["Updated", when(p.updated ?? p.issued)],
+      ["Center", String(p.center ?? "—")],
+      ...(p.magnitude != null ? [["Magnitude", String(p.magnitude)] as [string, string]] : []),
+      ...(p.area ? [["Area", String(p.area)] as [string, string]] : []),
+    ],
+    text: (p.text ?? p.summary ?? p.message) ? String(p.text ?? p.summary ?? p.message).slice(0, 1600) : undefined,
+    link: p.bulletin_url ? ["Bulletin", String(p.bulletin_url)] : ["tsunami.gov", "https://www.tsunami.gov/"],
   }),
   note: "NTWC / PTWC tsunami warnings, advisories, watches and threat messages: coastal areas and the source point (red warning, orange advisory, yellow watch, magenta threat, blue information).",
 };
@@ -213,21 +238,23 @@ function placeLayers(s: string, st: { opacity: number; size: number; labels: boo
 function placeClick(kind: string, color: string) {
   return (p: any) => ({
     title: p.name ?? kind,
-    sub: [kind, p.status ?? p.open ?? ""].filter(Boolean).join(" · "),
+    sub: [kind, p.status ?? p.open ?? "", p.org ?? ""].filter(Boolean).join(" · "),
     color,
     rows: [
-      ...(p.address ? [["Address", String(p.address)] as [string, string]] : []),
+      ...(p.address || p.addr ? [["Address", String(p.address || p.addr)] as [string, string]] : []),
       ...(p.city || p.state ? [["Place", [p.city, p.state].filter(Boolean).join(", ")] as [string, string]] : []),
       ...(p.phone ? [["Phone", String(p.phone)] as [string, string]] : []),
       ...(p.capacity != null ? [["Capacity", `${p.capacity}${p.population != null ? ` (${p.population} there)` : ""}`] as [string, string]] : []),
       ...(p.beds != null ? [["Beds", String(p.beds)] as [string, string]] : []),
       ...(p.trauma ? [["Trauma level", String(p.trauma)] as [string, string]] : []),
       ...(p.type ? [["Type", String(p.type)] as [string, string]] : []),
-      ...(p.hours ? [["Hours", String(p.hours)] as [string, string]] : []),
-      ...(p.pets != null ? [["Pets", p.pets ? "Allowed" : "No"] as [string, string]] : []),
-      ...(p.updated ? [["Updated", when(p.updated)] as [string, string]] : []),
+      ...(p.hours || p.hours_open ? [["Hours", String(p.hours ?? p.hours_open)] as [string, string]] : []),
+      ...(p.pets != null ? [["Pets", typeof p.pets === "string" ? p.pets : p.pets ? "Allowed" : "No"] as [string, string]] : []),
+      ...(p.wheelchair ? [["Wheelchair access", p.wheelchair === "Y" ? "Yes" : String(p.wheelchair)] as [string, string]] : []),
+      ...(p.helipad ? [["Helipad", p.helipad === "Y" ? "Yes" : String(p.helipad)] as [string, string]] : []),
+      ...(p.updated || p.source_date ? [["Updated", p.updated ? when(p.updated) : String(p.source_date)] as [string, string]] : []),
     ],
-    link: p.url ? (["More", String(p.url)] as [string, string]) : undefined,
+    link: p.url || p.website || p.web ? (["More", String(p.url || p.website || p.web)] as [string, string]) : p.osm ? (["OpenStreetMap", String(p.osm)] as [string, string]) : undefined,
   });
 }
 const shelters: OverlayDef = { id: "shelters", name: "Shelters (open)", group: "Emergency services", refresh: 900, view: "bbox", minzoom: 5, style: { opacity: 0.95, size: 1, labels: true }, layers: (s, st) => placeLayers(s, st, "#16a34a", "S"), click: placeClick("Shelter", "#16a34a"), note: "Open emergency shelters (FEMA / American Red Cross National Shelter System), loaded for the map view." };
@@ -238,13 +265,17 @@ const centers: OverlayDef = {
   group: "Emergency services",
   refresh: 1800,
   view: "bbox",
-  minzoom: 5,
+  minzoom: 6,
+  maxKm2: 100000, // server (Overpass) refuses boxes over 25 square degrees
   style: { opacity: 0.95, size: 1, labels: true },
   layers: (s, st) => [
-    ...placeLayers(s, st, "#0ea5e9", "C").map((l) => (l.id === `${s}-pt` ? ({ ...l, paint: { ...(l as any).paint, "circle-color": ["match", ["downcase", ["to-string", ["coalesce", ["get", "kind"], ["get", "type"], ""]]], "warming", "#f97316", "cooling", "#0ea5e9", "#a855f7"] } } as LayerSpecification) : l)),
+    ...placeLayers(s, st, "#0ea5e9", "C").map((l) => (l.id === `${s}-pt` ? ({ ...l, paint: { ...(l as any).paint, "circle-color": ["case", ["in", "warming", ["downcase", ["concat", ["to-string", ["coalesce", ["get", "name"], ""]], " ", ["to-string", ["coalesce", ["get", "kind"], ""]]]]], "#f97316", ["in", "cooling", ["downcase", ["concat", ["to-string", ["coalesce", ["get", "name"], ""]], " ", ["to-string", ["coalesce", ["get", "kind"], ""]]]]], "#0ea5e9", "#a855f7"] } } as LayerSpecification) : l)),
   ],
-  click: (p) => placeClick(/warm/i.test(p.kind ?? p.type ?? "") ? "Warming centre" : /cool/i.test(p.kind ?? p.type ?? "") ? "Cooling centre" : "Cooling / warming centre", /warm/i.test(p.kind ?? p.type ?? "") ? "#f97316" : "#0ea5e9")(p),
-  note: "Cooling centres (blue) and warming centres (orange) published by states and cities, loaded for the map view.",
+  click: (p) => {
+    const k = `${p.name ?? ""} ${p.kind ?? ""}`;
+    return placeClick(/warm/i.test(k) ? "Warming centre" : /cool/i.test(k) ? "Cooling centre" : String(p.kind || "Shelter / assembly point").replace(/^./, (c) => c.toUpperCase()), /warm/i.test(k) ? "#f97316" : /cool/i.test(k) ? "#0ea5e9" : "#a855f7")(p);
+  },
+  note: "Cooling centres (blue), warming centres (orange) and other shelters / assembly points (purple) from OpenStreetMap, loaded for the map view (at most ~25 square degrees around the centre); coverage varies.",
 };
 
 // ---------- splice into the catalog ----------
@@ -307,7 +338,7 @@ function drawB(m: MLMap) {
 }
 /** bounds header "w,s,e,n" (or a square of the radar's range around it) → image corners */
 function corners(h: Headers, lat: number, lon: number): [number, number][] {
-  const b = (h.get("x-bounds") ?? h.get("x-bbox") ?? "").split(",").map(Number);
+  const b = (h.get("x-tbw-bounds") ?? h.get("x-bounds") ?? "").split(",").map(Number);
   let [w, s, e, n] = b.length === 4 && b.every(Number.isFinite) ? b : [NaN, NaN, NaN, NaN];
   if (!Number.isFinite(w)) {
     const km = +(h.get("x-range-km") ?? 230);
@@ -332,9 +363,17 @@ async function loadB() {
   }
   blockageState.value = { loading: true };
   try {
-    const r = await fetch(`${api.base}/api/radar/blockage?site=${encodeURIComponent(site)}&tilt=${tilt}`, { headers: api.token ? { Authorization: `Bearer ${api.token}` } : {} });
+    const r = await fetch(`${api.base}/api/radar/blockage?site=${encodeURIComponent(site)}&tilt=${tilt}&format=png&size=1024`, { headers: api.token ? { Authorization: `Bearer ${api.token}` } : {} });
     if (sig !== bSig) return;
-    if (!r.ok) throw new Error(r.status === 404 ? "not available on this server" : `HTTP ${r.status}`);
+    if (!r.ok) {
+      let msg = "";
+      try {
+        msg = (await r.json())?.error ?? "";
+      } catch {
+        /* not json */
+      }
+      throw new Error(r.status === 404 && !msg ? "not available on this server" : msg || `HTTP ${r.status}`);
+    }
     const ct = r.headers.get("content-type") ?? "";
     const cs = currentSite.value;
     if (/json/.test(ct)) {

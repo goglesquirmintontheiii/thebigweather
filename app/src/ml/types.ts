@@ -269,7 +269,7 @@ export interface Model {
   family_key?: string;
   history_compatible?: boolean;
   history_reason?: string;
-  coverage?: { region?: string; confidence?: string | number } | null;
+  coverage?: { region?: string | number[]; states?: string[]; confidence?: string | number; us_only_sources?: string[]; outside_us?: { allowed?: boolean; confidence?: string; missing_inputs?: string[]; trained_outside_us?: boolean } } | null;
   /** placeholder for a model still training (id "job:<id>") */
   training?: boolean;
   progress?: number;

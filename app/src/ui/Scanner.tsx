@@ -131,6 +131,9 @@ export function ScannerPanel() {
         <label class="sk-chk" title="Off: monitor silently (alerts still show and jump)">
           <input type="checkbox" checked={c.audio} onChange={(e) => setScan((x) => (x.audio = (e.target as HTMLInputElement).checked))} /> Audio
         </label>
+        <label class="sk-chk" title="Keep these stations on the server's 24/7 radio monitor after stopping the scanner (SAME conditions in server rules, notifications)">
+          <input type="checkbox" checked={!!c.keepServer} onChange={(e) => setScan((x) => (x.keepServer = (e.target as HTMLInputElement).checked))} /> Keep on server
+        </label>
       </section>
       {on && (
         <section class={`scn-now ${lock ? "locked" : ""}`}>

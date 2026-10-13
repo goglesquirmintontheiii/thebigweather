@@ -11,14 +11,18 @@ import { FloatPanel } from "./FloatPanel";
 import { fmtTime } from "../util";
 
 export type ChanType = "ntfy" | "pushover" | "email" | "discord" | "telegram" | "webhook";
+/** client view of a server channel: the server stores it flat ({id, name, kind, enabled, …fields}) */
 export interface Channel {
   id: string;
   type: ChanType;
   name: string;
   enabled: boolean;
   config: Record<string, any>;
+  /** secrets the server holds (GET returns them as null with has:{field:true}) */
+  has?: Record<string, boolean>;
 }
-type Field = { k: string; label: string; ph?: string; secret?: boolean; req?: boolean; kind?: "text" | "number" | "bool" | "select"; opts?: [string, string][] };
+type Field = { k: string; label: string; ph?: string; secret?: boolean; req?: boolean; kind?: "text" | "number" | "bool" | "select" | "list"; opts?: [string, string][] };
+// field names = the server's (server/src/notify.rs)
 export const CHAN_TYPES: Record<ChanType, { name: string; fields: Field[]; hint: string }> = {
   ntfy: {
     name: "ntfy",
@@ -27,17 +31,18 @@ export const CHAN_TYPES: Record<ChanType, { name: string; fields: Field[]; hint:
       { k: "server", label: "Server", ph: "https://ntfy.sh" },
       { k: "topic", label: "Topic", ph: "my-storm-alerts-8f3k", req: true },
       { k: "token", label: "Access token", ph: "optional", secret: true },
-      { k: "priority", label: "Priority", kind: "select", opts: [["3", "Default"], ["4", "High"], ["5", "Urgent"], ["2", "Low"]] },
+      { k: "priority", label: "Priority", kind: "select", opts: [["4", "High"], ["3", "Default"], ["5", "Urgent"], ["2", "Low"]] },
+      { k: "allow_lan", label: "Server on my LAN", kind: "bool" },
     ],
   },
   pushover: {
     name: "Pushover",
     hint: "Pushover user key and an application API token from pushover.net.",
     fields: [
-      { k: "user", label: "User key", req: true, secret: true },
-      { k: "token", label: "App token", req: true, secret: true },
-      { k: "device", label: "Device", ph: "optional" },
-      { k: "priority", label: "Priority", kind: "select", opts: [["0", "Normal"], ["1", "High"], ["2", "Emergency (repeat until acknowledged)"], ["-1", "Quiet"]] },
+      { k: "user_key", label: "User key", req: true, secret: true },
+      { k: "app_token", label: "App token", req: true, secret: true },
+      { k: "priority", label: "Priority", kind: "select", opts: [["0", "Normal"], ["1", "High"], ["-1", "Quiet"], ["-2", "Lowest"]] },
+      { k: "sound", label: "Sound", ph: "optional (pushover, siren, …)" },
     ],
   },
   email: {
@@ -46,14 +51,14 @@ export const CHAN_TYPES: Record<ChanType, { name: string; fields: Field[]; hint:
     fields: [
       { k: "host", label: "SMTP host", ph: "smtp.gmail.com", req: true },
       { k: "port", label: "Port", ph: "587", kind: "number" },
-      { k: "tls", label: "Security", kind: "select", opts: [["starttls", "STARTTLS (587)"], ["tls", "TLS (465)"], ["none", "None"]] },
+      { k: "security", label: "Security", kind: "select", opts: [["starttls", "STARTTLS (587)"], ["tls", "TLS (465)"], ["none", "None"]] },
       { k: "username", label: "Username" },
       { k: "password", label: "Password", secret: true },
       { k: "from", label: "From", ph: "alerts@example.com", req: true },
-      { k: "to", label: "To", ph: "me@example.com, team@example.com", req: true },
+      { k: "to", label: "To", ph: "me@example.com, team@example.com", req: true, kind: "list" },
     ],
   },
-  discord: { name: "Discord", hint: "Server settings → Integrations → Webhooks → copy URL.", fields: [{ k: "url", label: "Webhook URL", ph: "https://discord.com/api/webhooks/…", req: true, secret: true }] },
+  discord: { name: "Discord", hint: "Server settings → Integrations → Webhooks → copy URL.", fields: [{ k: "webhook_url", label: "Webhook URL", ph: "https://discord.com/api/webhooks/…", req: true, secret: true }] },
   telegram: {
     name: "Telegram",
     hint: "Create a bot with @BotFather; the chat id is your user or group id.",
@@ -64,18 +69,21 @@ export const CHAN_TYPES: Record<ChanType, { name: string; fields: Field[]; hint:
   },
   webhook: {
     name: "Webhook",
-    hint: "POSTs JSON {rule, message, time, vars} to your URL.",
+    hint: "POSTs JSON {source, rule, title, message, level, url, vars, time} to your URL; the secret goes in the X-TBW-Secret header.",
     fields: [
       { k: "url", label: "URL", ph: "https://…", req: true },
-      { k: "method", label: "Method", kind: "select", opts: [["POST", "POST"], ["PUT", "PUT"]] },
-      { k: "headers", label: "Headers (JSON)", ph: '{"Authorization": "Bearer …"}' },
+      { k: "secret", label: "Secret", ph: "optional", secret: true },
+      { k: "allow_lan", label: "URL on my LAN", kind: "bool" },
     ],
   },
 };
+const SECRET_KEYS = new Set(Object.values(CHAN_TYPES).flatMap((t) => t.fields.filter((f) => f.secret).map((f) => f.k)));
 
 export const notifyOpen = signal(false);
 export const channels = signal<Channel[]>([]);
 export const chanState = signal<{ loading: boolean; error: string; supported: boolean | null }>({ loading: false, error: "", supported: null });
+/** quiet hours (server local time): messages still go out, silently */
+export const quietHours = signal<{ on: boolean; from: string; to: string }>({ on: false, from: "22:00", to: "07:00" });
 
 /** accept an array, {channels: [...]}, or an id-keyed object; tolerate missing fields */
 function parseChannels(j: any): Channel[] {
@@ -84,23 +92,47 @@ function parseChannels(j: any): Channel[] {
     .filter((c) => c && typeof c === "object")
     .map((c) => {
       const type = (String(c.type ?? c.kind ?? "webhook").toLowerCase() === "smtp" ? "email" : String(c.type ?? c.kind ?? "webhook").toLowerCase()) as ChanType;
-      const { id, type: _t, kind: _k, name, enabled, config, ...rest } = c;
-      return { id: String(id ?? uid()), type: CHAN_TYPES[type] ? type : "webhook", name: String(name ?? CHAN_TYPES[type]?.name ?? type), enabled: enabled !== false, config: { ...(config && typeof config === "object" ? config : rest) } };
+      const { id, type: _t, kind: _k, name, enabled, config, has, ...rest } = c;
+      const cfg: Record<string, any> = { ...(config && typeof config === "object" ? config : rest) };
+      for (const k of Object.keys(cfg)) if (cfg[k] == null) delete cfg[k]; // redacted secrets
+      if (Array.isArray(cfg.to)) cfg.to = cfg.to.join(", ");
+      return { id: String(id ?? uid()), type: CHAN_TYPES[type] ? type : "webhook", name: String(name ?? CHAN_TYPES[type]?.name ?? type), enabled: enabled !== false, config: cfg, has: has && typeof has === "object" ? has : {} };
     });
+}
+/** client channel → the server's flat shape; secrets not typed in go as null (= keep the stored one) */
+function toServer(c: Channel): Record<string, any> {
+  const spec = CHAN_TYPES[c.type];
+  const o: Record<string, any> = { id: c.id, name: c.name, kind: c.type, enabled: c.enabled };
+  for (const f of spec.fields) {
+    let v = c.config[f.k];
+    if (f.secret) {
+      o[f.k] = typeof v === "string" && v !== "" ? v : null;
+      continue;
+    }
+    if (v == null || v === "") continue;
+    if (f.kind === "list") v = String(v).split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+    else if (f.kind === "number" || (f.kind === "select" && f.k === "priority")) v = Number(v);
+    else if (f.kind === "bool") v = !!v;
+    o[f.k] = v;
+  }
+  return o;
 }
 export async function loadChannels() {
   chanState.value = { ...chanState.value, loading: true, error: "" };
   try {
-    channels.value = parseChannels(await api.get("/api/notify/channels"));
+    const j: any = await api.get("/api/notify/channels");
+    channels.value = parseChannels(j);
+    if (j?.quiet) quietHours.value = { on: !!j.quiet.on, from: j.quiet.from || "22:00", to: j.quiet.to || "07:00" };
     chanState.value = { loading: false, error: "", supported: true };
   } catch (e: any) {
     const nf = e instanceof ApiError && (e.status === 404 || e.status === 405);
     chanState.value = { loading: false, error: nf ? "" : e.message, supported: nf ? false : chanState.value.supported };
   }
 }
-async function save(list: Channel[]) {
+async function save(list: Channel[], quiet = quietHours.value) {
   try {
-    const r = await api.send("PUT", "/api/notify/channels", { channels: list });
+    const r: any = await api.send("PUT", "/api/notify/channels", { channels: list.map(toServer), quiet });
+    if (r?.quiet) quietHours.value = { on: !!r.quiet.on, from: r.quiet.from || "22:00", to: r.quiet.to || "07:00" };
     const back = parseChannels(r);
     channels.value = back.length || !list.length ? back : list;
     return true;
@@ -120,6 +152,8 @@ export async function testChannel(id: string) {
 }
 
 const masked = (v: any) => typeof v === "string" && /^(\*+|•+|\*{3}.*|.*\*{4,}.*)$/.test(v);
+/** a secret the server already holds */
+const stored = (c: Channel, k: string) => !!c.has?.[k] || masked(c.config[k]);
 
 export function NotifyPanel() {
   if (!notifyOpen.value) return null;
@@ -203,8 +237,23 @@ function Channels() {
           ),
         )}
       </div>
-      <div class="muted small">Secrets are stored on the server and shown masked. Channels deliver for rules set to run on the server (Rules → Run on).</div>
+      <QuietRow />
+      <div class="muted small">Secrets are stored encrypted on the server and never shown again. Channels deliver for rules set to run on the server (Rules → Run on).</div>
     </>
+  );
+}
+function QuietRow() {
+  const q = quietHours.value;
+  const set = (p: Partial<typeof q>) => save(channels.value, { ...q, ...p });
+  return (
+    <div class="row p8-quiet" title="During quiet hours (server's local time) messages are still sent, but silently">
+      <label class="sk-chk">
+        <input type="checkbox" checked={q.on} onChange={(e) => set({ on: (e.target as HTMLInputElement).checked })} /> Quiet hours
+      </label>
+      <input type="time" value={q.from} disabled={!q.on} onChange={(e) => set({ from: (e.target as HTMLInputElement).value })} />
+      <span class="muted">to</span>
+      <input type="time" value={q.to} disabled={!q.on} onChange={(e) => set({ to: (e.target as HTMLInputElement).value })} />
+    </div>
   );
 }
 function summary(c: Channel): string {
@@ -221,7 +270,7 @@ function summary(c: Channel): string {
     case "discord":
       return "webhook";
     case "pushover":
-      return k.device ? `device ${k.device}` : "all devices";
+      return c.has?.user_key ? "user key set" : "no user key";
   }
   return "";
 }
@@ -229,16 +278,9 @@ function summary(c: Channel): string {
 function Editor({ c, isNew, onDone }: { c: Channel; isNew?: boolean; onDone: () => void }) {
   const [d, setD] = useState<Channel>(c);
   const spec = CHAN_TYPES[d.type];
-  const ok = spec.fields.every((f) => !f.req || masked(c.config[f.k]) || String(d.config[f.k] ?? "").trim());
+  const ok = spec.fields.every((f) => !f.req || (f.secret && stored(c, f.k)) || String(d.config[f.k] ?? "").trim());
   const set = (k: string, v: any) => setD({ ...d, config: { ...d.config, [k]: v } });
   const commit = async () => {
-    if (d.type === "webhook" && d.config.headers) {
-      try {
-        JSON.parse(d.config.headers);
-      } catch {
-        return toast("Headers must be JSON", "warn");
-      }
-    }
     const list = isNew ? [...channels.value, d] : channels.value.map((x) => (x.id === d.id ? d : x));
     if (await save(list)) onDone();
   };
@@ -254,7 +296,9 @@ function Editor({ c, isNew, onDone }: { c: Channel; isNew?: boolean; onDone: () 
             {f.label}
             {f.req ? " *" : ""}
           </span>
-          {f.kind === "select" ? (
+          {f.kind === "bool" ? (
+            <input type="checkbox" checked={!!d.config[f.k]} onChange={(e) => set(f.k, (e.target as HTMLInputElement).checked)} />
+          ) : f.kind === "select" ? (
             <select value={String(d.config[f.k] ?? f.opts![0][0])} onChange={(e) => set(f.k, (e.target as HTMLSelectElement).value)}>
               {f.opts!.map(([v, l]) => (
                 <option key={v} value={v}>
@@ -263,7 +307,7 @@ function Editor({ c, isNew, onDone }: { c: Channel; isNew?: boolean; onDone: () 
               ))}
             </select>
           ) : (
-            <input type={(f.secret ? "password" : f.kind === "number" ? "number" : "text") as any} placeholder={masked(c.config[f.k]) ? "(unchanged)" : f.ph} value={masked(d.config[f.k]) ? "" : d.config[f.k] ?? ""} onInput={(e) => set(f.k, f.kind === "number" ? +(e.target as HTMLInputElement).value : (e.target as HTMLInputElement).value)} />
+            <input type={(f.secret ? "password" : f.kind === "number" ? "number" : "text") as any} placeholder={f.secret && stored(c, f.k) ? "(saved — type to replace)" : f.ph} value={masked(d.config[f.k]) ? "" : d.config[f.k] ?? ""} onInput={(e) => set(f.k, f.kind === "number" ? +(e.target as HTMLInputElement).value : (e.target as HTMLInputElement).value)} />
           )}
         </div>
       ))}
@@ -283,10 +327,11 @@ function Editor({ c, isNew, onDone }: { c: Channel; isNew?: boolean; onDone: () 
 function ServerLog() {
   const [log, setLog] = useState<any[] | null>(null);
   const [err, setErr] = useState("");
+  const [info, setInfo] = useState<{ n?: number; iv?: number; quiet?: boolean } | null>(null);
   const load = () =>
     api
       .get("/api/rules/log")
-      .then((j: any) => (setLog(Array.isArray(j) ? j : Array.isArray(j?.log) ? j.log : Array.isArray(j?.entries) ? j.entries : []), setErr("")))
+      .then((j: any) => (setLog(Array.isArray(j) ? j : Array.isArray(j?.log) ? j.log : Array.isArray(j?.entries) ? j.entries : []), setInfo(j && !Array.isArray(j) ? { n: j.server_rules, iv: j.interval_s, quiet: j.quiet_now } : null), setErr("")))
       .catch((e) => setErr(e instanceof ApiError && e.status === 404 ? "This server doesn't run rules yet." : e.message));
   useEffect(() => {
     load();
@@ -297,7 +342,10 @@ function ServerLog() {
   return (
     <>
       <div class="row">
-        <span class="muted small">Rules the server evaluated and what it delivered.</span>
+        <span class="muted small">
+          Rules the server evaluated and what it delivered.
+          {info?.n != null && ` ${info.n} server rule${info.n === 1 ? "" : "s"}, checked every ${info.iv ?? 30} s${info.quiet ? " · quiet hours now" : ""}.`}
+        </span>
         <button class="icon-btn" title="Reload" onClick={load}>
           <RefreshCw size={13} />
         </button>
@@ -307,10 +355,11 @@ function ServerLog() {
         {log && !log.length && <div class="muted small">Nothing fired on the server yet.</div>}
         {(log ?? []).slice(0, 200).map((l, i) => {
           const t = typeof l.t === "number" ? l.t : Date.parse(l.time ?? l.t ?? "");
-          const dl: any[] = Array.isArray(l.deliveries) ? l.deliveries : Array.isArray(l.channels) ? l.channels.map((c: any) => (typeof c === "string" ? { channel: c, ok: l.ok !== false } : c)) : [];
+          const dl: any[] = Array.isArray(l.results) ? l.results : Array.isArray(l.deliveries) ? l.deliveries : Array.isArray(l.channels) ? l.channels.map((c: any) => (typeof c === "string" ? { channel: c, ok: l.ok !== false } : c)) : [];
           return (
             <div key={i} class={l.ok === false || l.error ? "bad" : ""}>
-              <span>{Number.isFinite(t) ? fmtTime(t, true) : "—"}</span> <b>{l.rule ?? l.rule_name ?? l.name ?? "rule"}</b> {l.msg ?? l.message ?? ""}
+              <span>{Number.isFinite(t) ? fmtTime(t, true) : "—"}</span> <b>{l.rule ?? l.rule_name ?? l.name ?? "rule"}</b>
+              {l.test ? <small class="muted"> [test]</small> : null} {l.msg ?? l.message ?? ""}
               {dl.length > 0 && (
                 <small class="p8-dl">
                   {dl.map((x, k) => (
@@ -330,4 +379,4 @@ function ServerLog() {
   );
 }
 
-(window as any).__tbwNotify = { notifyOpen, channels, loadChannels, parseChannels };
+(window as any).__tbwNotify = { notifyOpen, channels, loadChannels, parseChannels, toServer };

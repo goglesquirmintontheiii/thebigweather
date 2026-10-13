@@ -16,7 +16,16 @@ export interface GridLayerDef {
   model?: string;
   step_min: number;
   /** data 0.8: extra request parameters (ensembles: thr = threshold in `units`, with presets) */
-  params?: { thr?: { units?: string; presets?: number[]; def?: number; op?: string } } & Record<string, any>;
+  params?: { thr?: { units?: string; presets?: number[]; default?: number; def?: number; op?: string } } & Record<string, any>;
+  /** data 0.8: suggested contour interval / base (severe + ensemble layers) */
+  contour?: { interval: number; base?: number };
+}
+/** data 0.8: server catalog composites (a fill layer + contour overlays of sibling layers) */
+export interface GridComposite {
+  id: string;
+  name: string;
+  fill: string;
+  contours: { layer: string; interval?: number; base?: number }[];
 }
 export interface ModelInfo {
   id: string;
@@ -81,14 +90,16 @@ export const GIBS: GibsLayer[] = [
 
 export const gridLayers = signal<GridLayerDef[]>([]);
 export const models = signal<ModelInfo[]>([]);
+export const gridComposites = signal<GridComposite[]>([]); // data 0.8
 
 api.on("connected", async () => {
   try {
     const c = await api.get("/api/grid/catalog");
     gridLayers.value = c.layers;
     models.value = c.models;
-  } catch {
-    /* older server */
+    gridComposites.value = Array.isArray(c.composites) ? c.composites : []; // data 0.8
+  } catch (e) {
+    console.warn("grid catalog:", e); // older server
   }
 });
 
@@ -137,9 +148,11 @@ export const isEnsId = (id: string) => id.startsWith("ens/");
 export const isSvrId = (id: string) => id.startsWith("svr/");
 /** threshold spec of an ensemble layer (server units); a default when the catalog gives none */
 export function thrSpec(d: GridLayerDef | undefined): { units: string; presets: number[]; op: string } | null {
-  if (!d || !isEnsId(d.id)) return null;
-  const t = d.params?.thr ?? {};
-  const op = String(t.op ?? d.id.split("/")[3] ?? "gt");
+  // only probability layers (ens/<model>/<var>/prob|proble) take a threshold; mean / spread / min / max don't
+  if (!d || !isEnsId(d.id) || !d.params?.thr) return null;
+  const t = d.params.thr;
+  const op0 = String(t.op ?? d.id.split("/")[3] ?? "gt");
+  const op = op0 === "prob" ? "ge" : op0 === "proble" ? "le" : op0;
   const presets = Array.isArray(t.presets) ? t.presets.map(Number).filter(Number.isFinite) : [];
   return { units: String(t.units ?? d.units ?? ""), presets, op };
 }
@@ -148,7 +161,9 @@ export function ensThr(sel: WeatherSel = settings.value.weather): number | null 
   if (sel.kind !== "grid" || !isEnsId(sel.id)) return null;
   if (sel.thr != null && Number.isFinite(sel.thr)) return sel.thr;
   const sp = thrSpec(gridDef(sel.id));
-  const d = gridDef(sel.id)?.params?.thr?.def;
+  const t0 = gridDef(sel.id)?.params?.thr;
+  if (!t0) return null; // not a probability layer
+  const d = t0.default ?? t0.def;
   const saved = settings.value.p8?.thr?.[sel.id];
   return saved ?? (d != null ? +d : sp?.presets[Math.floor(sp.presets.length / 2)] ?? null);
 }
@@ -174,7 +189,7 @@ export function p8Cmap(d: GridLayerDef): string | null {
   return m.find(([r]) => r.test(v))?.[1] ?? null;
 }
 /** ensemble layers draw probability (%): the catalog's own units belong to the threshold */
-const ensUnitsFix = (d: GridLayerDef) => isEnsId(d.id) && d.units !== "%";
+const ensUnitsFix = (d: GridLayerDef) => isEnsId(d.id) && !!d.params?.thr && d.units !== "%";
 effect(() => {
   const ls = gridLayers.value;
   if (!ls.some((d) => p8Cmap(d) || ensUnitsFix(d))) return;

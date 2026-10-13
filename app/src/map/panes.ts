@@ -12,7 +12,7 @@ import { RadarLayer } from "../radar/RadarLayer";
 import { GridLayer } from "../grid/GridLayer";
 import { fetchSweep, tableById, tableKeyFor, sites, l3For, selectSite } from "../radar/controller";
 import { gridGateKey } from "../gate";
-import { gridDef, gridTable, GIBS } from "../weather";
+import { gridDef, gridTable, GIBS, gridExtraQ } from "../weather";
 import { parseRaster, type Raster } from "../grid/raster";
 import type { Sweep } from "../radar/sweep";
 import { activeTime } from "../active";
@@ -208,7 +208,7 @@ class PaneView {
         if (gen === this.gen) (setStatus(this.idx, { loading: false, error: undefined }), this.show());
         return;
       } else if (cfg.weather.kind === "grid") {
-        const r = await api.get(`/api/grid/frames?layer=${encodeURIComponent(cfg.weather.id)}&n=${settings.value.grid.frames}`);
+        const r = await api.get(`/api/grid/frames?layer=${encodeURIComponent(cfg.weather.id)}&n=${settings.value.grid.frames}${gridExtraQ(cfg.weather) /* data 0.8: ensemble threshold */}`);
         this.frames = r.frames;
       }
       if (gen !== this.gen) return;

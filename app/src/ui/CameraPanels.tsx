@@ -13,6 +13,7 @@ import { mapRef } from "../map/mapview";
 import { currentSite } from "../radar/controller";
 import { distance, bearing, compass, fmtDist } from "../util";
 import { fmtElapsed } from "../radarrec";
+import { TimelapseToggle } from "./Timelapses"; // p8: daily webcam timelapse
 
 export interface CamView {
   id: string;
@@ -434,6 +435,7 @@ function Panel({ c }: { c: CamView }) {
           {c.source && <small> · {c.source}</small>}
         </span>
         <RecControl c={c} />
+        <TimelapseToggle c={c} />
         {c.type !== "rec" && (
           <button class={`icon-btn ${info ? "on" : ""}`} title="Camera info" onPointerDown={stop} onClick={() => setInfo(!info)}>
             <Info size={13} />

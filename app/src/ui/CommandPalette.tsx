@@ -313,6 +313,18 @@ function Palette() {
     return () => clearTimeout(h);
   }, [q, cat]);
   const close = () => (paletteOpen.value = false);
+  // Esc closes even when focus has left the search box
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !paletteOpen.value) return;
+      const t = e.target as HTMLElement;
+      if (t && t.closest && t.closest(".cp8-back input")) return; // the input's own handler runs
+      e.preventDefault();
+      paletteOpen.value = false;
+    };
+    window.addEventListener("keydown", k, true);
+    return () => window.removeEventListener("keydown", k, true);
+  }, []);
   const query = q.trim().toLowerCase();
   const rec = recents();
   const results: { it: PItem; score: number }[] = useMemo(() => {

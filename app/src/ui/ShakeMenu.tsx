@@ -11,8 +11,8 @@ import { CenterModal } from "./CenterModal";
 import { ShakeViewer } from "./ShakeCenter";
 import { AudioWaveform, Search, Star, Plus, Check, ChevronUp, ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-preact";
 import { update } from "../store"; // radio/dash 0.8
-import { shakeEventsDef } from "../overlays/p8adefs"; // radio/dash 0.8
-import { ovlStatus } from "../overlays/manager"; // radio/dash 0.8
+import { shakeEventsDef, shakeEventStations } from "../overlays/p8adefs"; // radio/dash 0.8
+import { ovlStatus, refreshOverlay } from "../overlays/manager"; // radio/dash 0.8
 
 /* radio/dash 0.8: seismic events layer — toggle + its options, right in the Seismographs window */
 function EventsBar() {
@@ -21,6 +21,12 @@ function EventsBar() {
   const opts = { ...Object.fromEntries((shakeEventsDef.options ?? []).map((x) => [x.key, x.def])), ...(o.opts ?? {}) };
   const set = (k: string, v: string) => update((s) => (s.ovl.shakeevents = { ...(s.ovl.shakeevents ?? {}), opts: { ...(s.ovl.shakeevents?.opts ?? {}), [k]: v } }));
   const st = ovlStatus.value.shakeevents;
+  // the server watches only the stations named in the request: favourites + the open / compared ones
+  const watch = shakeEventStations();
+  const wkey = watch.join(",");
+  useEffect(() => {
+    if (on && wkey) refreshOverlay("shakeevents");
+  }, [on, wkey]);
   return (
     <div class={`sk-evbar ${on ? "on" : ""}`}>
       <label class="toggle compact-l" title="Shaking detected across stations by the server, on the map">
@@ -40,7 +46,7 @@ function EventsBar() {
           </select>
         </label>
       ))}
-      <span class="muted small sk-evst">{on ? (st?.loading ? "Loading…" : st?.error ? <span class="err-text">{st.error}</span> : st?.count != null ? `${st.count} event${st.count === 1 ? "" : "s"} · click one to open its seismograms` : "") : "Orange = USGS earthquake, violet = local detection"}</span>
+      <span class="muted small sk-evst" title={watch.length ? `Watching: ${watch.join(", ")}` : undefined}>{on && !watch.length ? "Star stations (up to 20) or open one: the server watches only those" : on ? (st?.loading ? "Loading…" : st?.error ? <span class="err-text">{st.error}</span> : st?.count != null ? `${st.count} event${st.count === 1 ? "" : "s"} on ${watch.length} station${watch.length === 1 ? "" : "s"} · click one to open its seismograms` : "") : "Orange = USGS earthquake, violet = local detection"}</span>
     </div>
   );
 }

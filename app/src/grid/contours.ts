@@ -8,7 +8,7 @@ import { signal, effect, computed } from "@preact/signals";
 import type { Map as MLMap, GeoJSONSource, LayerSpecification } from "maplibre-gl";
 import { api } from "../api";
 import { settings, update, DATA6_DEFAULTS, type Data6Settings } from "../store";
-import { gridDef, gridLayers, type GridLayerDef } from "../weather";
+import { gridDef, gridLayers, ensThr, type GridLayerDef } from "../weather";
 import { activeTime } from "../active";
 import { mapRef } from "../map/mapview";
 
@@ -397,6 +397,7 @@ async function refresh() {
     const iv = o.interval && o.interval > 0 ? o.interval : p?.interval;
     const base = o.base != null && Number.isFinite(o.base) ? o.base : p?.base;
     const q = new URLSearchParams({ layer: cd.id, ...(T ? { time: String(T) } : {}), bbox, smooth: "1", zoom: m.getZoom().toFixed(1) });
+    if (cd.id.startsWith("ens/") && ensThr() != null) q.set("thr", String(ensThr())); // data 0.8
     if (iv) q.set("interval", String(+fromDisplay(cd, iv, true).toPrecision(6)));
     if (iv && base != null) q.set("base", String(+fromDisplay(cd, base, false).toPrecision(6)));
     const url = `/api/grid/contours?${q}`;

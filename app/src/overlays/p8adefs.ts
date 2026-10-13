@@ -1,6 +1,9 @@
 // radio/dash 0.8: "Seismic events" layer — shaking the server detected across Raspberry Shake
-// stations (/api/ovl/shakeevents?min_ml&min_stations&hours → {t, lat?, lon?, stations, max_amp,
-// est_ml?, usgs_id?, kind: "usgs"|"local"}), optionally with lines to the stations that recorded
+// stations (/api/ovl/shakeevents?stations=AM.R1234,…(≤ 20)&min_ml&min_stations&hours(≤ 24) → features
+// {kind: "usgs"|"local", t, lat, lon, stations: [{sta, t_on, amp, ratio, dist_km}], max_amp, est_ml,
+// usgs_id, mag, place, located} + top-level stations: [{sta, lat, lon, cha, data_until, triggers, error}]).
+// The server only polls the stations the request names: the favourite stations, then the one
+// open in the viewer and the compared ones (max 20); optionally with lines to the stations that recorded
 // it. Click: the Seismographs viewer opens at that time with those stations compared. Toggled and
 // configured from the Seismographs window (and Layers → Hazards). Imported once from App.tsx.
 
@@ -8,7 +11,17 @@ import type { LayerSpecification } from "maplibre-gl";
 import { OVERLAYS, overlayDef, type OverlayDef } from "./defs";
 import { settings } from "../store";
 import { isOn, refreshOverlay } from "./manager";
-import { loadStations, openShakeAt, staKey, type ShakeSta } from "../shake";
+import { loadStations, openShakeAt, staKey, shakeSel, shakeCompare, type ShakeSta } from "../shake";
+
+/** stations the server should watch: favourites first, then the viewer's station and compare list (max 20) */
+export function shakeEventStations(): string[] {
+  const out: string[] = [];
+  const add = (k: string) => k && !out.includes(k) && out.length < 20 && out.push(k);
+  (settings.value.shake?.favs ?? []).forEach(add);
+  if (shakeSel.value) add(staKey(shakeSel.value));
+  shakeCompare.value.forEach((s) => add(staKey(s)));
+  return out;
+}
 
 const font = ["Noto Sans Regular"];
 const halo = { "text-color": "#fff", "text-halo-color": "#000", "text-halo-width": 1.3 };
@@ -38,13 +51,20 @@ function staOf(x: any): { key: string; lon: number; lat: number; amp?: number; t
     lon = s.lon;
     lat = s.lat;
   }
-  return { key, lon, lat, amp: typeof x === "object" ? x?.amp ?? x?.max_amp : undefined, t: typeof x === "object" ? x?.t : undefined };
+  return { key, lon, lat, amp: typeof x === "object" ? x?.amp ?? x?.max_amp : undefined, t: typeof x === "object" ? x?.t_on ?? x?.t : undefined };
 }
 
 export function prepareShakeEvents(raw: any, o: Record<string, string>) {
   const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.events) ? raw.events : (raw?.features ?? []).map((f: any) => ({ ...(f.properties ?? {}), ...(f.geometry?.type === "Point" ? { lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] } : {}) }));
   const feats: any[] = [];
   const lines = o.lines !== "off";
+  // the server lists the watched stations with their coordinates
+  for (const s of Array.isArray(raw?.stations) ? raw.stations : []) {
+    if (s?.sta && Number.isFinite(+s.lat) && Number.isFinite(+s.lon)) {
+      staMap ??= new Map();
+      if (!staMap.has(s.sta)) staMap.set(s.sta, { net: String(s.sta).split(".")[0], sta: String(s.sta).split(".").pop()!, lat: +s.lat, lon: +s.lon });
+    }
+  }
   const now = Date.now();
   list.forEach((e, i) => {
     const t = typeof e.t === "number" ? e.t : Date.parse(e.t);
@@ -57,7 +77,7 @@ export function prepareShakeEvents(raw: any, o: Record<string, string>) {
       lat = sts.reduce((a, s) => a + s.lat, 0) / sts.length;
       approx = 1;
     }
-    const ml = Number.isFinite(+e.est_ml) ? +e.est_ml : null;
+    const ml = e.est_ml != null && Number.isFinite(+e.est_ml) ? +e.est_ml : e.mag != null && Number.isFinite(+e.mag) ? +e.mag : null;
     const id = e.id ?? e.usgs_id ?? `ev${i}-${t}`;
     const props = {
       _k: "ev",
@@ -95,10 +115,14 @@ export const shakeEventsDef: OverlayDef = {
   options: [
     { key: "min_ml", label: "Min. level", choices: [["0", "Any"], ["1", "M1+"], ["2", "M2+"], ["3", "M3+"], ["4", "M4+"]], def: "0" },
     { key: "min_stations", label: "Min. stations", choices: [["1", "1"], ["2", "2"], ["3", "3"], ["5", "5"], ["8", "8"]], def: "2" },
-    { key: "hours", label: "Period", choices: [["6", "6 hours"], ["24", "24 hours"], ["72", "3 days"], ["168", "7 days"]], def: "24" },
+    { key: "hours", label: "Period", choices: [["1", "1 hour"], ["6", "6 hours"], ["12", "12 hours"], ["24", "24 hours"]], def: "24" },
     { key: "lines", label: "Station lines", choices: [["on", "Show"], ["off", "Hide"]], def: "on" },
   ],
   style: { opacity: 0.9, size: 1, labels: true },
+  // the station list goes with every request (read when the manager builds the query)
+  get params() {
+    return { stations: shakeEventStations().join(",") };
+  },
   prepare: prepareShakeEvents,
   layers: (s, st) =>
     [

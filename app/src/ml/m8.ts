@@ -54,7 +54,10 @@ export async function setMaxJobs(ep: Ep, n: number) {
 /* ---------- per-model run (GET/PUT /api/ml/models/{id}/run) ---------- */
 export const modelRuns = signal<Record<string, ModelRun & { legacy?: boolean }>>({});
 function normRun(r: any): ModelRun {
-  return { enabled: !!r?.enabled, options: r?.options && typeof r.options === "object" ? r.options : undefined, radars: r?.radars, state: r?.state, last_run: tms(r?.last_run), error: r?.error || undefined, detections: r?.detections != null ? num(r.detections) : undefined };
+  // server: {id, enabled, selected, runner_enabled, options, radars, state: ModelState{state, last_run, error, …} | null, detections}
+  const ms = r?.state && typeof r.state === "object" ? r.state : null;
+  const state = ms ? ms.state : typeof r?.state === "string" ? r.state : undefined;
+  return { enabled: !!r?.enabled, options: r?.options && typeof r.options === "object" ? r.options : undefined, radars: r?.radars, state, last_run: tms(ms?.last_run ?? r?.last_run), error: (ms?.error ?? r?.error) || undefined, detections: r?.detections != null ? num(r.detections) : undefined };
 }
 /** the global runner's view of one model (older servers) */
 function legacyRun(m: Model): ModelRun & { legacy: true } {
@@ -344,10 +347,15 @@ export const reportsState = signal<{ loading?: boolean; error?: string; t?: numb
 function normReport(r: any, ep: Ep): Report | null {
   const p = r?.properties ?? r ?? {};
   const g = r?.geometry?.type === "Point" ? r.geometry.coordinates : null;
-  const lon = num(p.lon ?? g?.[0], NaN), lat = num(p.lat ?? g?.[1], NaN);
-  const t = tms(p.t ?? p.time ?? p.issued);
+  // server Report: {id, model_id, model_name, target, kind, site, first_t, last_t, max_prob, level, cycles,
+  // track:[{t, lat, lon, prob}], ring, open}
+  const tr: any[] = Array.isArray(p.track) ? p.track : [];
+  const best = tr.reduce((a: any, x: any) => (!a || num(x.prob) > num(a.prob) ? x : a), null);
+  const lon = num(p.lon ?? g?.[0] ?? best?.lon, NaN), lat = num(p.lat ?? g?.[1] ?? best?.lat, NaN);
+  const t = tms(p.t ?? p.first_t ?? p.time ?? p.issued);
   if (!t) return null;
-  let prob = num(p.prob, NaN);
+  if (!p.text && p.cycles != null) p.text = `${p.cycles} run${p.cycles === 1 ? "" : "s"}${p.last_t && p.first_t ? `, ${Math.max(1, Math.round((num(p.last_t) - num(p.first_t)) / 60_000))} min` : ""}${p.open ? " · ongoing" : ""}`;
+  let prob = num(p.prob ?? p.max_prob, NaN);
   if (prob > 1) prob /= 100;
   const id = String(p.id ?? r?.id ?? `${p.model_id}|${t}|${lon}`);
   return { key: `${ep}|${id}`, ep, id, t, model_id: String(p.model_id ?? ""), model_name: p.model_name || models.peek().find((m) => m.id === String(p.model_id))?.name || "Model", target: p.target || "custom", prob: Number.isFinite(prob) ? prob : 0, level: p.level, lat, lon, site: p.site, text: p.text ?? p.summary ?? p.description, verified: p.verified ?? null };
@@ -415,7 +423,6 @@ export const ENS_METHODS: [string, string, string][] = [
   ["weighted", "Weighted average", "Members weighted (e.g. by skill)"],
   ["max", "Maximum", "The highest member probability (most sensitive)"],
   ["vote", "Majority vote", "Share of members above their own threshold"],
-  ["stack", "Stacked (logistic)", "A small model learns how to combine the members"],
 ];
 export async function createEnsemble(ep: Ep, body: { name: string; members: string[]; method: string; weights?: number[] }): Promise<Model | null> {
   try {
@@ -468,17 +475,28 @@ export interface CompareResult {
 }
 export const compareRes = signal<CompareResult | null>(null);
 function normCompare(r: any, ep: Ep, id: string, models0: string[]): CompareResult {
-  const sc: Scorecard[] = (Array.isArray(r?.scorecards) ? r.scorecards : r?.scorecards && typeof r.scorecards === "object" ? Object.entries(r.scorecards).map(([k, v]: any) => ({ model_id: k, ...v })) : []).map((s: any) => ({
+  // server: the compare job ({id, kind:"compare", state, progress, error, …}) with `result`
+  // {scorecards:[{model_id, name, roc_auc, csi, pod, far, brier, reliability:[{lo,hi,n,mean_pred,obs_freq}], lead_time:{mean_min}}],
+  //  events:[{group, positive, t, lat, lon, models:[{model_id, max_prob, detected, outcome}]}], ranking, …}
+  const res = r?.result && typeof r.result === "object" && (r.result.scorecards || r.result.events) ? r.result : r;
+  const sc: Scorecard[] = (Array.isArray(res?.scorecards) ? res.scorecards : res?.scorecards && typeof res.scorecards === "object" ? Object.entries(res.scorecards).map(([k, v]: any) => ({ model_id: k, ...v })) : []).map((s: any) => ({
     ...s,
     model_id: String(s.model_id ?? s.id ?? ""),
     name: s.name ?? models.peek().find((m) => m.id === String(s.model_id ?? s.id))?.name ?? String(s.model_id ?? s.id),
     auc: s.auc ?? s.roc_auc,
+    lead_min: s.lead_min ?? s.lead_time?.mean_min ?? undefined,
     reliability: Array.isArray(s.reliability) ? s.reliability.map((b: any) => ({ p: num(b.p ?? b.mean_pred), obs: num(b.obs ?? b.obs_freq), n: num(b.n) })) : undefined,
   }));
-  const ev: CompareEvent[] = (Array.isArray(r?.events) ? r.events : []).map((e: any, i: number) => ({ ...e, id: String(e.id ?? i), t: tms(e.t ?? e.time), outcomes: e.outcomes && typeof e.outcomes === "object" ? e.outcomes : {} }));
+  const ev: CompareEvent[] = (Array.isArray(res?.events) ? res.events : []).map((e: any, i: number) => {
+    let outcomes = e.outcomes && typeof e.outcomes === "object" ? e.outcomes : {};
+    if (Array.isArray(e.models))
+      outcomes = Object.fromEntries(e.models.map((m: any) => [String(m.model_id), { hit: !!m.detected, prob: m.max_prob, fa: m.outcome === "false_alarm" }]));
+    const desc = e.desc ?? (e.positive != null ? `${e.positive ? "Event" : "No event"}${e.group ? ` · ${e.group}` : ""}` : undefined);
+    return { ...e, id: String(e.id ?? e.group ?? i), t: tms(e.t ?? e.time), desc, kind: e.kind ?? (e.positive != null ? (e.positive ? "event" : "null") : undefined), outcomes };
+  });
   let progress = num(r?.progress, 0);
   if (progress > 1) progress /= 100;
-  return { ep, id, state: r?.state ?? (sc.length ? "done" : "running"), progress, error: r?.error, models: Array.isArray(r?.models) ? r.models.map(String) : models0, scorecards: sc, events: ev, t: Date.now() };
+  return { ep, id, state: r?.state ?? (sc.length ? "done" : "running"), progress, error: r?.error ?? undefined, models: Array.isArray(r?.models) ? r.models.map(String) : sc.length ? sc.map((x) => x.model_id) : models0, scorecards: sc, events: ev, t: Date.now() };
 }
 export async function startCompare(ep: Ep, ids: string[], events: Record<string, any>): Promise<string | null> {
   try {
