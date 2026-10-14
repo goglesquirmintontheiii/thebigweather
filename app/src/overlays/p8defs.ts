@@ -257,7 +257,7 @@ function placeClick(kind: string, color: string) {
     link: p.url || p.website || p.web ? (["More", String(p.url || p.website || p.web)] as [string, string]) : p.osm ? (["OpenStreetMap", String(p.osm)] as [string, string]) : undefined,
   });
 }
-const shelters: OverlayDef = { id: "shelters", name: "Shelters (open)", group: "Emergency services", refresh: 900, view: "bbox", minzoom: 5, style: { opacity: 0.95, size: 1, labels: true }, layers: (s, st) => placeLayers(s, st, "#16a34a", "S"), click: placeClick("Shelter", "#16a34a"), note: "Open emergency shelters (FEMA / American Red Cross National Shelter System), loaded for the map view." };
+const shelters: OverlayDef = { id: "shelters", name: "Shelters (open)", group: "Emergency services", refresh: 900, view: "bbox", minzoom: 5, style: { opacity: 0.95, size: 1, labels: true }, layers: (s, st) => placeLayers(s, st, "#16a34a", "S"), click: placeClick("Shelter", "#16a34a"), note: "Open emergency shelters (FEMA / American Red Cross National Shelter System), loaded for the map view. Usually none are open outside disasters; the count here says so." };
 const hospitals: OverlayDef = { id: "hospitals", name: "Hospitals", group: "Emergency services", refresh: 86400, view: "bbox", minzoom: 6, style: { opacity: 0.95, size: 1, labels: true }, layers: (s, st) => placeLayers(s, st, "#dc2626", "H"), click: placeClick("Hospital", "#dc2626"), note: "Hospitals (HIFLD), loaded for the map view." };
 const centers: OverlayDef = {
   id: "centers",
@@ -275,7 +275,7 @@ const centers: OverlayDef = {
     const k = `${p.name ?? ""} ${p.kind ?? ""}`;
     return placeClick(/warm/i.test(k) ? "Warming centre" : /cool/i.test(k) ? "Cooling centre" : String(p.kind || "Shelter / assembly point").replace(/^./, (c) => c.toUpperCase()), /warm/i.test(k) ? "#f97316" : /cool/i.test(k) ? "#0ea5e9" : "#a855f7")(p);
   },
-  note: "Cooling centres (blue), warming centres (orange) and other shelters / assembly points (purple) from OpenStreetMap, loaded for the map view (at most ~25 square degrees around the centre); coverage varies.",
+  note: "Cooling centres (blue), warming centres (orange) and other shelters / assembly points (purple) from OpenStreetMap (centre tags and names), loaded for the map view (at most ~25 square degrees around the centre). Few cities map their cooling centres; check local announcements too.",
 };
 
 // ---------- splice into the catalog ----------

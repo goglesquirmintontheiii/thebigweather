@@ -136,7 +136,7 @@ async function fetchOverlay(id: string) {
     if (id === "waffle" && optsFor(def).status === "on") fc = await withWaffleStatus(fc);
     setData(id, fc);
     const n = fc.features?.reduce?.((a: number, f: any) => a + (f.properties?.cl ?? 1), 0) ?? 0;
-    setStatus(id, { count: id === "cameras" ? n : fc._count ?? fc.features?.length ?? 0, note: fc.loading || fc.pending ? "Loading…" : undefined });
+    setStatus(id, { count: id === "cameras" ? n : fc._count ?? fc.features?.length ?? 0, note: fc.loading || fc.pending ? "Loading…" : typeof fc._status === "string" ? fc._status /* 0.8.1: "FEMA: 0 open shelters now" */ : undefined });
     // flights: the server is still fetching this area — ask again shortly
     if (fc.pending) window.setTimeout(() => isOn(id) && fetchOverlay(id), 3000);
   } catch (e: any) {
@@ -487,3 +487,13 @@ effect(() => {
 api.on("connected", () => {
   for (const id of shown.keys()) fetchOverlay(id);
 });
+
+/* ---------- 0.8.1: identify (overlays/identify.ts) ---------- */
+/** The data currently drawn for an overlay (catalog, files or client feeds). */
+export function overlayData(id: string): any {
+  return data.get(id);
+}
+/** The map the overlays are attached to. */
+export function overlayMap(): MLMap | null {
+  return map;
+}

@@ -10,6 +10,8 @@ import { settings, update } from "../store";
 import { fmtBytes } from "../util";
 import { client, clientHist, sameHost, useClientStats, hasIpc, type ClientStats } from "../clientstats";
 import { Cpu, X, GripVertical, MonitorCog, Server, Minimize2, Maximize2 } from "lucide-preact";
+import { mergedLayout } from "./uiorder"; // 0.8.1
+import "./hotfix081.css"; // 0.8.1
 
 const stats = signal<any>(null);
 const history = signal<number[]>([]);
@@ -87,77 +89,85 @@ const upTxt = (sec: number) => {
 type PanelKey = "stats" | "appstats";
 
 /** draggable glass box whose position lives in settings.panels[key] */
-/* radio/dash 0.8: resizable stats panels — the corner handle scales the whole panel (content
- * included); the scale is remembered per panel (and per mini/full variant). */
-const SCALE_KEY = "tbw.stats.scale";
-const scales = signal<Record<string, number>>((() => {
+/* 0.8.1: resizable in both directions — right edge (width), bottom edge (height) and the corner
+ * (both); double-click a handle to reset. Sizes are remembered per panel ("stats", "appstats",
+ * "stats.merged"); the merged panel picks its layout from its height (uiorder.mergedLayout).
+ * Replaces the radio/dash 0.8 content scaling (old scales become widths). */
+type Size = { w?: number; h?: number };
+const SIZE_KEY = "tbw.stats.size";
+const OLD_SCALE_KEY = "tbw.stats.scale";
+const sizes = signal<Record<string, Size>>(
+  (() => {
+    try {
+      const v = JSON.parse(localStorage.getItem(SIZE_KEY) || "null");
+      if (v && typeof v === "object") return v;
+      // migrate the 0.8 content scale to a width
+      const old = JSON.parse(localStorage.getItem(OLD_SCALE_KEY) || "{}") || {};
+      const base: Record<string, [string, number]> = { stats: ["stats", 220], appstats: ["appstats", 220], "stats.dense": ["stats.merged", 282] };
+      const out: Record<string, Size> = {};
+      for (const [k, s] of Object.entries(old)) if (base[k] && typeof s === "number") out[base[k][0]] = { w: Math.round(base[k][1] * s) };
+      return out;
+    } catch {
+      return {};
+    }
+  })(),
+);
+function setSize(k: string, v: Size | null, persist = true) {
+  const n = { ...sizes.value };
+  if (!v || (v.w == null && v.h == null)) delete n[k];
+  else n[k] = v;
+  sizes.value = n;
+  if (!persist) return;
   try {
-    return JSON.parse(localStorage.getItem(SCALE_KEY) || "{}") || {};
-  } catch {
-    return {};
-  }
-})());
-function setScale(k: string, v: number | null) {
-  const n = { ...scales.value };
-  if (v == null) delete n[k];
-  else n[k] = Math.round(v * 100) / 100;
-  scales.value = n;
-  try {
-    localStorage.setItem(SCALE_KEY, JSON.stringify(n));
+    localStorage.setItem(SIZE_KEY, JSON.stringify(n));
   } catch {
     /* ignore */
   }
 }
-const MIN_SCALE = 0.75;
-const MAX_SCALE = 2.5;
+const MIN_W = 150;
+const MAX_W = 900;
+const MIN_H = 28;
+const MAX_H = 1000;
 
-function Floater({ pk, title, icon, onClose, children, w: w0 = 220, cls = "", extra }: { pk: PanelKey; title: ComponentChildren; icon: ComponentChildren; onClose: () => void; children: ComponentChildren; w?: number; cls?: string; extra?: ComponentChildren }) {
+function Floater({ pk, sk = pk, title, icon, onClose, children, w: w0 = 220, cls = "", extra, autoH = false }: { pk: PanelKey; sk?: string; title: ComponentChildren; icon: ComponentChildren; onClose: () => void; children: ComponentChildren; w?: number; cls?: string; extra?: ComponentChildren; autoH?: boolean }) {
   const p = settings.value.panels[pk] ?? { open: true, x: -1, y: 300 };
   const ref = useRef<HTMLDivElement>(null);
-  const sk = `${pk}${cls.includes("stats-mini") ? ".mini" : cls.includes("stats-dense") ? ".dense" : ""}`;
-  const sc = scales.value[sk] ?? 1;
-  const w = Math.round(w0 * sc);
-  const onResize = (e: PointerEvent) => {
+  const sz = sizes.value[sk] ?? {};
+  const w = sz.w ?? w0;
+  const h = autoH ? undefined : sz.h;
+  const onResize = (dir: "e" | "s" | "se") => (e: PointerEvent) => {
     e.stopPropagation();
     e.preventDefault();
     const el = ref.current!;
     const x0 = e.clientX;
     const y0 = e.clientY;
-    const h0 = el.offsetHeight;
-    const s0 = sc;
-    let last = s0;
-    (el.firstElementChild as HTMLElement).style.width = `${w0}px`;
+    const wStart = el.offsetWidth;
+    const hStart = sizes.value[sk]?.h ?? el.offsetHeight;
+    let raf = 0;
+    let next: Size = { ...(sizes.value[sk] ?? {}) };
     const move = (ev: PointerEvent) => {
-      // drag along the panel's diagonal: project the pointer move onto it (short, wide panels
-      // scale mostly with horizontal moves)
-      const W = w0 * s0;
-      const f = 1 + ((ev.clientX - x0) * W + (ev.clientY - y0) * h0) / (W * W + h0 * h0);
-      last = Math.max(MIN_SCALE, Math.min(MAX_SCALE, s0 * f));
-      const inner = el.firstElementChild as HTMLElement;
-      el.style.width = `${w0 * last}px`;
-      el.style.height = `${inner.offsetHeight * last}px`;
-      inner.style.transform = `scale(${last})`;
+      if (dir !== "s") next.w = Math.round(Math.max(MIN_W, Math.min(MAX_W, window.innerWidth - el.offsetLeft - 4, wStart + ev.clientX - x0)));
+      if (dir !== "e") next.h = Math.round(Math.max(MIN_H, Math.min(MAX_H, window.innerHeight - el.offsetTop - 4, hStart + ev.clientY - y0)));
+      if (!raf)
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          setSize(sk, { ...next }, false);
+        });
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
-      setScale(sk, Math.abs(last - 1) < 0.03 ? null : last);
+      cancelAnimationFrame(raf);
+      setSize(sk, next);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
-  // the scaled content doesn't take layout space: size the frame from the content's own height
-  useEffect(() => {
-    const el = ref.current;
-    const inner = el?.firstElementChild as HTMLElement | null;
-    if (!el || !inner) return;
-    const fit = () => (el.style.height = sc === 1 ? "" : `${inner.offsetHeight * sc}px`);
-    fit();
-    const ro = new ResizeObserver(fit);
-    ro.observe(inner);
-    return () => ro.disconnect();
-  }, [sc]);
-  /* end radio/dash 0.8 */
+  const reset = (dir: "e" | "s" | "se") => () => {
+    const cur = sizes.value[sk] ?? {};
+    setSize(sk, dir === "se" ? null : dir === "e" ? { h: cur.h } : { w: cur.w });
+  };
+  /* end 0.8.1 */
   const setPos = (x: number, y: number) => update((st) => (st.panels[pk] = { ...(st.panels[pk] ?? { open: true }), x, y } as any));
   useEffect(() => {
     const fix = () => {
@@ -187,9 +197,10 @@ function Floater({ pk, title, icon, onClose, children, w: w0 = 220, cls = "", ex
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+  const tip = `${Math.round(w)} × ${Math.round(h ?? ref.current?.offsetHeight ?? 0)} px`;
   return (
-    <div ref={ref} class={`stats glass stats-${pk} ${cls} ${sc !== 1 ? "scaled" : ""}`} style={{ left: `${x}px`, top: `${y}px`, width: `${w}px` }}>
-      <div class="stats-zoom" style={sc === 1 ? undefined : { width: `${w0}px`, transform: `scale(${sc})` }}>
+    <div ref={ref} class={`stats glass stats-${pk} ${cls} ${h != null ? "sized" : ""}`} style={{ left: `${x}px`, top: `${y}px`, width: `${w}px`, ...(h != null ? { height: `${h}px` } : {}) }}>
+      <div class="stats-zoom">
         <div class="stats-head" onPointerDown={onDown as any}>
           <GripVertical size={12} />
           {icon}
@@ -201,11 +212,14 @@ function Floater({ pk, title, icon, onClose, children, w: w0 = 220, cls = "", ex
         </div>
         {children}
       </div>
-      {/* radio/dash 0.8: resize handle (double-click: original size) */}
-      <span class="stats-resize" role="separator" aria-label="Resize panel" title={`Drag to resize (${Math.round(sc * 100)}%) · double-click to reset`} onPointerDown={onResize as any} onDblClick={() => setScale(sk, null)} />
+      {/* 0.8.1: resize from the right edge, bottom edge or corner (double-click: original size) */}
+      <span class="stats-edge e" role="separator" aria-label="Resize width" title={`Drag to change the width · double-click to reset`} onPointerDown={onResize("e") as any} onDblClick={reset("e")} />
+      <span class="stats-edge s" role="separator" aria-label="Resize height" title={`Drag to change the height · double-click to reset`} onPointerDown={onResize("s") as any} onDblClick={reset("s")} />
+      <span class="stats-resize" role="separator" aria-label="Resize panel" title={`Drag to resize (${tip}) · double-click to reset`} onPointerDown={onResize("se") as any} onDblClick={reset("se")} />
     </div>
   );
 }
+
 
 /** machine-wide rows from the server's stats */
 function SystemRows({ s }: { s: any }) {
@@ -553,15 +567,30 @@ function Merged({ s, c }: { s: any; c: ClientStats | null }) {
     },
   ];
   const close = () => update((x) => ((x.panels.stats = { ...x.panels.stats, open: false }), (x.panels.appstats = { ...(x.panels.appstats ?? { x: -1, y: 300 }), open: false })));
+  /* 0.8.1: the layout follows the panel's height (drag the bottom edge): one line → dense grid →
+   * the original full view; the button switches mini / dense and clears the height */
+  const SK = "stats.merged";
+  const layout = mergedLayout(sizes.value[SK]?.h, mini);
   const toggle = (
-    <button class="icon-btn" title={mini ? "Show details" : "Mini (one line)"} onPointerDown={(e) => e.stopPropagation()} onClick={() => setMini(!mini)}>
-      {mini ? <Maximize2 size={11} /> : <Minimize2 size={11} />}
+    <button
+      class="icon-btn"
+      title={layout === "mini" ? "Show details" : "Mini (one line)"}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={() => {
+        const cur = sizes.value[SK];
+        if (cur?.h != null) setSize(SK, cur.w != null ? { w: cur.w } : null);
+        setMini(layout !== "mini");
+      }}
+    >
+      {layout === "mini" ? <Maximize2 size={11} /> : <Minimize2 size={11} />}
     </button>
   );
-  if (mini)
+  if (layout === "mini")
     return (
       <Floater
         pk="stats"
+        sk={SK}
+        autoH
         cls="stats-dense stats-mini"
         w={300}
         icon={<Cpu size={11} />}
@@ -579,8 +608,40 @@ function Merged({ s, c }: { s: any; c: ClientStats | null }) {
         {null}
       </Floater>
     );
+  if (layout === "full")
+    return (
+      <Floater pk="stats" sk={SK} cls="stats-full" w={282} title="This computer" icon={<Cpu size={12} />} extra={toggle} onClose={close}>
+        <div class="stats-body">
+          {s ? (
+            <Sec title="System">
+              <SystemRows s={s} />
+            </Sec>
+          ) : (
+            c &&
+            c.mem_total > 0 && (
+              <Sec title="System">
+                <ClientSystemRows c={c} />
+              </Sec>
+            )
+          )}
+          {s && (s.proc_cpu != null || s.proc_rss != null) && (
+            <Sec title="Server process">
+              <ServerProcRows s={s} />
+            </Sec>
+          )}
+          {c ? (
+            <Sec title="App">
+              <AppRows c={c} />
+            </Sec>
+          ) : (
+            !s && <div class="muted small">…</div>
+          )}
+        </div>
+      </Floater>
+    );
+  /* end 0.8.1 */
   return (
-    <Floater pk="stats" cls="stats-dense" w={282} title="This computer" icon={<Cpu size={11} />} extra={toggle} onClose={close}>
+    <Floater pk="stats" sk={SK} cls="stats-dense" w={282} title="This computer" icon={<Cpu size={11} />} extra={toggle} onClose={close}>
       <div class="sd-grid">
         <span />
         <i class="sd-col">System</i>
