@@ -241,6 +241,18 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 
 **Android:** Capacitor app reusing the UI with a mobile layout (see Stack). It adds push alerts for saved points and GPS, background location for "alerts where I am", widgets, and Android Auto / car-friendly mode.
 
+**More Android ideas (added in 0.8.1):**
+- **Home-screen widgets:** radar loop for a saved point, conditions, active alerts, and nearest storm with its ETA.
+- **Lock-screen / ongoing notification** while a warning is active for your location: countdown, storm motion and distance, one tap to the radar.
+- **Wear OS companion:** alert vibrations, distance to the nearest storm, a small radar tile.
+- **Data saver for mobile:** lower-resolution frames on cellular, Wi-Fi-only history and model downloads, offline cache of the last hour.
+- **Chaser mode on the phone:** GPS track, storm-relative position, one-tap photo/video log with location, and sharing your position with your Team.
+- **Ground truth from the phone:** quick mPING-style reports and photos that become report pins for you and your Team (and later, with Phase 10 accounts, other users).
+- **Connects to your own server** by QR code from the desktop app (server address + token), with the phone as a thin client; no server on the phone.
+- **Background SAME monitoring** of one radio stream, with an alert sound for your county codes.
+- **Tablet layout** with panes, and stylus drawing.
+- **Android TV / kiosk:** a lean-back display mode with auto-cycling views.
+
 **VR (Meta Quest 3 / 3S):** full functionality, with multi-window support.
 - **Platform:** a Horizon OS app built as a WebXR + PWA hybrid from the same codebase, so every feature works. It is packaged for the Quest store or sideloading.
 - **Panels:** windowed mode uses several 2D panels side by side (map, cameras, radio, forecast, seismograph, radar panes), resizable and placeable in space.
@@ -255,6 +267,26 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 - **Passthrough (mixed reality):** place the tabletop storm or alert dashboards in your room.
 - **Input:** controllers and hand tracking, voice commands (switch layers, play loop), and keyboard/mouse support.
 - **Performance:** foveated rendering, reduced-resolution volumes, and server-side tiling sized for Quest GPUs.
+
+**More VR ideas (added in 0.8.1):**
+- **Storm-scale "god view":** stand inside a supercell's 3D radar volume at true scale, with the mesocyclone, hail core and BWER highlighted by the detection models, and velocity shown as flowing particles.
+- **Tornado track replays:** walk along a historical track with the radar volume, damage survey points and photos at each spot.
+- **Shared VR rooms (with Team):** several people in one space around the same tabletop storm, with voice, pointers and drawings that also show on desktop clients.
+- **Hand-held tools:** a "radar wand" that samples values where you point, a cross-section blade you sweep through the volume, and a hand-held timeline.
+- **Spatial audio:** thunder placed at the real lightning strike direction and distance, wind and rain sound from observations, and radio streams as positioned speakers.
+- **Model viewer:** forecast fields as stacked 3D layers you can peel, with ensemble spread as volume fog.
+- **Comfort options:** vignette while moving, seated mode, snap turning, and a "reduce flashing" setting for lightning.
+- **Desktop bridge:** pick up windows from the desktop app on the same server (same layout, panes and time), and send a view back to the desktop.
+
+**Other Phase 9 ideas (not mobile or VR):**
+- **Briefing generator:** an automatic morning/evening video or slide briefing for chosen points (radar loop, outlook, model summaries, read aloud), saved or sent through notification channels.
+- **Storm-relative "my day" timeline:** one strip per saved point with predicted storm arrival windows from storm tracks and model forecasts.
+- **Smarter detection models:** active learning (mark a detection right/wrong and retrain from it), automatic calibration from verified reports, and model cards (what it was trained on, its skill, its limits).
+- **Verification dashboard** for your own models only (skill over time, by region and season) — not NWS warning verification, which was rejected.
+- **Scheduled recordings:** record radar/cameras/radio on a schedule or when a model or rule fires, with automatic highlight clips.
+- **Layer presets per situation** (Tornado day, Winter storm, Tropical, Fire weather) that switch layers, panes and windows in one click.
+- **Performance auto-tuning:** the app lowers image size and frame cache on its own when it detects stutter, and tells you what it changed.
+- **Server cluster mode:** split heavy work (model training, timelapses, radio decoding) across several servers you own; ties into Phase 10's multi-server support.
 
 ## Phase 10 plan — publication (only when asked)
 
@@ -307,6 +339,7 @@ A large phase that turns TheBigWeather into a product others can install and use
 - Phase 7: done (0.7.0). Test with `docs/PHASE7_CHECKLIST.md`, which also lists the Phase 6 items not yet checked. Canada: ECCC sells single-site volumes (cost-recovered); only per-station GIF images and the national composite are open, so Canadian radars stay composite crops plus a per-station image viewer.
 - Phase 7: user-tested; fixes and requested changes shipped with Phase 8.
 - Phase 8: done (0.8.0). Test with `docs/PHASE8_CHECKLIST.md` (also covers the Phase 7 follow-ups and unchecked items).
+- Phase 8: user-tested; fixes and requested changes shipped as 0.8.1. Test with `docs/PHASE8_HOTFIX_CHECKLIST.md`. From 0.8.1, every build is also published to the repository's `builds` branch, so installs and updates work without a GitHub release.
 - Next: Phase 9 (Android + VR) and Phase 10 (publication) only when asked.
 
 ---

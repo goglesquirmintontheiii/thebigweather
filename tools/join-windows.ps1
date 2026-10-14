@@ -2,19 +2,24 @@
 # Usage:
 #   - builds branch (downloaded as a ZIP and extracted): double-click join-windows.cmd in its folder;
 #     it joins parts\<file>.partNN into <file> for the Windows files (or the names given) and checks SHA256SUMS.
+#   - plain parts sent in chat: put this next to the <file>.partNN files and SHA256SUMS, then
+#     double-click join-windows.cmd.
 #   - zipped release parts: put this next to the ...exe.partN.zip files (and SHA256.txt), then
 #     right-click -> Run with PowerShell, or double-click join-windows.cmd.
 param([string[]]$Names = @())
 $ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
-if ((Test-Path "parts") -and (Test-Path "SHA256SUMS")) {
+$pd = "parts"
+if (-not (Test-Path "parts")) { $pd = "." }
+if ((Test-Path "SHA256SUMS") -and @(Get-ChildItem -LiteralPath $pd | Where-Object { $_.Name -match '\.part\d+$' }).Count -gt 0) {
+  $plain = ($pd -eq ".")
   $sums = @{}
   foreach ($l in Get-Content "SHA256SUMS") { if ($l -match '^([0-9a-fA-F]{64})\s+\*?(.+)$') { $sums[$Matches[2]] = $Matches[1].ToLower() } }
   if (-not $Names -or $Names.Count -eq 0) { $Names = @($sums.Keys | Where-Object { $_ -like "*.exe" -or $_ -like "*windows*" -or $_ -like "tbw-web-*" } | Sort-Object) }
   $bad = 0
   foreach ($name in $Names) {
-    $parts = @(Get-ChildItem -LiteralPath "parts" | Where-Object { $_.Name -match ('^' + [regex]::Escape($name) + '\.part\d+$') } | Sort-Object Name)
-    if ($parts.Count -eq 0) { Write-Host "No parts for $name"; $bad = 1; continue }
+    $parts = @(Get-ChildItem -LiteralPath $pd | Where-Object { $_.Name -match ('^' + [regex]::Escape($name) + '\.part\d+$') } | Sort-Object Name)
+    if ($parts.Count -eq 0) { if ($plain) { continue }; Write-Host "No parts for $name"; $bad = 1; continue }
     $tmp = Join-Path $PSScriptRoot "$name.joining"
     $out = [System.IO.File]::Create($tmp)
     try { foreach ($p in $parts) { $in = [System.IO.File]::OpenRead($p.FullName); try { $in.CopyTo($out) } finally { $in.Close() } } } finally { $out.Close() }

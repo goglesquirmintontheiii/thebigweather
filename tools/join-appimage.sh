@@ -3,15 +3,18 @@
 # Usage:
 #   - builds branch (downloaded as a ZIP): run bash join-appimage.sh [FILE...] in its folder; it
 #     joins parts/<file>.partNN into <file> for every file (or the ones named) and checks SHA256SUMS.
+#   - plain parts sent in chat: put this next to the <file>.partNN files and SHA256SUMS, then run it.
 #   - zipped release parts: put this next to the …AppImage.partN.zip files (and SHA256.txt), then run it.
 set -euo pipefail
 cd "$(dirname "$0")"
-if [[ -d parts && -f SHA256SUMS ]]; then
+PD=parts
+[[ -d parts ]] || PD=.
+if [[ -f SHA256SUMS ]] && compgen -G "$PD/*.part[0-9][0-9]" >/dev/null; then
   if (( $# )); then names=("$@"); else mapfile -t names < <(awk '{print $2}' SHA256SUMS); fi
   bad=0
   for name in "${names[@]}"; do
-    ps=(parts/"$name".part[0-9][0-9])
-    [[ -f "${ps[0]}" ]] || { echo "No parts for $name"; bad=1; continue; }
+    ps=("$PD/$name".part[0-9][0-9])
+    if [[ ! -f "${ps[0]}" ]]; then [[ $PD == . && $# -eq 0 ]] && continue; echo "No parts for $name"; bad=1; continue; fi
     cat "${ps[@]}" > "$name.joining"
     want="$(awk -v n="$name" '$2==n {print $1}' SHA256SUMS)"
     got="$(sha256sum "$name.joining" | cut -d' ' -f1)"
