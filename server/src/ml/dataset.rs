@@ -412,6 +412,13 @@ async fn plan_runs(fetch: &Arc<dyn Fetch>, spec: &TrainSpec, ctl: &Ctl, rng: &mu
     }
     let total: usize = runs.iter().map(|r| r.vols.len()).sum();
     ctl.log(format!("{total} radar volumes to process in {} runs ({list_errs} listing errors)", runs.len()));
+    // 0.8.1: announce the volumes this job needs: ones other running jobs need too are
+    // downloaded once and kept until every job using them is done
+    let keys: Vec<String> = runs.iter().flat_map(|r| r.vols.iter().map(|v| v.0.clone())).collect();
+    let overlap = fetch.plan(&keys);
+    if overlap > 0 {
+        ctl.log(format!("{overlap} of these volumes are shared with other running jobs (downloaded once)"));
+    }
     ctl.counts(|c| c.volumes_total = total);
     if total == 0 {
         bail!("no radar volumes found for the selected events");

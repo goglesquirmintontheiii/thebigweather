@@ -194,7 +194,7 @@ export interface Job {
   base_model?: string | null;
   mode?: string | null;
   /** models 0.8: live resource use and the job's limits */
-  usage?: { cpu_pct?: number; ram_mb?: number; net_mbps?: number } | null;
+  usage?: { cpu_pct?: number; ram_mb?: number; net_mbps?: number; shared?: number; shared_bytes?: number } | null;
   resources?: Resources | null;
   /** models 0.8: "train" | "history" | "run_now" | "compare" … */
   type?: string;
@@ -373,6 +373,17 @@ export interface Detection {
   track?: TrackPt[];
   /** models 0.8: from a history run (kept apart from live detections) */
   hist?: boolean;
+  /** 0.8.1: the server's detection id (for `ml_expired`) */
+  sid?: string;
+  /** 0.8.1: how far to trust prob / value (0–1); see ml/summary.ts */
+  confidence?: number;
+  conf_parts?: Record<string, number>;
+  /** 0.8.1: same storm across cycles and radars → same id (replaces the previous detection) */
+  storm_id?: string;
+  /** 0.8.1: radar cells merged into the storm */
+  storm_cells?: number;
+  /** 0.8.1: summary context (ref_max, vil_max, lead_min, dref, …) */
+  extra?: Record<string, number>;
 }
 export interface TrackPt {
   lead_min: number;

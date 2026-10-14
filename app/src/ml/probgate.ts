@@ -36,8 +36,19 @@ export function setProbGate(layer: string, g: Gate) {
     else s.gates[key] = g;
   });
 }
-/** true when p passes the saved gate of a layer (models 0.8: per-model gate when given the model) */
-export function passesGate(layer: string, p: number, model_id?: string): boolean {
+/* 0.8.1: the detections gate filters by probability or by confidence (a switch on the gate) */
+export type GateBy = "prob" | "conf";
+export const gateBy = (): GateBy => (settings.peek().ml?.gateBy === "conf" ? "conf" : "prob");
+export function setGateBy(v: GateBy) {
+  update((s) => (s.ml = { ...(s.ml ?? {}), gateBy: v }));
+}
+/** the feature property a layer's gate reads (confidence: unknown counts as 1, i.e. passes) */
+const gateProp = (layer: string): any[] => (layer.startsWith(PG_DET) && gateBy() === "conf" ? ["to-number", ["get", "conf"], 1] : ["to-number", ["get", "prob"], 0]);
+
+/** true when p passes the saved gate of a layer (models 0.8: per-model gate when given the model;
+ *  0.8.1: `conf` is tested instead when the detections gate filters by confidence) */
+export function passesGate(layer: string, p: number, model_id?: string, conf?: number): boolean {
+  if (layer === PG_DET && gateBy() === "conf") p = conf != null && Number.isFinite(conf) ? conf : 1;
   if (model_id && layer === PG_DET && perModelOn()) {
     const g = perModelWins().get(model_id);
     if (g) return p >= g[0] - 1e-9 && p <= g[1] + 1e-9;
@@ -74,15 +85,15 @@ export const scrub = signal<Record<string, boolean>>({});
 
 // ---------- layer registry: each gated map layer remembers its own filter ----------
 const base = new Map<string, { layer: string; f: any }>();
-const gexpr = (w: [number, number] | null): ExpressionSpecification | null =>
-  w ? ["all", [">=", ["to-number", ["get", "prob"], 0], w[0] - 1e-9], ["<=", ["to-number", ["get", "prob"], 0], w[1] + 1e-9]] : null;
+const gexpr = (w: [number, number] | null, layer = ""): ExpressionSpecification | null =>
+  w ? (["all", [">=", gateProp(layer), w[0] - 1e-9], ["<=", gateProp(layer), w[1] + 1e-9]] as any) : null;
 /** the layer's filter: the combined window, or (detections, expanded) one window per model */
 function layerExpr(layer: string): ExpressionSpecification | null {
-  if (layer !== PG_DET || !perModelOn()) return gexpr(probGatePeek(layer));
+  if (layer !== PG_DET || !perModelOn()) return gexpr(probGatePeek(layer), layer);
   const wins = perModelWins();
   if (!wins.size) return null;
   const ids = [...wins.keys()];
-  const parts: any[] = ids.map((id) => ["all", ["==", ["to-string", ["get", "model_id"]], id], gexpr(wins.get(id)!)]);
+  const parts: any[] = ids.map((id) => ["all", ["==", ["to-string", ["get", "model_id"]], id], gexpr(wins.get(id)!, layer)]);
   // models without their own gate: everything passes
   parts.push(["!", ["in", ["to-string", ["get", "model_id"]], ["literal", ids]]]);
   return ["any", ...parts] as any;
@@ -118,5 +129,6 @@ effect(() => {
   void gateDrag.value;
   void settings.value.gates;
   void settings.value.ml?.perModelGates; // models 0.8
+  void settings.value.ml?.gateBy; // 0.8.1
   if (!raf) raf = requestAnimationFrame(() => ((raf = 0), apply()));
 });

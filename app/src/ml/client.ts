@@ -252,12 +252,22 @@ export function normDetection(f: any, ep: Ep): Detection | null {
   const model_id = String(p.model_id ?? "");
   const area = p.kind === "area"; // models 0.7: grid models' areas
   const vf = tms(p.valid_from), vt = tms(p.valid_to);
+  // 0.8.1: the same storm keeps its key across cycles (the newer detection replaces the older)
+  const storm = p.storm_id != null && p.storm_id !== "" ? String(p.storm_id) : "";
+  const extra: Record<string, number> = {};
+  for (const k of ["ref_max", "vil_max", "area_km2", "lead_min", "dref", "dvil"]) if (p[k] != null && Number.isFinite(+p[k])) extra[k] = +p[k];
   return {
+    sid: p.id != null ? String(p.id) : f?.id != null ? String(f.id) : undefined,
+    confidence: p.confidence != null && Number.isFinite(+p.confidence) ? Math.max(0, Math.min(1, +p.confidence)) : undefined,
+    conf_parts: p.conf_parts && typeof p.conf_parts === "object" ? p.conf_parts : undefined,
+    storm_id: storm || undefined,
+    storm_cells: p.storm_cells != null ? num(p.storm_cells) : undefined,
+    extra: Object.keys(extra).length ? extra : undefined,
     kind: area ? "area" : "cell",
     valid_from: vf,
     valid_to: vt,
     value: p.value != null && Number.isFinite(+p.value) ? +p.value : undefined,
-    key: area ? `${ep}|${model_id}|area|${p.id ?? f?.id ?? `${c[0].toFixed(2)},${c[1].toFixed(2)}`}|${vf ?? ""}` : `${ep}|${model_id}|${p.cell_id ?? `${p.site}|${c[0].toFixed(2)},${c[1].toFixed(2)}`}`,
+    key: area ? `${ep}|${model_id}|area|${p.id ?? f?.id ?? `${c[0].toFixed(2)},${c[1].toFixed(2)}`}|${vf ?? ""}` : storm ? `${ep}|${model_id}|s:${storm}` : `${ep}|${model_id}|${p.cell_id ?? `${p.site}|${c[0].toFixed(2)},${c[1].toFixed(2)}`}`,
     ep,
     model_id,
     model_name: p.model_name || "Model",
@@ -313,6 +323,8 @@ export const catalogErr = signal("");
 export const models = signal<Model[]>([]);
 export const modelsErr = signal("");
 export const modelsLoading = signal(false);
+/** 0.8.1: endpoints whose model list loaded (their detections of unknown models are stale) */
+export const modelsEps = signal<Set<Ep>>(new Set());
 export const jobs = signal<Job[]>([]);
 export const jobsErr = signal("");
 export const runState = signal<Partial<Record<Ep, RunState>>>({});
@@ -364,6 +376,7 @@ export async function loadModels() {
   modelsLoading.value = true;
   const out: Model[] = [];
   let err = "";
+  const okEps = new Set<Ep>();
   await probeLocal();
   await Promise.all(
     liveEps().map(async (ep) => {
@@ -371,6 +384,7 @@ export async function loadModels() {
         const r = await mlReq<any>(ep, "GET", "/api/ml/models?include_training=1"); // models 0.8: + training placeholders
         const list = Array.isArray(r) ? r : r?.models ?? [];
         out.push(...list.map((m: any) => normModel(m, ep)));
+        okEps.add(ep);
       } catch (e: any) {
         if (ep === "main") err = e.message;
       }
@@ -386,6 +400,7 @@ export async function loadModels() {
       return o && o.updated === m.updated && o.importance?.length && !m.importance?.length ? { ...o, ...m, metrics: o.metrics, importance: o.importance, feature_schema: o.feature_schema, spec: o.spec } : m;
     })
     .sort((a, b) => +!!b.training - +!!a.training || (b.created ?? 0) - (a.created ?? 0)); // models 0.8: training placeholders first
+  modelsEps.value = okEps;
   modelsErr.value = err;
   modelsLoading.value = false;
 }
@@ -434,6 +449,8 @@ export async function deleteModel(m: Model) {
     await mlReq(m.ep, "DELETE", `/api/ml/models/${encodeURIComponent(m.id)}`);
     models.value = models.value.filter((x) => mkey(x) !== mkey(m));
     if (selModel.value === mkey(m)) selModel.value = "";
+    // 0.8.1: its detections, gates and run state go with it (the bundled server sends no WebSocket)
+    for (const h of modelGone) h(m.ep, m.id);
     toast(`Deleted “${m.name}”`);
   } catch (e: any) {
     toast(`Couldn't delete: ${e.message}`, "error");
@@ -713,6 +730,26 @@ function mergeDetections(list: Detection[]) {
   const cut = Date.now() - detMaxAgeMin.value * 60_000;
   detections.value = [...m.values()].filter((d) => detEnd(d) >= cut).sort((a, b) => b.t - a.t).slice(0, 3000);
 }
+/** 0.8.1: a poll's answer replaces that endpoint's live detections (test runs and history stay) */
+function replaceDetections(eps: Set<Ep>, list: Detection[]) {
+  if (!eps.size) return mergeDetections(list);
+  const keep = detections.value.filter((d) => d.test || d.hist || !eps.has(d.ep));
+  const m = new Map(keep.map((d) => [d.key, d]));
+  for (const d of list) {
+    const o = m.get(d.key);
+    if (!o || o.t <= d.t) m.set(d.key, d);
+  }
+  const cut = Date.now() - detMaxAgeMin.value * 60_000;
+  detections.value = [...m.values()].filter((d) => detEnd(d) >= cut).sort((a, b) => b.t - a.t).slice(0, 3000);
+}
+/** 0.8.1: handlers run when a model is deleted (m8.ts clears its run state, gates and detections) */
+export const modelGone: ((ep: Ep, id: string) => void)[] = [];
+/** 0.8.1: drop detections by server id (replaced / expired storms) */
+export function expireDetections(ep: Ep, ids: string[]) {
+  if (!ids.length) return;
+  const s = new Set(ids);
+  if (detections.peek().some((d) => d.ep === ep && d.sid && s.has(d.sid) && !d.test)) detections.value = detections.peek().filter((d) => !(d.ep === ep && d.sid && s.has(d.sid) && !d.test));
+}
 /** models 0.7: an area stays as long as it's valid */
 export const detEnd = (d: Detection) => Math.max(d.t, d.valid_to ?? 0);
 function pruneDetections() {
@@ -723,22 +760,26 @@ function pruneDetections() {
 export async function pollDetections() {
   const eps = liveEps();
   let err = "";
+  const polled = new Set<Ep>();
   lastFetch = Date.now();
   const got: Detection[] = [];
   await Promise.all(
     eps.map(async (ep) => {
       if (ep === "local" && !runState.value.local?.enabled) return;
-      const since = Math.max(Date.now() - detMaxAgeMin.value * 60_000, (lastPoll[ep] ?? 0) - 10 * 60_000);
+      // 0.8.1: the whole window each time: the server lists only current detections (replaced and
+      // expired storms are left out), so the answer replaces what this endpoint showed
+      const since = Date.now() - detMaxAgeMin.value * 60_000;
       try {
         const r = await mlReq<any>(ep, "GET", `/api/ml/detections?since=${Math.round(since)}`);
         got.push(...detectionsFromFeatures(Array.isArray(r) ? r : r?.features ?? [], ep));
         lastPoll[ep] = Date.now();
+        polled.add(ep);
       } catch (e: any) {
         if (ep === "main") err = e.message;
       }
     }),
   );
-  mergeDetections(got);
+  replaceDetections(polled, got);
   detStatus.value = { error: err || undefined, t: Date.now() };
 }
 /** fetch if older than `maxAgeS` (used by the notification rules) */
@@ -771,8 +812,10 @@ api.on("ml_detection", (m) => {
   const list = Array.isArray(m.features) ? m.features : [f];
   mergeDetections(detectionsFromFeatures(list, "main"));
 });
+api.on("ml_expired", (m) => expireDetections("main", Array.isArray(m?.ids) ? m.ids.map(String) : [])); // 0.8.1
 let wsModels: number | undefined;
-api.on("ml_model", () => {
+api.on("ml_model", (m) => {
+  if (m?.action === "deleted" && m?.id != null) for (const h of modelGone) h("main", String(m.id)); // 0.8.1
   if (!models.value.length && !mlOpen.value) return;
   clearTimeout(wsModels);
   wsModels = window.setTimeout(() => loadModels(), 500);

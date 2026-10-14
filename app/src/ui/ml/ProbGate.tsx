@@ -11,8 +11,11 @@ import type { ComponentChildren } from "preact";
 import { settings } from "../../store";
 import { gateDrag, type Gate } from "../../gate";
 import { isOn } from "../../overlays/manager";
-import { probGate, setProbGate, pgKey, scrub, PG_DET, PG_OUT, pmLayer, setPerModel } from "../../ml/probgate";
-import { detProbs, detProbsBy } from "../../overlays/mldefs";
+import { probGate, setProbGate, pgKey, scrub, PG_DET, PG_OUT, pmLayer, setPerModel, setGateBy } from "../../ml/probgate";
+import { detProbs, detProbsBy, detConfs } from "../../overlays/mldefs";
+import { models, modelsEps } from "../../ml/client";
+import { dropDetections } from "../../ml/m8";
+import { CONF_HELP } from "../../ml/summary";
 import { targetIconUrl } from "../../ml/targets";
 import { outProbs, outOpts, setOutOpt, CATS, CAT_FILL, CAT_LINE, CAT_NAME, HAZARDS, DAYS, outlookData, probGridOn, toggleProbGrid, outlookModels, hazardOf } from "../../ml/outlook";
 import { LEVEL_COLOR } from "../../ml/targets";
@@ -65,28 +68,73 @@ const GRAD = `linear-gradient(90deg, #64748b 0%, ${LEVEL_COLOR.low} 30%, ${LEVEL
 /** models 0.8: combined gate, or (expanded) one row + gate per model */
 function DetGates() {
   const per = !!settings.value.ml?.perModelGates;
+  // 0.8.1: filter by probability or by confidence
+  const conf = settings.value.ml?.gateBy === "conf";
   const by = detProbsBy.value;
+  const eps = modelsEps.value;
+  const known = new Set(models.value.map((m) => `${m.ep}|${m.id}`));
   const toggle = (
     <button class={`lg-btn ${per ? "on" : ""}`} title={per ? "Collapse: one gate for every model" : "Expand: a gate per model"} onClick={() => setPerModel(!per)}>
       {per ? <ChevronsDownUp size={12} /> : <ListTree size={12} />}
     </button>
   );
-  if (!per) return <GateBar layer={PG_DET} title="Model detections" probs={detProbs.value} unit="detections" extra={toggle} />;
+  const pc = (
+    <button class={`lg-btn ${conf ? "on" : ""}`} style={{ fontWeight: 700, fontSize: "10px", minWidth: "16px" }} title={`Filter by ${conf ? "confidence (click: probability)" : "probability (click: confidence)"}. ${CONF_HELP}`} onClick={() => setGateBy(conf ? "prob" : "conf")}>
+      {conf ? "C" : "P"}
+    </button>
+  );
+  const unit = conf ? "detections (confidence)" : "detections";
+  if (!per)
+    return (
+      <GateBar
+        layer={PG_DET}
+        title={conf ? "Detections · confidence" : "Model detections"}
+        probs={conf ? detConfs.value : detProbs.value}
+        unit={unit}
+        extra={
+          <>
+            {pc}
+            {toggle}
+          </>
+        }
+      />
+    );
   const n = detProbs.value.length;
   return (
     <div class="mlg glass m8-pm">
       <div class="mlg-head">
         <b>Model detections</b>
-        <span class="mlg-txt">per model</span>
+        <span class="mlg-txt">per model · {conf ? "confidence" : "probability"}</span>
         <span class="mlg-n">{n}</span>
-        <span class="mlg-btns">{toggle}</span>
+        <span class="mlg-btns">
+          {pc}
+          {toggle}
+        </span>
       </div>
       <div class="m8-pm-rows">
-        {by.map((x) => (
-          <div key={x.model_id} class="m8-pm-row">
-            <GateBar layer={pmLayer(x.model_id)} title={x.name} icon={x.target} probs={x.probs} unit="detections" compact />
-          </div>
-        ))}
+        {by.map((x) => {
+          // 0.8.1: a deleted model's leftovers can be closed
+          const stale = !x.model_id.startsWith("ensemble:") && eps.has(x.ep as any) && !known.has(`${x.ep}|${x.model_id}`);
+          return (
+            <div key={x.model_id} class="m8-pm-row" style={stale ? { opacity: 0.65 } : undefined}>
+              <GateBar
+                layer={pmLayer(x.model_id)}
+                title={stale ? `${x.name} (deleted)` : x.name}
+                icon={x.target}
+                probs={conf ? x.confs : x.probs}
+                unit={unit}
+                compact
+                extra={
+                  stale ? (
+                    <button class="lg-btn" title="This model was deleted: remove its detections from the map" onClick={() => (dropDetections(x.ep as any, x.model_id, true), setProbGate(pmLayer(x.model_id), {}))}>
+                      <X size={11} />
+                    </button>
+                  ) : undefined
+                }
+              />
+            </div>
+          );
+        })}
         {!by.length && <small class="muted">No detections on the map</small>}
       </div>
     </div>

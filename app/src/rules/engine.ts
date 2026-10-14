@@ -242,7 +242,7 @@ export async function check(r: Rule): Promise<Hit | null> {
       const cut = Date.now() - 20 * 60_000;
       for (const d of dets) {
         if (d.test || d.t < cut || d.prob < minp || (c.model && d.model_id !== c.model)) continue;
-        if ((c.maxp != null && d.prob > c.maxp / 100 + 1e-9) || (c.useGate && !passesGate(PG_DET, d.prob))) continue; // models 0.7: probability window / map gate
+        if ((c.maxp != null && d.prob > c.maxp / 100 + 1e-9) || (c.useGate && !passesGate(PG_DET, d.prob, undefined, d.confidence)) /* 0.8.1: gate by probability or confidence */) continue; // models 0.7: probability window / map gate
         for (const l of locs) {
           const dist = distance(l.lat, l.lon, d.lat, d.lon);
           if (dist <= R) {
