@@ -68,6 +68,85 @@ pub struct Msg {
     pub rule: String,
     pub vars: Map<String, Value>,
     pub test: bool,
+    /// 0.8.1: the rule's own title/body templates (override the channel's; empty = channel's)
+    #[serde(skip)]
+    pub title_tpl: String,
+    #[serde(skip)]
+    pub body_tpl: String,
+}
+
+/// 0.8.1: placeholders a message template can use (`{name}`); anything else stays as typed.
+pub const PLACEHOLDERS: &[&str] = &[
+    "title", "body", "rule", "event", "headline", "area", "point", "place", "dist", "severity", "level", "time", "expires", "model", "probability", "confidence", "value", "link", "same_code", "station", "min",
+];
+const MAX_TPL: usize = 2000;
+
+/// The value of one placeholder for a message (empty when the message doesn't have it).
+fn tpl_var(m: &Msg, k: &str, now: &str) -> Option<String> {
+    let v = |k: &str| m.vars.get(k).and_then(|x| match x {
+        Value::String(s) => Some(s.clone()),
+        Value::Null => None,
+        x => Some(x.to_string()),
+    }).filter(|s| !s.is_empty());
+    Some(match k {
+        "title" => m.title.clone(),
+        "body" => m.body.clone(),
+        "rule" => m.rule.clone(),
+        "level" => m.level.clone(),
+        "link" => m.url.clone().or_else(|| v("link")).unwrap_or_default(),
+        "time" => v("time").unwrap_or_else(|| now.to_string()),
+        "point" => v("point").or_else(|| v("place")).unwrap_or_default(),
+        "severity" => v("severity").unwrap_or_else(|| m.level.clone()),
+        k if PLACEHOLDERS.contains(&k) => v(k).unwrap_or_default(),
+        k => v(k)?,
+    })
+}
+
+/// Fill a template: `{event}` etc. are replaced; unknown names are left as typed.
+pub fn render(tpl: &str, m: &Msg, now: &str) -> String {
+    let mut out = String::new();
+    let mut rest = tpl;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find('}') {
+            Some(j) if j > 0 && after[..j].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => match tpl_var(m, &after[..j], now) {
+                Some(v) => {
+                    out.push_str(&v);
+                    rest = &after[j + 1..];
+                }
+                None => {
+                    out.push('{');
+                    rest = after;
+                }
+            },
+            _ => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The message as a channel sends it: the rule's templates, else the channel's (`title_tpl`,
+/// `body_tpl`); without templates the message is unchanged (the default is `{title}` / `{body}`).
+pub fn apply_templates(c: &Channel, m: &Msg) -> Msg {
+    let pick = |rule: &str, k: &str| -> Option<String> { Some(if !rule.trim().is_empty() { rule.to_string() } else { s(c, k).to_string() }).filter(|t| !t.trim().is_empty()) };
+    let (tt, bt) = (pick(&m.title_tpl, "title_tpl"), pick(&m.body_tpl, "body_tpl"));
+    if tt.is_none() && bt.is_none() {
+        return m.clone();
+    }
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+    let mut out = m.clone();
+    if let Some(t) = tt {
+        out.title = render(&t, m, &now).chars().take(500).collect();
+    }
+    if let Some(t) = bt {
+        out.body = render(&t, m, &now);
+    }
+    out
 }
 
 pub struct Notify {
@@ -190,7 +269,7 @@ impl Notify {
     pub fn public(&self) -> Value {
         let st = self.store.read();
         let chans: Vec<Value> = st.channels.iter().map(redact).collect();
-        json!({"channels": chans, "quiet": st.quiet, "updated": st.updated, "kinds": KINDS})
+        json!({"channels": chans, "quiet": st.quiet, "updated": st.updated, "kinds": KINDS, "placeholders": PLACEHOLDERS})
     }
 
     /// Replace the channel list (validated); secrets left out keep their stored values.
@@ -320,6 +399,14 @@ pub fn validate(c: &Channel) -> Result<(), String> {
     }
     if s(c, "name").len() > 100 {
         return Err("name too long".into());
+    }
+    for k in ["title_tpl", "body_tpl"] {
+        match c.get(k) {
+            None | Some(Value::Null) => {}
+            Some(Value::String(t)) if t.len() <= MAX_TPL => {}
+            Some(Value::String(_)) => return Err(format!("{k}: at most {MAX_TPL} characters")),
+            Some(_) => return Err(format!("{k} must be text")),
+        }
     }
     let need = |k: &str| if s(c, k).is_empty() { Err(format!("{k} is required")) } else { Ok(()) };
     match kind {
@@ -500,6 +587,7 @@ pub fn build_email(c: &Channel, m: &Msg) -> Result<lettre::Message, String> {
 
 /// Deliver one message; Ok(HTTP status or 250 for mail).
 pub async fn send(http: &reqwest::Client, c: &Channel, m: &Msg) -> Result<u16, String> {
+    let m = &apply_templates(c, m);
     if s(c, "kind") == "email" {
         return send_email(c, m).await;
     }
@@ -577,6 +665,29 @@ async fn send_email(c: &Channel, m: &Msg) -> Result<u16, String> {
     t.send(msg).await.map(|r| r.code().into()).map_err(|e| e.to_string())
 }
 
+/// Example placeholder values (test messages).
+pub fn sample_vars() -> Map<String, Value> {
+    [
+        ("event", "Tornado Warning"),
+        ("headline", "Tornado Warning issued for Example County until 6:45 PM"),
+        ("area", "Example County"),
+        ("point", "Home"),
+        ("place", "Home"),
+        ("severity", "Extreme"),
+        ("expires", "18:45"),
+        ("dist", "3.2 mi"),
+        ("value", "87"),
+        ("model", "Storm model"),
+        ("probability", "87%"),
+        ("confidence", "high"),
+        ("same_code", "TOR"),
+        ("station", "KEC91"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), json!(v)))
+    .collect()
+}
+
 // ---------- HTTP ----------
 
 type St = State<Arc<AppState>>;
@@ -614,6 +725,8 @@ pub async fn test(State(st): St, Json(body): Json<Value>) -> Response {
         level: "normal".into(),
         rule: "Test".into(),
         test: true,
+        // 0.8.1: sample values so a channel's template shows filled in
+        vars: sample_vars(),
         ..Default::default()
     };
     let t0 = std::time::Instant::now();
@@ -724,6 +837,43 @@ mod tests {
         }
         assert!(n.put(&json!({"channels": [{"kind": "carrier-pigeon"}]})).is_err());
         std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn templates() {
+        let mut m = msg();
+        m.vars = sample_vars();
+        // no template: today's message, unchanged
+        let plain = ch(json!({"kind": "ntfy", "topic": "wx"}));
+        let a = apply_templates(&plain, &m);
+        assert_eq!((a.title.as_str(), a.body.as_str()), ("Tornado Warning near Home", "Tornado Warning covers Home"));
+        // the default template reproduces it exactly
+        let def = ch(json!({"kind": "ntfy", "topic": "wx", "title_tpl": "{title}", "body_tpl": "{body}"}));
+        let d = apply_templates(&def, &m);
+        assert_eq!((d.title, d.body), (m.title.clone(), m.body.clone()));
+        assert_eq!(build_request(&def, &m).unwrap(), build_request(&plain, &m).unwrap());
+        // placeholders
+        let c = ch(json!({"kind": "ntfy", "topic": "wx", "title_tpl": "{event} · {point}", "body_tpl": "{headline}\n{area} ({severity}) until {expires} {link} {same_code} {probability}/{confidence} {model} {value} [{nope}] {x y} {"}));
+        let r = apply_templates(&c, &m);
+        assert_eq!(r.title, "Tornado Warning · Home");
+        assert_eq!(r.body, "Tornado Warning issued for Example County until 6:45 PM\nExample County (Extreme) until 18:45 https://example.com/a TOR 87%/high Storm model 87 [{nope}] {x y} {");
+        assert_eq!(render("{time}", &m, "2026-10-14 12:00"), "2026-10-14 12:00");
+        // missing known values are blank; severity falls back to the level
+        let bare = msg();
+        assert_eq!(render("[{area}][{severity}][{point}]", &bare, ""), "[][urgent][]");
+        // the rule's template wins over the channel's
+        let mut rm = m.clone();
+        rm.body_tpl = "R: {event}".into();
+        let r = apply_templates(&c, &rm);
+        assert_eq!((r.title.as_str(), r.body.as_str()), ("Tornado Warning · Home", "R: Tornado Warning"));
+        // validation
+        assert!(validate(&ch(json!({"kind": "ntfy", "topic": "wx", "body_tpl": 5}))).is_err());
+        assert!(validate(&ch(json!({"kind": "ntfy", "topic": "wx", "body_tpl": "x".repeat(MAX_TPL + 1)}))).is_err());
+        validate(&c).unwrap();
+        // the e-mail subject/body use it too
+        let e = ch(json!({"kind": "email", "host": "smtp.example.com", "from": "wx@example.com", "to": ["a@example.com"], "title_tpl": "WX: {event}"}));
+        let raw = String::from_utf8(build_email(&e, &apply_templates(&e, &m)).unwrap().formatted()).unwrap();
+        assert!(raw.contains("Subject: WX: Tornado Warning"));
     }
 
     #[test]

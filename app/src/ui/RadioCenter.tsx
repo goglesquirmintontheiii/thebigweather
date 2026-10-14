@@ -14,7 +14,18 @@ import { Toggle } from "./panels/RadarPanel";
 import { Search, Play, Square, Star, Plus, Trash2, Radio, PictureInPicture2, PanelLeft, MapPin, AudioLines, Loader, Copy, X } from "lucide-preact";
 import { ScanLine } from "lucide-preact"; // radio/dash 0.8
 import { ScannerPanel, ScanRowBtn, scanView } from "./Scanner"; // radio/dash 0.8
-import { scanOn } from "../same/scanner"; // radio/dash 0.8
+import { scanOn, addToScan, inScan } from "../same/scanner"; // radio/dash 0.8 (0.8.1: addToScan)
+
+/** 0.8.1: add a whole group (a state, the favourites) to the scanner */
+function ScanAllBtn({ list }: { list: Stream[] }) {
+  const missing = list.filter((s) => !inScan(s.id));
+  if (!missing.length) return null;
+  return (
+    <button class="btn xs ghost rc-scanall" title={`Add ${missing.length} station${missing.length === 1 ? "" : "s"} to the scanner`} onClick={(e) => (e.stopPropagation(), addToScan(missing))}>
+      + Scan
+    </button>
+  );
+}
 
 export const radioOpen = signal(false);
 
@@ -151,7 +162,10 @@ function RadioBody({ popped }: { popped: boolean }) {
             {err && <div class="err-text small">{err}</div>}
             {favs.length > 0 && !qq && !st && !favOnly && (
               <div class="radio-state">
-                <div class="radio-st">Favorites</div>
+                <div class="radio-st">
+                  Favorites
+                  {scanView.value && <ScanAllBtn list={favs} /> /* 0.8.1 */}
+                </div>
                 {favs.map(row)}
               </div>
             )}
@@ -159,6 +173,7 @@ function RadioBody({ popped }: { popped: boolean }) {
               <div key={k} class="radio-state">
                 <div class="radio-st">
                   {k} <small class="muted">{ss.length}</small>
+                  {scanView.value && <ScanAllBtn list={ss} /> /* 0.8.1 */}
                 </div>
                 {ss.map(row)}
               </div>

@@ -385,7 +385,7 @@ export function RulesPanel() {
 /* ---------- data 0.8: server channel actions ---------- */
 import { BellRing } from "lucide-preact";
 import { useEffect } from "preact/hooks";
-import { notifyOpen, channels, chanState, loadChannels } from "./NotifyPanel";
+import { notifyOpen, channels, chanState, loadChannels, TemplateEditor } from "./NotifyPanel"; // 0.8.1: TemplateEditor
 function P8Channels({ r, set }: { r: Rule; set: (fn: (x: Rule) => void) => void }) {
   useEffect(() => {
     if (chanState.value.supported == null) loadChannels();
@@ -414,6 +414,7 @@ function P8Channels({ r, set }: { r: Rule; set: (fn: (x: Rule) => void) => void 
           Manage…
         </button>
       </div>
+      {/* 0.8.1: this rule's message template */ on.size > 0 && <TemplateEditor rule v={{ title_tpl: r.act.title_tpl ?? "", body_tpl: r.act.body_tpl ?? "" }} chan={on.size === 1 && !on.has("*") ? channels.value.find((c) => on.has(c.id))?.config : undefined} onChange={(p) => set((x) => Object.assign(x.act, p))} />}
     </div>
   );
 }

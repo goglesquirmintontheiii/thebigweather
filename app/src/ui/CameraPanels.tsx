@@ -4,7 +4,7 @@ import { signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 import Hls from "hls.js";
 import { api } from "../api";
-import { activeServer, settings, update } from "../store";
+import { activeServer, settings, update, toast } from "../store";
 import { X, ExternalLink, RefreshCw, Pause, Play as PlayIcon, PictureInPicture2, Circle, Square, Info, Trash2 } from "lucide-preact";
 import { activeTime } from "../active";
 import { fileUrl, recs, loadRecs, recordCamera, stopRec, ytdlp, ffmpeg } from "./panels/RecordPanel";
@@ -269,7 +269,47 @@ const TYPE_NAME: Record<string, string> = { img: "Still image", hls: "Live video
 const KNOWN = new Set(["id", "n", "name", "s", "sn", "t", "i", "v", "p", "r", "k", "a", "dir", "nb", "stale", "lat", "lon", "mine", "rec", "x", "y"]);
 const ytRecordable = (u: string) => /\/watch|youtu\.be\/|\/live\/|\/embed\/|\/shorts\//i.test(u) && !/live_stream\?channel/i.test(u);
 
-/** Record / stop for this camera (server recording). */
+/** 0.8.1: change when a running recording stops (minutes from now; null = until stopped) */
+function setRecEnd(id: string, minutes: number | null) {
+  return api
+    .send("POST", `/api/rec/${id}/end`, minutes ? { minutes } : { end: null })
+    .then(loadRecs)
+    .catch((e: any) => toast(e.status === 404 || e.status === 405 ? "Update the server to change a running recording" : e.message, "warn", 6000));
+}
+
+const QUICK = [15, 30, 60, 120];
+const fmtMin = (m: number) => (m < 60 ? `${m} min` : m % 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m / 60} h`);
+
+/** 0.8.1: "Record for…" menu: until stopped, quick durations, or a custom number of minutes/hours */
+function DurMenu({ running, onPick }: { running: boolean; onPick: (minutes: number | null) => void }) {
+  const [n, setN] = useState(3);
+  const [unit, setUnit] = useState(60);
+  return (
+    <div class="cam-rec-menu glass" onPointerDown={(e) => e.stopPropagation()}>
+      <button onClick={() => onPick(null)} title={running ? "Keep recording until you stop it" : "Record until you press stop"}>
+        {running ? "Until stopped" : "Start (until stopped)"}
+      </button>
+      <small class="cam-rec-sub">{running ? "Stop after" : "Record for"}</small>
+      {QUICK.map((m) => (
+        <button key={m} onClick={() => onPick(m)}>
+          {fmtMin(m)}
+        </button>
+      ))}
+      <div class="cam-rec-custom">
+        <input type="number" min={1} max={unit === 1 ? 1440 : 720} value={n} onInput={(e) => setN(Math.max(1, +(e.target as HTMLInputElement).value || 1))} aria-label="Duration" />
+        <select value={unit} onChange={(e) => setUnit(+(e.target as HTMLSelectElement).value)} aria-label="Unit">
+          <option value={1}>min</option>
+          <option value={60}>h</option>
+        </select>
+        <button class="go" onClick={() => onPick(Math.min(n * unit, 30 * 1440))}>
+          {running ? "Set" : "Go"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Record / stop for this camera (server recording): manual start/stop, or for a set time. */
 function RecControl({ c }: { c: CamView }) {
   const [menu, setMenu] = useState(false);
   const [, tick] = useState(0);
@@ -279,16 +319,30 @@ function RecControl({ c }: { c: CamView }) {
     const t = setInterval(() => tick((x) => x + 1), 1000);
     return () => clearInterval(t);
   }, [!!r]);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(false);
+    const t = setTimeout(() => window.addEventListener("pointerdown", close), 0);
+    return () => (clearTimeout(t), window.removeEventListener("pointerdown", close));
+  }, [menu]);
   if (c.type === "rec" || c.type === "page") return null;
   const stop = (e: Event) => e.stopPropagation();
-  if (r)
+  if (r) {
+    const left = r.end ? r.end - Date.now() : null;
     return (
-      <button class="cam-rec on" title="Stop recording" onPointerDown={stop} onClick={() => stopRec(r.id)}>
-        <i class="rec-pulse" />
-        {fmtElapsed(Date.now() - (r.t0 || r.start || r.created))}
-        <Square size={11} />
-      </button>
+      <span class="cam-rec-wrap" onPointerDown={stop}>
+        <button class="cam-rec on" title={r.end ? `Recording · stops at ${new Date(r.end).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} (click to change)` : "Recording until stopped (click to set a duration)"} onClick={() => setMenu(!menu)}>
+          <i class="rec-pulse" />
+          {fmtElapsed(Date.now() - (r.t0 || r.start || r.created))}
+          {left != null && <small class="cam-rec-left">−{fmtElapsed(left)}</small>}
+        </button>
+        <button class="cam-rec on stop" title="Stop recording" onClick={() => (setMenu(false), stopRec(r.id))}>
+          <Square size={11} />
+        </button>
+        {menu && <DurMenu running onPick={(m) => (setMenu(false), setRecEnd(r.id, m))} />}
+      </span>
     );
+  }
   const why =
     c.type === "yt" && !ytdlp.value
       ? "Install yt-dlp on the server to record YouTube"
@@ -299,24 +353,10 @@ function RecControl({ c }: { c: CamView }) {
           : "";
   return (
     <span class="cam-rec-wrap" onPointerDown={stop}>
-      <button class="cam-rec" disabled={!!why} title={why || "Record this camera on the server"} onClick={() => setMenu(!menu)}>
+      <button class="cam-rec" disabled={!!why} title={why || "Record this camera on the server: until stopped, or for a set time"} onClick={() => setMenu(!menu)}>
         <Circle size={10} class="rec-dot" /> Rec
       </button>
-      {menu && (
-        <div class="cam-rec-menu glass">
-          {[15, 30, 60, 120].map((m) => (
-            <button
-              key={m}
-              onClick={() => {
-                setMenu(false);
-                recordCamera({ id: c.id, n: c.name, t: c.type, i: c.img, v: c.video, r: c.refresh, lat: c.lat, lon: c.lon }, m);
-              }}
-            >
-              {m < 60 ? `${m} min` : `${m / 60} h`}
-            </button>
-          ))}
-        </div>
-      )}
+      {menu && <DurMenu running={false} onPick={(m) => (setMenu(false), recordCamera({ id: c.id, n: c.name, t: c.type, i: c.img, v: c.video, r: c.refresh, lat: c.lat, lon: c.lon }, m ?? 0))} />}
     </span>
   );
 }

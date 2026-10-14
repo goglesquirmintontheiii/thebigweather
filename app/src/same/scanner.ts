@@ -4,10 +4,13 @@
 // jumps to a station that fires, showing the alert and its map outline. When the server can't
 // decode (no ffmpeg, older server), up to MAX_CLIENT streams are decoded here instead (one muted
 // player + tap + SAME decoder each).
+// 0.8.1: "Watch all for SAME" (one click: monitor every station, audio muted or on one station),
+// and a "Mix" mode that plays several stations at once with per-station volume / mute / solo.
 
 import { signal, computed } from "@preact/signals";
 import { api } from "../api";
-import { toast } from "../store";
+import { toast, settings } from "../store";
+import { mixPlan, setMix, type MixEntry } from "./mixplan"; // 0.8.1
 import { playStream, stopStream, nowPlaying, LivePlayer, type Stream } from "../radio";
 import { parseHeader, buildHeader, type SameHeader } from "./parse";
 import { eventInfo } from "./codes";
@@ -28,7 +31,7 @@ export interface ScanCfg {
   stations: ScanStation[];
   /** seconds on each station while cycling */
   dwell: number;
-  mode: "cycle" | "hold";
+  mode: "cycle" | "hold" | "mix";
   /** station held in "hold" mode */
   fav: string | null;
   /** jump to (and stay on) a station that fires */
@@ -39,6 +42,10 @@ export interface ScanCfg {
   audio: boolean;
   /** leave the stations on the server's 24/7 monitor after stopping (SAME rules, notifications) */
   keepServer?: boolean;
+  /** 0.8.1: stations in the audio mix (mode "mix") with their volume / mute */
+  mix?: Record<string, MixEntry>;
+  /** 0.8.1: mix: only this station is heard */
+  solo?: string | null;
 }
 export interface StStatus {
   connected: boolean;
@@ -74,19 +81,65 @@ export function setScan(fn: (c: ScanCfg) => void) {
   fn(c);
   c.dwell = Math.max(5, Math.min(300, Math.round(c.dwell) || 15));
   if (c.fav && !c.stations.some((s) => s.id === c.fav)) c.fav = null;
+  if (c.mix) for (const id of Object.keys(c.mix)) if (!c.stations.some((s) => s.id === id)) delete c.mix[id];
+  if (c.solo && !c.mix?.[c.solo]) c.solo = null;
   scanCfg.value = c;
   try {
     localStorage.setItem(KEY, JSON.stringify(c));
   } catch {
     /* */
   }
-  if (scanOn.value) syncMonitors();
+  if (scanOn.value) {
+    syncMonitors();
+    step();
+  }
 }
 export const inScan = (id: string) => scanCfg.value.stations.some((s) => s.id === id);
+const toScan = (s: Stream): ScanStation => ({ id: s.id, url: s.url, name: s.city ? `${s.city}, ${s.state}` : s.name, call: s.call });
+/** 0.8.1: add several stations at once (a state, the favourites…); the server takes up to 64 */
+export function addToScan(list: Stream[]) {
+  let n = 0;
+  setScan((c) => {
+    for (const s of list) {
+      if (!s.url || c.stations.some((x) => x.id === s.id) || c.stations.length >= 64) continue;
+      c.stations.push(toScan(s));
+      n++;
+    }
+  });
+  if (n) toast(`${n} station${n === 1 ? "" : "s"} added to the scanner`);
+  else if (scanCfg.value.stations.length >= 64) toast("The scanner holds up to 64 stations", "warn");
+}
+/** 0.8.1: one click: watch every scanner station for SAME / alert tones; audio muted, or on one station */
+export async function watchAll(audioOn: string | null) {
+  setScan((c) => {
+    c.jump = true;
+    if (audioOn) {
+      c.audio = true;
+      c.mode = "hold";
+      c.fav = audioOn;
+    } else c.audio = false;
+  });
+  if (!scanOn.value) await startScan();
+}
+/** 0.8.1: mix: put stations in / take them out of the mix */
+export function mixStations(ids: string[], on: boolean) {
+  setScan((c) => {
+    c.mix = setMix(c.mix, ids, on);
+    if (on) {
+      c.mode = "mix";
+      c.audio = true;
+    }
+  });
+}
+export function setMixEntry(id: string, p: Partial<MixEntry>) {
+  setScan((c) => {
+    c.mix = { ...(c.mix ?? {}), [id]: { vol: 1, ...(c.mix?.[id] ?? {}), ...p } };
+  });
+}
 export function toggleScan(s: Stream) {
   setScan((c) => {
     if (c.stations.some((x) => x.id === s.id)) c.stations = c.stations.filter((x) => x.id !== s.id);
-    else c.stations.push({ id: s.id, url: s.url, name: s.city ? `${s.city}, ${s.state}` : s.name, call: s.call });
+    else c.stations.push(toScan(s));
   });
 }
 
@@ -154,6 +207,7 @@ export function stopScan() {
   poll = tick = undefined;
   if (scanBackend.value === "server") void releaseServer();
   stopClient();
+  stopMix();
   scanBackend.value = "off";
   scanNote.value = "";
   scanLock.value = null;
@@ -302,6 +356,13 @@ export function resumeScan() {
 
 /** Listen to one station now (manual pick; cycling continues after the dwell time). */
 export function listenTo(id: string) {
+  // 0.8.1: in the mix, listening to one station = solo it (it joins the mix if needed)
+  if (scanCfg.value.mode === "mix") {
+    return setScan((c) => {
+      c.mix = setMix(c.mix, [id], true);
+      c.solo = c.solo === id ? null : id;
+    });
+  }
   play(id);
 }
 
@@ -313,6 +374,8 @@ function play(id: string) {
   scanCurrent.value = id;
   scanSince.value = Date.now();
   lastSwitch = Date.now();
+  if (scanCfg.value.mode === "mix") return syncMix();
+  stopMix();
   if (!scanCfg.value.audio) {
     if (nowPlaying.value && scanCfg.value.stations.some((x) => x.url === nowPlaying.value!.url)) stopStream();
     for (const [, p] of client) p.setMuted(true);
@@ -348,6 +411,8 @@ function step() {
     const up = list.filter((s) => st[s.id]?.connected !== false);
     if (up.length) list = up;
   }
+  if (c.mode === "mix") return syncMix();
+  stopMix();
   if (!list.length) return;
   if (c.mode === "hold") {
     const id = c.fav && list.some((s) => s.id === c.fav) ? c.fav : list[0].id;
@@ -364,6 +429,48 @@ function step() {
 export function nextIn(): number | null {
   if (!scanOn.value || scanLock.value || scanCfg.value.mode !== "cycle" || !lastSwitch) return null;
   return Math.max(0, Math.ceil((lastSwitch + scanCfg.value.dwell * 1000 - Date.now()) / 1000));
+}
+
+// ---------- 0.8.1: audio mix (several stations at once) ----------
+
+/** players for the mix (stations decoded here reuse their client player instead) */
+const mixP = new Map<string, LivePlayer>();
+/** stations heard in the mix right now (for the list) */
+export const mixLive = signal<string[]>([]);
+
+function syncMix() {
+  const c = scanCfg.value;
+  const lock = scanLock.peek();
+  const plan = mixPlan(c, lock && Date.now() < lock.until ? lock.id : null, settings.peek().radio.volume);
+  // the single-station player isn't used in mix mode
+  if (nowPlaying.value && c.stations.some((x) => x.url === nowPlaying.value!.url)) stopStream();
+  for (const [id, p] of mixP)
+    if (!plan.ids.includes(id) || client.has(id)) {
+      p.destroy();
+      mixP.delete(id);
+    }
+  for (const [id, p] of client) if (!plan.ids.includes(id)) p.setMuted(true);
+  for (const id of plan.ids) {
+    const s = byId(id);
+    if (!s) continue;
+    let p = client.get(id) ?? mixP.get(id);
+    if (!p) {
+      p = new LivePlayer(toStream(s));
+      p.headless = true;
+      mixP.set(id, p);
+    }
+    p.setVolume(plan.vol[id]);
+    p.setMuted(plan.muted[id]);
+  }
+  const live = plan.ids.filter((id) => !plan.muted[id]);
+  if (live.join() !== mixLive.peek().join()) mixLive.value = live;
+  if (plan.solo && scanCurrent.peek() !== plan.solo) scanCurrent.value = plan.solo;
+}
+
+function stopMix() {
+  for (const [, p] of mixP) p.destroy();
+  mixP.clear();
+  if (mixLive.peek().length) mixLive.value = [];
 }
 
 // ---------- client fallback: decode up to MAX_CLIENT streams here ----------
@@ -446,4 +553,4 @@ export function clearScanAlerts() {
 }
 
 // debugging / screenshots
-(window as any).__tbwScan = { scanCfg, scanOn, scanStatus, scanAlerts, scanBackend, startScan, stopScan, scanTest, setScan, jumpTo, handleServer: (m: any) => handleServer(m, false), clientPlayers: () => client };
+(window as any).__tbwScan = { scanCfg, scanOn, scanStatus, scanAlerts, scanBackend, startScan, stopScan, scanTest, setScan, jumpTo, watchAll, mixStations, handleServer: (m: any) => handleServer(m, false), clientPlayers: () => client, mixPlayers: () => mixP };

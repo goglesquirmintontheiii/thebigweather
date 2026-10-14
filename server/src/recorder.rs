@@ -114,7 +114,7 @@ fn is_youtube(url: &str) -> bool {
 }
 
 /// A YouTube URL that names one video / live stream (what yt-dlp can record).
-fn is_youtube_video(url: &str) -> bool {
+pub fn is_youtube_video(url: &str) -> bool {
     let l = url.to_ascii_lowercase();
     is_youtube(url) && (l.contains("/watch") || l.contains("youtu.be/") || l.contains("/live/") || l.contains("/embed/") || l.contains("/shorts/"))
 }
@@ -285,6 +285,21 @@ impl Recorder {
         self.recs.lock().insert(r.id.clone(), r.clone());
         self.save(&r);
         Ok(r)
+    }
+
+    /// Change when a running (or scheduled) recording stops: `None` = until stopped by hand.
+    pub fn set_end(&self, id: &str, end: Option<i64>, now: i64) -> Result<Rec> {
+        let r = self.get(id).ok_or_else(|| anyhow!("recording not found"))?;
+        if r.status != "recording" && r.status != "scheduled" {
+            bail!("the recording has already stopped");
+        }
+        if let Some(e) = end {
+            if e <= now.max(r.start) {
+                bail!("the end must be in the future");
+            }
+        }
+        self.update(id, |x| x.end = end);
+        self.get(id).ok_or_else(|| anyhow!("recording not found"))
     }
 
     pub fn stop(&self, id: &str) {
@@ -472,6 +487,16 @@ fn file_time(n: &str) -> i64 {
 
 // ---------- workers ----------
 
+/// A running recording whose end time has come (manual recordings have no end).
+pub fn should_stop(r: &Rec, now: i64) -> bool {
+    r.status == "recording" && r.end.map(|e| now >= e).unwrap_or(false)
+}
+
+/// Seconds of the next video piece: up to 10 minutes, never past the (current) end.
+pub fn piece_secs(end: Option<i64>, now: i64) -> i64 {
+    end.map(|e| ((e - now) / 1000).max(1)).unwrap_or(600).min(600)
+}
+
 /// Background loop: starts/stops scheduled recordings, runs record-on-alert.
 pub fn spawn(st: Arc<AppState>) {
     tokio::spawn(async move {
@@ -493,7 +518,7 @@ async fn tick(st: &Arc<AppState>) {
                 rec.update(&r.id, |x| x.status = "recording".into());
                 start_worker(st, &r.id);
             }
-            "recording" if r.end.map(|e| now >= e).unwrap_or(false) => rec.stop(&r.id),
+            "recording" if should_stop(&r, now) => rec.stop(&r.id),
             "recording" if !running => start_worker(st, &r.id),
             _ => {}
         }
@@ -665,7 +690,9 @@ async fn camera_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result
         let mut fails = 0;
         let mut short_runs = 0;
         while !stop.load(Ordering::SeqCst) {
-            let left = r.end.map(|e| ((e - now_ms()) / 1000).max(1)).unwrap_or(600).min(600);
+            // the end can change while recording (Record for… / until stopped): read it each piece
+            let end = st.rec.get(&r.id).map(|x| x.end).unwrap_or(r.end);
+            let left = piece_secs(end, now_ms());
             let name = format!("{}.mp4", now_ms());
             let part = dir.join(format!("{name}.part"));
             // YouTube: yt-dlp resolves and downloads the stream, ffmpeg remuxes it into the same
@@ -908,9 +935,69 @@ async fn record_on_alert(st: &Arc<AppState>) {
     }
 }
 
+/// `POST /api/rec/{id}/end {end: <unix ms> | null}` or `{minutes: n}` (from now): change when a
+/// running recording stops (null = keep recording until stopped).
+pub async fn set_end_route(axum::extract::State(st): axum::extract::State<Arc<AppState>>, axum::extract::Path(id): axum::extract::Path<String>, axum::Json(b): axum::Json<Value>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let now = now_ms();
+    let end = match (b.get("minutes").and_then(|m| m.as_f64()), b.get("end")) {
+        (Some(m), _) if m > 0.0 && m <= 60.0 * 24.0 * 366.0 => Some(now + (m * 60_000.0) as i64),
+        (Some(_), _) => return (axum::http::StatusCode::BAD_REQUEST, axum::Json(json!({"error": "minutes must be 1 min – 1 year"}))).into_response(),
+        (None, Some(Value::Null)) | (None, None) => None,
+        (None, Some(v)) => match v.as_i64() {
+            Some(e) => Some(e),
+            None => return (axum::http::StatusCode::BAD_REQUEST, axum::Json(json!({"error": "end: unix ms or null"}))).into_response(),
+        },
+    };
+    match st.rec.set_end(&id, end, now) {
+        Ok(r) => {
+            st.hub.send(json!({"type": "recording", "id": id}));
+            axum::Json(json!({"ok": true, "rec": r})).into_response()
+        }
+        Err(e) => (axum::http::StatusCode::BAD_REQUEST, axum::Json(json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duration_stop_logic() {
+        let now = 1_800_000_000_000i64;
+        let mut r = Rec { status: "recording".into(), start: now - 60_000, end: Some(now + 30 * 60_000), ..Default::default() };
+        assert!(!should_stop(&r, now));
+        assert!(should_stop(&r, now + 30 * 60_000));
+        // manual (until stopped)
+        r.end = None;
+        assert!(!should_stop(&r, now + 365 * 86_400_000));
+        // scheduled / done recordings aren't stopped by the clock
+        r.end = Some(now - 1);
+        r.status = "scheduled".into();
+        assert!(!should_stop(&r, now));
+        // video pieces: 10 min max, never past the end, at least 1 s
+        assert_eq!(piece_secs(None, now), 600);
+        assert_eq!(piece_secs(Some(now + 90_000), now), 90);
+        assert_eq!(piece_secs(Some(now + 3_600_000), now), 600);
+        assert_eq!(piece_secs(Some(now - 5_000), now), 1);
+
+        // Record for… / until stopped on a running recording
+        let tmp = std::env::temp_dir().join(format!("tbwrec-end-{}", rand::random::<u32>()));
+        let rec = Recorder::new(&tmp, true);
+        let x = rec.create(Rec { kind: "camera".into(), camera: Some(CamSpec { name: "Cam".into(), url: "https://example.com/a.jpg".into(), kind: "img".into(), ..Default::default() }), ..Default::default() }).unwrap();
+        assert_eq!(x.status, "recording");
+        assert_eq!(x.end, None, "manual start: until stopped");
+        let t = now_ms();
+        let y = rec.set_end(&x.id, Some(t + 120_000), t).unwrap();
+        assert_eq!(y.end, Some(t + 120_000));
+        assert!(should_stop(&y, t + 120_000));
+        assert!(rec.set_end(&x.id, Some(t - 1), t).is_err(), "end in the past");
+        assert_eq!(rec.set_end(&x.id, None, t).unwrap().end, None);
+        rec.stop(&x.id);
+        assert!(rec.set_end(&x.id, Some(t + 60_000), t).is_err(), "already stopped");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
     #[test]
     fn contains_and_times() {
         let g = json!({"type": "Polygon", "coordinates": [[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]]]});
