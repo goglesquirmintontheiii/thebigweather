@@ -104,7 +104,7 @@ else { $vv = if ($Version) { " v$Version" } else { "" }; Die "nothing to install
 $fromText = if ($From -eq "release") { "the GitHub release" } else { "the repository's $Branch branch" }
 Say "TheBigWeather $V (from $fromText)"
 
-$tmp = Join-Path $env:TEMP ("tbw-install-" + [guid]::NewGuid())
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("tbw-install-" + [guid]::NewGuid())
 $cache = Join-Path $Dir ".download"  # builds-branch downloads (kept until installed, so a re-run resumes)
 New-Item -ItemType Directory -Force -Path $tmp, $Dir | Out-Null
 
