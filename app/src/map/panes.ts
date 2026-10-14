@@ -20,6 +20,15 @@ import { alerts } from "../alerts";
 import { mapRef } from "./mapview";
 import { myKind, myLink, linkedTime } from "../linkwin"; // panes 0.8
 import { alertStyle } from "../alertstyle"; // panes 0.8: colour-vision palettes reach the panes too
+/* 0.8.1: centre crosshair readouts, clickable alerts / model detections, drawings in linked panes */
+import { crosshair, tool, details, type DetailItem } from "../store";
+import { sampleAt } from "../radar/sweep";
+import { rasterValue } from "../grid/raster";
+import { fmtValue, fmtGrid, fmtDist } from "../util";
+import { overlayDef, styleFor, optsFor } from "../overlays/defs";
+import { isOn, popup, ovlData, ovlDataVer } from "../overlays/manager";
+import { registerMlIcons } from "../ml/targets";
+import { attachDrawPane, refreshDrawPanes } from "./draw";
 
 export const paneStatus = signal<Record<number, { loading?: boolean; error?: string; time?: number; label?: string }>>({});
 const panes = new Map<number, PaneView>();
@@ -33,6 +42,24 @@ export function paneLink(idx: number): PaneLink {
   return p.layout === "swipe" ? { ...l, pos: true } : l;
 }
 const synced = (idx: number) => paneLink(idx).pos;
+/** 0.8.1: is the main map part of the position group? (unlinked: linked panes still move together) */
+export function mainLinked(): boolean {
+  const p = settings.value.panes;
+  return p.layout === "swipe" || p.mainPos !== false;
+}
+/** 0.8.1: does pane idx draw model detections? (per-pane toggle, default shown) */
+export function paneMl(idx: number): boolean {
+  return settings.value.panes.ml?.[idx] !== false;
+}
+const ML = "mldetect";
+const EMPTY_FC = { type: "FeatureCollection", features: [] } as any;
+/** 0.8.1: value at each pane's centre (crosshair) */
+export const paneCenter = signal<Record<number, { v: string; sub?: string } | null>>({});
+function setCenter(i: number, r: { v: string; sub?: string } | null) {
+  const o = paneCenter.peek()[i];
+  if (o === r || (o && r && o.v === r.v && o.sub === r.sub)) return;
+  paneCenter.value = { ...paneCenter.peek(), [i]: r };
+}
 function gibsTiles(id: string, t: number): { tiles: string[]; maxzoom: number; key: string } | null {
   const g = GIBS.find((x) => x.id === id);
   if (!g) return null;
@@ -80,6 +107,12 @@ class PaneView {
   gen = 0;
   timer: number | undefined;
   siteMarkers = new Map<string, maplibregl.Marker>();
+  /* 0.8.1 */
+  cur: { sweep?: Sweep; raster?: Raster; table: { units: string; labels?: Record<number, string> } | null; units: string } | null = null;
+  mlSig = "";
+  mlData: any = null;
+  offDraw: () => void = () => {};
+  lastHover = 0;
 
   constructor(public idx: number, el: HTMLElement) {
     const s = settings.value;
@@ -98,13 +131,19 @@ class PaneView {
     this.grid.id = "pane-grid";
     this.map.on("style.load", () => this.addLayers());
     this.map.on("move", () => {
+      this.readCenter(); // 0.8.1
+      this.followPopup();
       if (syncing || !synced(this.idx)) return; // data 0.6, panes 0.8
       syncing = true;
       const c = this.map.getCenter();
-      mapRef.value?.jumpTo({ center: c, zoom: this.map.getZoom() });
+      if (mainLinked()) mapRef.value?.jumpTo({ center: c, zoom: this.map.getZoom() }); // 0.8.1: the main map can move freely
       for (const p of panes.values()) if (p !== this && synced(p.idx)) p.map.jumpTo({ center: c, zoom: this.map.getZoom() });
       syncing = false;
     });
+    /* 0.8.1: alerts and model detections are clickable here too */
+    this.map.on("click", (e) => this.onClick(e));
+    this.map.on("mousemove", (e) => this.onHover(e));
+    this.offDraw = attachDrawPane(this.map, () => settings.value.panes.drawAll !== false && synced(this.idx));
     this.map.on("zoom", () => this.siteDensity());
     this.map.on("moveend", () => {
       clearTimeout(this.timer);
@@ -124,8 +163,11 @@ class PaneView {
     }
     if (!m.getSource("alerts")) {
       m.addSource("alerts", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      m.addLayer({ id: "p-alerts-fill", type: "fill", source: "alerts", paint: { "fill-color": "#000", "fill-opacity": 0 } }); // 0.8.1: click target
       m.addLayer({ id: "p-alerts", type: "line", source: "alerts", paint: { "line-color": ["get", "color"], "line-width": ["match", ["get", "kind"], "warning", 2.2, 1.2] } });
     }
+    this.mlSig = ""; // 0.8.1: a new style has no detection layers
+    this.refreshMl();
     this.layerVis();
     this.refreshAlerts();
     this.refreshSites();
@@ -177,7 +219,7 @@ class PaneView {
     if (!src) return;
     // panes 0.8: alerts follow the main map's Alerts toggle when layers are linked
     const on = paneLink(this.idx).layers && settings.value.overlays.alerts;
-    const feats = on ? [...alerts.value.values()].filter((f) => f.geometry).map((f) => ({ type: "Feature", geometry: f.geometry, properties: { color: alertStyle(String(f.properties.event)).border || f.properties.color, kind: String(f.properties.event).endsWith("Warning") ? "warning" : "other" } })) : [];
+    const feats = on ? [...alerts.value.values()].filter((f) => f.geometry).map((f) => ({ type: "Feature", geometry: f.geometry, properties: { id: f.properties.id /* 0.8.1 */, color: alertStyle(String(f.properties.event)).border || f.properties.color, kind: String(f.properties.event).endsWith("Warning") ? "warning" : "other" } })) : [];
     src.setData({ type: "FeatureCollection", features: feats } as any);
   }
 
@@ -189,6 +231,8 @@ class PaneView {
     this.frames = [];
     this.radar.setItems([]);
     this.grid.set(null, null, 0, 0);
+    this.cur = null; // 0.8.1
+    this.readCenter();
     setStatus(this.idx, { loading: true, error: undefined, label: label(cfg) });
     try {
       if (cfg.weather.kind === "radar") {
@@ -266,6 +310,7 @@ class PaneView {
         const t = tableById(settings.value.tables[base] ?? base);
         this.radar.smooth = settings.value.radar.smooth;
         this.radar.setItems([{ sweep: sw, table: t, opacity: settings.value.radar.opacity }]);
+        this.cur = { sweep: sw, table: t, units: t.units }; // 0.8.1
       } else if (cfg.weather.kind === "grid") {
         const v = mercView(this.map);
         let hit = this.rasters.get(f.key);
@@ -285,8 +330,10 @@ class PaneView {
         const d = gridDef(cfg.weather.id);
         const table = !d || d.cmap === "RGB" ? null : settings.value.tables[d.cmap] ? tableById(settings.value.tables[d.cmap]) : gridTable(d.cmap);
         this.grid.set(hit.r, table, settings.value.grid.opacity, settings.value.grid.smooth);
+        this.cur = { raster: hit.r, table, units: d?.units ?? table?.units ?? "" }; // 0.8.1
       }
       setStatus(this.idx, { time: f.time, error: undefined });
+      this.readCenter(); // 0.8.1
     } catch (e: any) {
       setStatus(this.idx, { error: e.message });
     }
@@ -312,7 +359,117 @@ class PaneView {
     this.map.setStyle(buildStyle(s.basemap === "google" ? "satellite" : s.basemap, { labels: s.overlays.labels, provider: s.basemapProvider, custom: s.customBasemaps }), { diff: false });
   }
 
+  /* ---------- 0.8.1 ---------- */
+  /** crosshair readout: this pane's product at its own centre */
+  readCenter() {
+    if (!crosshair.peek()) return setCenter(this.idx, null);
+    const cur = this.cur;
+    if (!cur || !cur.table) return setCenter(this.idx, cur?.raster || cur?.sweep ? { v: "—" } : null);
+    const c = this.map.getCenter();
+    if (cur.sweep) {
+      const r = sampleAt(cur.sweep, c.lat, c.lng);
+      if (!r) return setCenter(this.idx, { v: "—" });
+      const h = settings.peek().units.distance === "km" ? `${(r.height / 1000).toFixed(1)} km` : `${((r.height * 3.28084) / 1000).toFixed(1)} kft`;
+      return setCenter(this.idx, { v: fmtValue(r.value, cur.table.units, cur.table.labels), sub: r.range > 0 ? `${fmtDist(r.range)} · ${h}` : undefined });
+    }
+    if (cur.raster) setCenter(this.idx, { v: fmtGrid(rasterValue(cur.raster, c.lat, c.lng), cur.units, cur.table.labels) });
+  }
+
+  /** model detections (the main map's "Model detections" layer) with a per-pane toggle */
+  refreshMl() {
+    const m = this.map;
+    if (!m.getStyle() || !m.getLayer("pane-radar")) return;
+    const def = overlayDef(ML);
+    const on = !!def && isOn(ML) && paneMl(this.idx);
+    const src = `o-${ML}`;
+    // the layer specs carry the probability gate's filter: rebuild when the options or the gate change
+    const specs = on && def ? def.layers(src, styleFor(def), optsFor(def)) : [];
+    const sig = on ? JSON.stringify([settings.value.ovl[ML] ?? {}, specs.map((l: any) => l.filter ?? null)]) : "";
+    if (sig !== this.mlSig || (on && !m.getSource(src))) {
+      this.mlSig = sig;
+      this.mlData = null;
+      for (const l of m.getStyle().layers) if (l.id.startsWith(`${src}-`)) m.removeLayer(l.id);
+      if (m.getSource(src)) m.removeSource(src);
+      if (on && def) {
+        registerMlIcons(m);
+        m.addSource(src, { type: "geojson", data: EMPTY_FC, ...(def.source ?? {}) } as any);
+        const top = m.getStyle().layers.find((l) => l.id.startsWith("top-"))?.id;
+        for (const spec of specs) {
+          try {
+            m.addLayer(spec as any, top);
+          } catch (e) {
+            console.warn("pane detection layer", spec.id, e);
+          }
+        }
+      }
+    }
+    if (!on) return;
+    const d = ovlData(ML) ?? EMPTY_FC;
+    if (d === this.mlData) return;
+    this.mlData = d;
+    (m.getSource(src) as GeoJSONSource | undefined)?.setData(d);
+  }
+
+  /** clickable features under a point: model detections and alerts */
+  private hits(pt: maplibregl.PointLike) {
+    const m = this.map;
+    const ml = (m.getStyle()?.layers ?? []).filter((l) => l.id.startsWith(`o-${ML}-`) && !l.id.endsWith("-text") && !l.id.endsWith("-label")).map((l) => l.id);
+    const layers = [...ml, ...(m.getLayer("p-alerts-fill") ? ["p-alerts-fill"] : [])];
+    return layers.length ? m.queryRenderedFeatures(pt, { layers }) : [];
+  }
+
+  onHover(e: maplibregl.MapMouseEvent) {
+    const now = performance.now();
+    if (now - this.lastHover < 60 || tool.peek() !== "none") return;
+    this.lastHover = now;
+    this.map.getCanvas().style.cursor = this.hits(e.point).length ? "pointer" : "";
+  }
+
+  onClick(e: maplibregl.MapMouseEvent) {
+    if (tool.peek() !== "none") return;
+    popup.value = null;
+    const feats = this.hits(e.point);
+    const def = overlayDef(ML);
+    let area: any = null;
+    for (const f of feats) {
+      if (f.layer.id === "p-alerts-fill" || !def?.click) continue;
+      const p = def.click(f.properties ?? {});
+      if (!p) continue;
+      if (f.layer.type === "fill" || f.layer.type === "line") {
+        area = area ?? p;
+        continue;
+      }
+      return this.openPopup(e, p); // a detection point wins
+    }
+    const ids = [...new Set(feats.filter((f) => f.layer.id === "p-alerts-fill").map((f) => String(f.properties?.id)))];
+    const al = ids.map((id) => alerts.value.get(id)).filter(Boolean).sort((a: any, b: any) => b.properties.priority - a.properties.priority || String(b.properties.sent).localeCompare(String(a.properties.sent)));
+    const items: DetailItem[] = al.map((a: any) => ({ kind: "alert" as const, id: a.properties.id }));
+    if (items.length) details.value = { items, i: 0 };
+    else if (area) this.openPopup(e, area);
+    else details.value = null;
+  }
+
+  private openPopup(e: maplibregl.MapMouseEvent, p: any) {
+    const r = this.map.getContainer().getBoundingClientRect();
+    popup.value = { x: r.left + e.point.x, y: r.top + e.point.y, lng: e.lngLat.lng, lat: e.lngLat.lat, p, overlay: ML, pane: this.idx };
+  }
+
+  /** a popup opened here sticks to its spot (closes once it leaves the pane) */
+  followPopup() {
+    const p = popup.peek();
+    if (!p || p.pane !== this.idx) return;
+    const pt = this.map.project([p.lng, p.lat]);
+    const c = this.map.getContainer();
+    if (pt.x < -20 || pt.y < -20 || pt.x > c.clientWidth + 20 || pt.y > c.clientHeight + 20) return void (popup.value = null);
+    const r = c.getBoundingClientRect();
+    popup.value = { ...p, x: r.left + pt.x, y: r.top + pt.y };
+  }
+  /* ---------- end 0.8.1 ---------- */
+
   destroy() {
+    this.offDraw(); // 0.8.1
+    if (popup.peek()?.pane === this.idx) popup.value = null;
+    setCenter(this.idx, null);
     this.map.remove();
   }
 }
@@ -323,11 +480,12 @@ export function label(cfg: PaneCfg): string {
   return `${cfg.site ?? settings.value.radar.site} ${cfg.product ?? "REF"}`;
 }
 
-export function mountPane(idx: number, el: HTMLElement) {
+export function mountPane(idx: number, el: HTMLElement, fallback?: PaneCfg) {
   panes.get(idx)?.destroy();
   const p = new PaneView(idx, el);
   panes.set(idx, p);
-  const cfg = settings.value.panes.list[idx - 1];
+  // 0.8.1: a new pane has no saved config yet (the layout adds it a moment later): load what its selector shows
+  const cfg = settings.value.panes.list[idx - 1] ?? fallback;
   if (cfg) p.configure(cfg);
   return () => {
     p.destroy();
@@ -336,8 +494,10 @@ export function mountPane(idx: number, el: HTMLElement) {
 }
 
 export function paneConfigured(idx: number, cfg: PaneCfg) {
-  panes.get(idx)?.configure(cfg);
+  const p = panes.get(idx);
+  if (p && !sameCfg(p.cfg, cfg)) p.configure(cfg); // 0.8.1: the list effect below may have done it already
 }
+const sameCfg = (a: PaneCfg | null | undefined, b: PaneCfg | null | undefined) => !!a && !!b && JSON.stringify(a) === JSON.stringify(b);
 
 /* panes 0.8 */
 export function paneMap(idx: number): MLMap | null {
@@ -359,7 +519,7 @@ effect(() => {
   if (!m || hooked) return;
   hooked = true;
   m.on("move", () => {
-    if (syncing || !panes.size) return; // data 0.6
+    if (syncing || !panes.size || !mainLinked()) return; // data 0.6, 0.8.1: main map unlinked
     syncing = true;
     const c = m.getCenter();
     for (const p of panes.values()) if (synced(p.idx)) p.map.jumpTo({ center: c, zoom: m.getZoom() }); // panes 0.8
@@ -386,13 +546,39 @@ effect(() => {
 let lastLinks = "";
 effect(() => {
   const p = settings.value.panes;
-  const sig = JSON.stringify([p.links, p.sync, p.layout]);
+  const sig = JSON.stringify([p.links, p.sync, p.layout, p.mainPos, p.drawAll]);
   if (sig === lastLinks) return;
   const first = !lastLinks;
   lastLinks = sig;
+  refreshDrawPanes(); // 0.8.1
   const m = mapRef.peek();
   if (first || !m) return;
-  for (const v of panes.values()) if (synced(v.idx)) v.map.jumpTo({ center: m.getCenter(), zoom: m.getZoom() });
+  // 0.8.1: with the main map unlinked, the linked panes line up with the first of them
+  const group = [...panes.values()].filter((v) => synced(v.idx)).sort((a, b) => a.idx - b.idx);
+  const ref = mainLinked() ? m : group[0]?.map;
+  if (!ref) return;
+  syncing = true;
+  for (const v of group) if (v.map !== ref) v.map.jumpTo({ center: ref.getCenter(), zoom: ref.getZoom() });
+  syncing = false;
+});
+/* 0.8.1: panes load whatever config the list holds (new panes, restored workspaces) */
+effect(() => {
+  const list = settings.value.panes.list;
+  for (const p of panes.values()) {
+    const c = list[p.idx - 1];
+    if (c && !sameCfg(p.cfg, c)) p.configure(c);
+  }
+});
+/* 0.8.1: model detections and centre readouts */
+effect(() => {
+  void ovlDataVer.value;
+  void settings.value.ovl[ML];
+  void settings.value.panes.ml;
+  for (const p of panes.values()) p.refreshMl();
+});
+effect(() => {
+  void crosshair.value;
+  for (const p of panes.values()) p.readCenter();
 });
 // radar panes that follow the main radar reload when it changes
 let lastSite = "";

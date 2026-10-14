@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import { drawTool, drawStyle, undo, redo, clearAll, canUndo, canRedo, COLORS, textInput, addText, finishPoly, setKeep, newDrawing, currentCount, drawings, type DrawKind } from "../map/draw";
-import { settings, tool } from "../store";
+import { settings, tool, update } from "../store";
+import { paneCountOf } from "./Panes"; // 0.8.1
 import { Pencil, Minus, MoveUpRight, Square, Circle, Pentagon, Type, Eraser, Hand, Undo2, Redo2, Trash2, X, PaintBucket, FilePlus2 } from "lucide-preact";
 
 const TOOLS: [DrawKind, any, string][] = [
@@ -60,6 +61,12 @@ export function DrawBar() {
       <label class="draw-keep" title="Keep drawings on the map after closing drawing mode">
         <input type="checkbox" checked={settings.value.drawKeep} onChange={(e) => setKeep((e.target as HTMLInputElement).checked)} /> Keep
       </label>
+      {paneCountOf(settings.value.panes.layout) > 0 && (
+        /* 0.8.1: drawings also appear in position-linked panes */
+        <label class="draw-keep" title="Show drawings in the linked map panes too (same place on the map)">
+          <input type="checkbox" checked={settings.value.panes.drawAll !== false} onChange={(e) => update((s) => (s.panes.drawAll = (e.target as HTMLInputElement).checked))} /> All panes
+        </label>
+      )}
       <button class="tb sm" title="Close drawing mode" onClick={() => (tool.value = "none")}>
         <X size={16} />
       </button>
