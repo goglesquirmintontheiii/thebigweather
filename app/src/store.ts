@@ -259,6 +259,8 @@ export interface Settings {
     /** radars each model runs on, keyed "ep|id" */
     runRadars?: Record<string, any>;
     /* end models 0.8 */
+    /** 0.8.1: the detections gate filters by probability (default) or by confidence */
+    gateBy?: "prob" | "conf";
   };
   /* ---------- end detection models ---------- */
   /* ---------- end radar 0.6 ---------- */

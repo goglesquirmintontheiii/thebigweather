@@ -1,9 +1,9 @@
 // Detection models → Jobs: training jobs on the server and on this computer, live progress + log.
 
 import { useEffect, useRef, useState } from "preact/hooks";
-import { CircleStop, X, ExternalLink, Server, ChevronDown, ChevronRight, Trash2, RefreshCw, RotateCcw, RotateCw, Cpu, MemoryStick, Network, PauseCircle, Laptop } from "lucide-preact";
+import { CircleStop, X, ExternalLink, Server, ChevronDown, ChevronRight, Trash2, RefreshCw, RotateCcw, RotateCw, Cpu, MemoryStick, Network, PauseCircle, Laptop, Share2 } from "lucide-preact";
 import { jobs, jobsErr, loadJobs, loadJob, jobAction, resumeJob, retryJob, selModel, mlTab, models, copyModel, loadModels, localIsMain, canLocal, localUrl, ensureLocal } from "../../ml/client";
-import { mlSettings, loadMlSettings } from "../../ml/m8"; // models 0.8
+import { mlSettings, loadMlSettings, fmtBytes } from "../../ml/m8"; // models 0.8
 import { tmeta } from "../../ml/targets";
 import type { Job } from "../../ml/types";
 import { TIcon, EpBadge, fmtDur, f2 } from "./common";
@@ -238,6 +238,12 @@ function JobCard({ j, open, toggle }: { j: Job; open: boolean; toggle: () => voi
               <Network size={11} /> {j.usage.net_mbps != null ? `${j.usage.net_mbps.toFixed(1)} Mb/s` : "—"}
               {j.resources?.download_concurrency ? <i> · ×{j.resources.download_concurrency}</i> : null}
             </span>
+            {/* 0.8.1: requests answered by another job's download */}
+            {j.usage.shared ? (
+              <span title="Data shared with other jobs running at the same time (downloaded once)">
+                <Share2 size={11} /> {j.usage.shared} shared{j.usage.shared_bytes ? <i> · {fmtBytes(j.usage.shared_bytes)}</i> : null}
+              </span>
+            ) : null}
             </span>
           </span>
         )}

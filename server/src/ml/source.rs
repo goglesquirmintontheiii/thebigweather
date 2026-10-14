@@ -93,6 +93,17 @@ pub trait Fetch: Send + Sync {
         (0, 0)
     }
     fn clear_cache(&self) {}
+    /// 0.8.1: the current job will read these radar volume keys (computed when it starts);
+    /// returns how many of them another running job planned too.
+    fn plan(&self, _keys: &[String]) -> usize {
+        0
+    }
+    /// 0.8.1: the current job finished: release its plan.
+    fn release_plan(&self) {}
+    /// 0.8.1: shared-data statistics (see `share.rs`).
+    fn shared_stats(&self) -> Option<serde_json::Value> {
+        None
+    }
 }
 
 /// Small byte-capped LRU for raw downloads.
@@ -145,6 +156,8 @@ pub struct NetSource {
     pub(crate) glm: Mutex<lru::LruCache<String, Arc<Vec<(f32, f32, i64)>>>>,
     /// US Drought Monitor maps by week: (DM class, polygon rings)
     pub(crate) usdm: Mutex<lru::LruCache<String, Arc<Vec<(i8, Vec<[f32; 2]>)>>>>,
+    /// 0.8.1: one download per URL / range at a time (jobs and the runner share it)
+    gets: super::share::Inflight<Bytes>,
 }
 
 const GFS_BUCKET: &str = "noaa-gfs-bdp-pds";
@@ -171,6 +184,7 @@ impl NetSource {
             iem_gate: tokio::sync::Mutex::new(None),
             glm: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(3000).unwrap())),
             usdm: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(4).unwrap())),
+            gets: Default::default(),
         }
     }
 
@@ -184,6 +198,18 @@ impl NetSource {
         if let Some(b) = self.raw.lock().get(&ck) {
             return Ok(b);
         }
+        // 0.8.1: a request already in flight (another job / the runner) is awaited, not repeated
+        let (r, shared) = self.gets.run(&ck, || self.get_net(url, range, ck.clone())).await;
+        if shared {
+            if let (Ok(b), Some(u)) = (&r, super::jobs::current()) {
+                u.shared.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                u.shared_bytes.fetch_add(b.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        r
+    }
+
+    async fn get_net(&self, url: &str, range: Option<(u64, Option<u64>)>, ck: String) -> Result<Bytes> {
         let mut req = self.http.get(url);
         if let Some((a, b)) = range {
             req = req.header(reqwest::header::RANGE, match b {

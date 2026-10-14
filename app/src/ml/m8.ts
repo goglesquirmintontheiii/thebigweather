@@ -5,7 +5,7 @@
 
 import { signal, computed, effect } from "@preact/signals";
 import { api, ApiError } from "../api";
-import { settings, toast } from "../store";
+import { settings, toast, update } from "../store";
 import { histRange } from "../anim";
 // active.ts sits in an import cycle with the overlays (active → radar → … → mldefs → here): load it
 // once everything has initialised
@@ -13,7 +13,8 @@ const activeMod = signal<typeof import("../active") | null>(null);
 setTimeout(() => void import("../active").then((m) => (activeMod.value = m)), 0);
 const frames = () => activeMod.value?.activeFrames.value ?? [];
 const nowFrameTime = () => activeMod.value?.activeTime.value ?? 0;
-import { mlReq, mlBin, liveEps, ensureLocal, loadRun, runState, detections, detectionsFromFeatures, models, mkey, loadJobs, jobs, normJob, pollDetections, loadModels, localUrl, localIsMain } from "./client";
+import { mlReq, mlBin, liveEps, ensureLocal, loadRun, runState, detections, detectionsFromFeatures, models, mkey, loadJobs, jobs, normJob, pollDetections, loadModels, localUrl, localIsMain, modelGone } from "./client";
+import { pgKey, pmLayer } from "./probgate";
 import type { Detection, Ep, Job, Model, ModelRun } from "./types";
 
 const enc = encodeURIComponent;
@@ -114,8 +115,42 @@ export async function setModelRun(m: Model, body: { enabled: boolean; options?: 
   }
 }
 /** remove a model's detections from the map (it was stopped) */
-export function dropDetections(ep: Ep, id: string) {
-  if (detections.peek().some((d) => d.ep === ep && d.model_id === id && !d.test)) detections.value = detections.peek().filter((d) => !(d.ep === ep && d.model_id === id && !d.test));
+export function dropDetections(ep: Ep, id: string, all = false) {
+  const gone = (d: Detection) => d.ep === ep && d.model_id === id && (all || !d.test);
+  if (detections.peek().some(gone)) detections.value = detections.peek().filter((d) => !gone(d));
+  // 0.8.1: the timeline's copy too (it kept the legend gates of stopped / deleted models up)
+  const td = timeDets.peek();
+  if (td.list.some((d) => d.ep === ep && d.model_id === id && (all || !d.hist))) timeDets.value = { ...td, list: td.list.filter((d) => !(d.ep === ep && d.model_id === id && (all || !d.hist))) };
+}
+/** 0.8.1: a deleted model: detections (test and history runs too), run state and its own gate */
+function forgetModel(ep: Ep, id: string) {
+  dropDetections(ep, id, true);
+  const k = `${ep}|${id}`;
+  if (modelRuns.peek()[k]) {
+    const { [k]: _, ...rest } = modelRuns.peek();
+    modelRuns.value = rest;
+  }
+  const g = pgKey(pmLayer(id));
+  if (models.peek().every((m) => m.id !== id)) {
+    update((s) => {
+      if (s.gates?.[g]) {
+        s.gates = { ...s.gates };
+        delete s.gates[g];
+      }
+    });
+  }
+}
+modelGone.push(forgetModel);
+/* 0.8.1: enable / stop many models at once (Models list; respects the Server / This computer filter) */
+export async function setRunAll(ms: Model[], enabled: boolean): Promise<number> {
+  let n = 0;
+  for (const m of ms) {
+    if (m.training) continue;
+    // already in that state (saved options and radars are kept by the server)
+    if (!stoppedModels.peek().has(mkey(m)) === enabled) continue;
+    if (await setModelRun(m, { enabled })) n++;
+  }
+  return n;
 }
 /** model keys known to be stopped / disabled: their detections are hidden (#15) */
 export const stoppedModels = computed(() => {
@@ -157,6 +192,7 @@ export interface RunJob {
   started: number;
 }
 export const runJobs = signal<Record<string, RunJob>>({});
+let lastHistFetch = 0;
 const jk = (j: { ep: Ep; id: string }) => `${j.ep}|${j.id}`;
 function track(j: RunJob) {
   runJobs.value = { ...runJobs.value, [jk(j)]: j };
@@ -168,8 +204,14 @@ function track(j: RunJob) {
       const n = normJob(r, j.ep);
       const next: RunJob = { ...cur, state: n.state, progress: n.progress ?? cur.progress, error: n.error, detections: r?.counts?.detections ?? r?.detections ?? cur.detections };
       runJobs.value = { ...runJobs.peek(), [jk(j)]: next };
-      if (j.kind === "history") refreshTimeDets(true);
-      if (["done", "failed", "cancelled", "interrupted"].includes(n.state)) {
+      const end = ["done", "failed", "cancelled", "interrupted"].includes(n.state);
+      // 0.8.1: the whole range was refetched every 1.5 s while a history run went on (heavy with
+      // thousands of detections): every 10 s, and once at the end
+      if (j.kind === "history" && (end || Date.now() - lastHistFetch > 10_000)) {
+        lastHistFetch = Date.now();
+        refreshTimeDets(true);
+      }
+      if (end) {
         if (j.kind === "now") pollDetections();
         if (n.state === "done") toast(j.kind === "history" ? `History run finished · ${next.detections ?? "?"} detections` : "Run finished · detections on the map", "info", 6000);
         else if (n.state === "failed") toast(`Run failed: ${n.error ?? "error"}`, "error", 8000);
@@ -303,7 +345,18 @@ export function detsAt(T: number): Detection[] {
   const win = Math.max(frameStepMs.peek(), 5 * 60_000);
   const src = timeDets.value.list.length ? timeDets.value.list : detections.value;
   const out = new Map<string, Detection>();
+  // 0.8.1: areas: only the newest run issued at or before T (successive runs overlap in time)
+  const run = new Map<string, number>();
   for (const d of src) {
+    if (d.kind !== "area" || d.t > T + 30_000) continue;
+    const k = `${d.ep}|${d.model_id}|${d.hist ? "h" : "l"}`;
+    if ((run.get(k) ?? -Infinity) < d.t) run.set(k, d.t);
+  }
+  for (const d of src) {
+    if (d.kind === "area") {
+      const r = run.get(`${d.ep}|${d.model_id}|${d.hist ? "h" : "l"}`);
+      if (r != null && d.t !== r) continue;
+    }
     const ok = d.valid_from != null || d.valid_to != null ? (d.valid_from ?? d.t) - 1 <= T && T <= (d.valid_to ?? d.t + win) : d.t <= T + 30_000 && d.t > T - win;
     if (!ok) continue;
     // one instance per cell: the newest before T

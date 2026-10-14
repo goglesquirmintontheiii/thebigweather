@@ -235,7 +235,7 @@ async fn model_delete(State(st): St, Path(id): Path<String>) -> Result<Json<Valu
         c.saved.remove(&id);
         st.ml.runner.set_cfg(c);
     }
-    st.ml.runner.forget_model(&id);
+    st.ml.runner.delete_model(&id); // 0.8.1: history-run detections too
     st.hub.send(json!({"type": "ml_model", "id": id, "action": "deleted"}));
     Ok(Json(json!({"ok": true, "id": id})))
 }

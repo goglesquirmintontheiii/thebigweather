@@ -69,6 +69,9 @@ pub struct Usage {
     pub cache_bytes: AtomicU64,
     pub cache_hits: AtomicU64,
     pub downloads: AtomicU64,
+    /// 0.8.1: requests answered by another job's download (in flight or kept on disk)
+    pub shared: AtomicU64,
+    pub shared_bytes: AtomicU64,
 }
 
 /// Approximate memory of one decoded Level II volume plus its extraction buffers.
@@ -488,6 +491,8 @@ impl Ctl {
         v["net_total_mb"] = json!((self.usage.net_bytes.load(Ordering::Relaxed) as f64 / 1048576.0 * 10.0).round() / 10.0);
         v["downloads"] = json!(self.usage.downloads.load(Ordering::Relaxed));
         v["cache_hits"] = json!(self.usage.cache_hits.load(Ordering::Relaxed));
+        v["shared"] = json!(self.usage.shared.load(Ordering::Relaxed));
+        v["shared_bytes"] = json!(self.usage.shared_bytes.load(Ordering::Relaxed));
         v["cache_mb"] = json!(self.usage.cache_bytes.load(Ordering::Relaxed) >> 20);
         v["inflight_volumes"] = json!(self.usage.inflight.load(Ordering::Relaxed));
         v

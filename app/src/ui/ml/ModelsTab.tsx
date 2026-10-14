@@ -1,11 +1,11 @@
 // Detection models → Models: list, search/filter, detail (metrics, charts, importance, spec), manage.
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { Search, Upload, Download, Copy, Trash2, Pencil, Check, X, RefreshCw, Server, Laptop, Tag, RotateCcw, FastForward, HardDrive, History as HistoryIcon, Globe2, ArrowRightLeft, Radar, Combine, Loader } from "lucide-preact";
-import { models, modelsErr, modelsLoading, loadModels, loadModel, selModel, mkey, patchModel, deleteModel, exportModel, importModel, copyModel, trainDraft, mlTab, runningOn, catalog, canLocal, localIsMain, exportState, moveModel, localUrl } from "../../ml/client";
-import { fmtBytes, INTENSITIES, runOf, stoppedModels } from "../../ml/m8"; // models 0.8
+import { Search, Upload, Download, Copy, Trash2, Pencil, Check, X, RefreshCw, Server, Laptop, Tag, RotateCcw, FastForward, HardDrive, History as HistoryIcon, Globe2, ArrowRightLeft, Radar, Combine, Loader, Power, PowerOff } from "lucide-preact";
+import { models, modelsErr, modelsLoading, loadModels, loadModel, selModel, mkey, patchModel, deleteModel, exportModel, importModel, copyModel, trainDraft, mlTab, runningOn, catalog, canLocal, localIsMain, exportState, moveModel, localUrl, loadRun } from "../../ml/client";
+import { fmtBytes, INTENSITIES, runOf, stoppedModels, setRunAll } from "../../ml/m8"; // models 0.8
 import { ModelRun } from "./ModelRun"; // models 0.8
-import { update, settings } from "../../store";
+import { update, settings, toast } from "../../store";
 import { tmeta, TARGETS } from "../../ml/targets";
 import type { Model, Ep } from "../../ml/types";
 import { TIcon, EpBadge, pct, f2, fmtDay, scoresAt, Help } from "./common";
@@ -51,6 +51,7 @@ export function ModelsTab() {
   const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     loadModels();
+    loadRun(); // 0.8.1: which models run (Enable / Stop all)
   }, []);
   const all = models.value;
   const labels = useMemo(() => [...new Set(all.flatMap((m) => m.labels))].sort(), [all]);
@@ -67,6 +68,20 @@ export function ModelsTab() {
     }
     return true;
   });
+  // 0.8.1: enable / stop every model at once (the Server / This computer filter applies)
+  const scope = all.filter((m) => !m.training && (!twoPlaces || loc === "both" || m.ep === loc));
+  const nOn = scope.filter((m) => !stoppedModels.value.has(mkey(m))).length;
+  const [bulk, setBulk] = useState(false);
+  const runAll = async (on: boolean) => {
+    setBulk(true);
+    try {
+      const n = await setRunAll(scope, on);
+      if (n) toast(`${on ? "Enabled" : "Stopped"} ${n} model${n === 1 ? "" : "s"}`);
+    } finally {
+      setBulk(false);
+    }
+  };
+  const where = twoPlaces && loc !== "both" ? (loc === "main" ? " on the server" : " on this computer") : "";
   const sel0 = all.find((m) => mkey(m) === selModel.value) ?? (selModel.value ? undefined : list.find((m) => !m.training));
   const sel = sel0?.training ? undefined : sel0;
   return (
@@ -87,6 +102,12 @@ export function ModelsTab() {
           </label>
           <button class="icon-btn" title="Refresh" onClick={() => loadModels()}>
             <RefreshCw size={15} class={modelsLoading.value ? "spin" : ""} />
+          </button>
+          <button class="icon-btn" disabled={bulk || !scope.length || nOn === scope.length} title={`Enable all models${where}`} onClick={() => runAll(true)}>
+            <Power size={15} />
+          </button>
+          <button class="icon-btn" disabled={bulk || !nOn} title={`Stop all models${where} (${nOn} running)`} onClick={() => runAll(false)}>
+            <PowerOff size={15} />
           </button>
           <button class="icon-btn" title="Import a .tbwmodel file (or drop it here)" onClick={() => fileRef.current?.click()}>
             <Upload size={15} />

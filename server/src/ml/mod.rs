@@ -21,6 +21,7 @@
 pub mod api;
 pub mod cells;
 pub mod compare;
+pub mod confidence;
 pub mod core;
 pub mod dataset;
 pub mod features;
@@ -37,7 +38,9 @@ pub mod reports;
 pub mod runner;
 pub mod sat;
 pub mod source;
+pub mod share;
 pub mod spec;
+pub mod storms;
 pub mod train;
 
 #[cfg(test)]
@@ -111,6 +114,11 @@ impl Ml {
         let root = data_dir.join("ml");
         let cache_root = data_dir.join("cache/ml");
         std::fs::create_dir_all(&cache_root).ok();
+        // 0.8.1: jobs running at the same time share downloads (in flight and kept on disk)
+        let shared = share::SharedFetch::wrap(fetch, cache_root.join("shared"));
+        // at most half the training-cache budget is kept for jobs sharing volumes
+        shared.max_pinned_bytes.store((if cfg.cache_disk_mb > 0 { cfg.cache_disk_mb } else { 2048 } << 20) / 2, Ordering::Relaxed);
+        let fetch: Arc<dyn Fetch> = shared;
         let reports = Arc::new(reports::Reports::open(root.join("reports"), hub.clone()));
         let ml = Ml {
             store: Arc::new(Store::open(root.join("models"))),
@@ -195,6 +203,7 @@ impl Ml {
             "history_keep_min": c.history_keep_min, "history_grid_runs": c.history_grid_runs, "history_run_keep_h": c.history_run_keep_h,
             "report_cycles": c.report_cycles, "cache_retention_days": c.cache_retention_days, "auto_resume": c.auto_resume,
             "jobs": self.jobs.counts(),
+            "shared_data": self.fetch.shared_stats(),
         })
     }
 
@@ -468,6 +477,12 @@ impl Ml {
                 let r = ctl.resources();
                 ctl.log(format!("started: {} CPU threads, {} MB RAM, {} radar volumes / {} gridded requests at once", r.cpu_threads, r.ram_mb, r.download_concurrency, r.io_concurrency));
                 let res = self.clone().job_body(ctl.clone(), spec, kind).await;
+                // 0.8.1: data kept for this job (shared with others) can go once nobody needs it
+                self.fetch.release_plan();
+                let shared = ctl.usage.shared.load(Ordering::Relaxed);
+                if shared > 0 {
+                    ctl.log(format!("shared data: {shared} requests served by other jobs' downloads ({} MB)", ctl.usage.shared_bytes.load(Ordering::Relaxed) >> 20));
+                }
                 match res {
                     Ok(id) => {
                         ctl.log(format!("done: model {id}"));
@@ -760,15 +775,19 @@ impl Ml {
             .buffer_unordered(conc)
             .collect()
             .await;
+        let mut all = vec![];
         for (site, d, err) in results {
             if let Some(e) = err {
                 errors.insert(site, json!(e));
             }
-            for x in &d {
-                *per_model.entry(x.model_id.clone()).or_default() += 1;
-            }
-            self.runner.push_live(hub.as_ref(), d);
+            all.extend(d);
         }
+        // 0.8.1: one storm seen by several radars → one detection per model
+        let all = storms::nms(all, storms::NMS_RADIUS_KM, storms::rank);
+        for x in &all {
+            *per_model.entry(x.model_id.clone()).or_default() += 1;
+        }
+        self.runner.push_live(hub.as_ref(), all);
         let now = chrono::Utc::now().timestamp_millis();
         let mut layers = vec![];
         for (m, o) in &grid {
@@ -782,6 +801,7 @@ impl Ml {
                     }
                     *per_model.entry(m.id.clone()).or_default() += out.detections.len();
                     layers.extend(out.layers.clone());
+                    self.runner.replace_run(hub.as_ref(), &m.id); // 0.8.1
                     self.runner.push_live(hub.as_ref(), out.detections);
                 }
                 Err(e) => {

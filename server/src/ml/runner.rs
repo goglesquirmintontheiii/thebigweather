@@ -22,6 +22,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub const KEEP_MS: i64 = 2 * 3_600_000;
+/// 0.8.1: a live cell detection whose storm was not seen again for this long is expired (no
+/// longer returned as current; kept for the timeline until `keep_ms`).
+pub const STALE_MS: i64 = 20 * 60_000;
 
 fn day_str<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
     Ok(match Value::deserialize(d)? {
@@ -343,11 +346,25 @@ pub struct Detection {
     pub track: Option<Value>,
     /// historical / one-shot run (job id) that produced it
     pub run: Option<String>,
+    /// 0.8.1: how much to trust `prob` / `value` (0–1, see [`super::confidence`])
+    pub confidence: Option<f64>,
+    /// 0.8.1: the parts of the confidence (skill, calibration, inputs, coverage, agreement)
+    pub conf_parts: Option<Value>,
+    /// 0.8.1: storm identity (same storm across cycles and radars → same id)
+    pub storm_id: Option<String>,
+    /// 0.8.1: radar cells merged into this detection's storm
+    pub storm_cells: Option<u32>,
+    /// 0.8.1: replaced by a newer cycle (or expired): only kept for time-range queries
+    #[serde(skip)]
+    pub superseded: bool,
+    /// 0.8.1: context for the summary sentence (cell ref_max / vil_max; intensification
+    /// horizon and threshold), merged into the properties
+    pub extra: Option<Value>,
 }
 
 /// A detection with every optional field empty (fill the rest with struct update syntax).
 pub fn blank_detection() -> Detection {
-    Detection { id: String::new(), model_id: String::new(), model_name: String::new(), target: String::new(), prob: 0.0, level: "low", site: None, t: 0, created: 0, cell_id: None, lat: 0.0, lon: 0.0, top_features: vec![], motion: None, outline: vec![], kind: "cell", valid_from: None, valid_to: None, rings: vec![], value: None, prob_level: None, track: None, run: None }
+    Detection { id: String::new(), model_id: String::new(), model_name: String::new(), target: String::new(), prob: 0.0, level: "low", site: None, t: 0, created: 0, cell_id: None, lat: 0.0, lon: 0.0, top_features: vec![], motion: None, outline: vec![], kind: "cell", valid_from: None, valid_to: None, rings: vec![], value: None, prob_level: None, track: None, run: None, confidence: None, conf_parts: None, storm_id: None, storm_cells: None, superseded: false, extra: None }
 }
 
 /// Detection filters of `GET /api/ml/detections`.
@@ -387,6 +404,23 @@ impl Detection {
         }
         if let Some(r) = &self.run {
             p["run"] = json!(r);
+        }
+        if let Some(c) = self.confidence {
+            p["confidence"] = json!(c);
+        }
+        if let Some(c) = &self.conf_parts {
+            p["conf_parts"] = c.clone();
+        }
+        if let Some(s) = &self.storm_id {
+            p["storm_id"] = json!(s);
+        }
+        if let Some(n) = self.storm_cells {
+            p["storm_cells"] = json!(n);
+        }
+        if let Some(Value::Object(e)) = &self.extra {
+            for (k, v) in e {
+                p[k.as_str()] = v.clone();
+            }
         }
         p
     }
@@ -483,6 +517,13 @@ pub struct Runner {
     pub report_cycles: AtomicU32,
     pub reports: RwLock<Option<Arc<super::reports::Reports>>>,
     pub hub: RwLock<Option<crate::hub::Hub>>,
+    /// 0.8.1: storm identity per model (live detections)
+    storms: Mutex<super::storms::StormReg>,
+    /// 0.8.1: per-model confidence inputs
+    conf: super::confidence::ConfCache,
+    /// 0.8.1: models stopped / deleted (time, deleted): a cycle still in flight must not bring
+    /// their detections back (one-shot runs of a stopped model still may)
+    gone: Mutex<HashMap<String, (i64, bool)>>,
 }
 
 /// Probability levels (low, medium, high) of a model's areas.
@@ -561,6 +602,9 @@ impl Runner {
             report_cycles: AtomicU32::new(3),
             reports: RwLock::new(None),
             hub: RwLock::new(None),
+            storms: Mutex::new(Default::default()),
+            conf: Default::default(),
+            gone: Mutex::new(HashMap::new()),
         }
     }
 
@@ -573,6 +617,13 @@ impl Runner {
         for id in old.iter().filter(|id| !c.has(id)) {
             self.forget_model(id);
         }
+        // 0.8.1: (re-)enabled models may push again
+        {
+            let mut g = self.gone.lock();
+            for id in c.ids() {
+                g.remove(&id);
+            }
+        }
         if c.concurrency > 0 {
             self.concurrency.resize(c.concurrency);
         }
@@ -583,6 +634,8 @@ impl Runner {
     /// Drop a model's layers, outlooks, run state and current detections (clients are told with
     /// `ml_run_state`).
     pub fn forget_model(&self, id: &str) {
+        self.gone.lock().entry(id.to_string()).or_insert((0, false)).0 = chrono::Utc::now().timestamp_millis();
+        self.storms.lock().forget(id);
         if let Some(s) = self.sink.read().as_ref() {
             s.remove(&format!("mlpred/{id}"));
         }
@@ -606,6 +659,14 @@ impl Runner {
         }
     }
 
+    /// 0.8.1: a deleted model: everything of `forget_model` (layers incl. history / past runs)
+    /// plus its historical-run detections.
+    pub fn delete_model(&self, id: &str) {
+        self.gone.lock().insert(id.to_string(), (chrono::Utc::now().timestamp_millis(), true));
+        self.forget_model(id);
+        self.hist.write().retain(|x| x.model_id != id);
+    }
+
     fn opts(&self, id: &str) -> ModelRun {
         self.cfg.read().models.iter().find(|m| m.id == id).cloned().unwrap_or_else(|| ModelRun::plain(id))
     }
@@ -623,7 +684,7 @@ impl Runner {
         let c = self.cfg.read().clone();
         let o = c.options(id);
         let st = self.model_state.read().get(id).cloned();
-        let n = self.dets.read().iter().filter(|d| d.model_id == id).count();
+        let n = self.dets.read().iter().filter(|d| d.model_id == id && !d.superseded).count();
         json!({"id": id, "enabled": c.has(id) && c.enabled, "selected": c.has(id), "runner_enabled": c.enabled, "options": o.options_json(), "radars": o.radars.clone().unwrap_or(Value::Null), "state": st, "detections": n})
     }
 
@@ -661,7 +722,7 @@ impl Runner {
             "saved": c.saved.keys().collect::<Vec<_>>(),
             "layers": self.layers(),
             "outlooks": self.outlooks.read().keys().cloned().collect::<Vec<_>>(),
-            "detections": self.dets.read().len(),
+            "detections": self.dets.read().iter().filter(|d| !d.superseded).count(),
             "history_detections": self.hist.read().len(),
             "keep_min": self.keep_ms.load(Ordering::Relaxed) / 60_000,
         })
@@ -689,7 +750,17 @@ impl Runner {
         while d.front().map(|x| now - x.created > keep).unwrap_or(false) {
             d.pop_front();
         }
+        // 0.8.1: storms not seen again expire (still listed for time-range queries)
+        let mut expired = vec![];
+        let stale: HashMap<String, i64> = self.cfg.read().models.iter().map(|m| (m.id.clone(), STALE_MS.max(m.cadence_min.unwrap_or(0) as i64 * 2 * 60_000))).collect();
+        for x in d.iter_mut() {
+            if !x.superseded && x.kind == "cell" && now - x.created > stale.get(&x.model_id).copied().unwrap_or(STALE_MS) {
+                x.superseded = true;
+                expired.push(x.id.clone());
+            }
+        }
         drop(d);
+        self.tell_expired(None, expired);
         let hk = self.hist_keep_ms.load(Ordering::Relaxed);
         let mut h = self.hist.write();
         while h.front().map(|x| now - x.created > hk).unwrap_or(false) {
@@ -697,18 +768,81 @@ impl Runner {
         }
         drop(h);
         self.streak.lock().retain(|_, v| now - v.1 < 3_600_000);
+        self.gone.lock().retain(|_, t| now - t.0 < 15 * 60_000);
+    }
+
+    /// 0.8.1: tell clients which detections are no longer current.
+    fn tell_expired(&self, hub: Option<&crate::hub::Hub>, ids: Vec<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let h = hub.cloned().or_else(|| self.hub.read().clone());
+        if let Some(h) = h {
+            for c in ids.chunks(500) {
+                h.send(json!({"type": "ml_expired", "ids": c}));
+            }
+        }
+    }
+
+    /// 0.8.1: mark live detections superseded (`pred` true); returns their ids.
+    fn supersede(&self, pred: impl Fn(&Detection) -> bool) -> Vec<String> {
+        let mut out = vec![];
+        for x in self.dets.write().iter_mut() {
+            if !x.superseded && pred(x) {
+                x.superseded = true;
+                out.push(x.id.clone());
+            }
+        }
+        out
+    }
+
+    /// 0.8.1: a model's new run replaces all its previous areas / grid points.
+    pub fn replace_run(&self, hub: Option<&crate::hub::Hub>, model_id: &str) {
+        let ids = self.supersede(|x| x.model_id == model_id && matches!(x.kind, "area" | "point"));
+        self.tell_expired(hub, ids);
+    }
+
+    /// 0.8.1: radar `sites` delivered a new volume this cycle: detections of `models` from them
+    /// whose storm was not detected again are no longer current.
+    pub fn expire_unseen(&self, hub: Option<&crate::hub::Hub>, models: &std::collections::HashSet<String>, sites: &std::collections::HashSet<String>, cycle_start: i64) {
+        if models.is_empty() || sites.is_empty() {
+            return;
+        }
+        let ids = self.supersede(|x| x.kind == "cell" && x.created < cycle_start && models.contains(&x.model_id) && x.site.as_ref().map(|s| sites.contains(s)).unwrap_or(false));
+        self.tell_expired(hub, ids);
     }
 
     fn push(&self, hub: Option<&crate::hub::Hub>, mut new: Vec<Detection>) {
         if new.is_empty() {
             return;
         }
+        // 0.8.1: a stopped / deleted model's cycle may still be in flight
+        {
+            let g = self.gone.lock();
+            if !g.is_empty() {
+                new.retain(|d| match g.get(&d.model_id) {
+                    Some((_, deleted)) => !*deleted && d.run.is_some(),
+                    None => true,
+                });
+            }
+        }
+        if new.is_empty() {
+            return;
+        }
+        // 0.8.1: storm identity: a new cycle's detection replaces the same storm's previous one
+        let now = chrono::Utc::now().timestamp_millis();
+        self.storms.lock().assign(&mut new, now);
+        let keys: std::collections::HashSet<(String, String)> = new.iter().filter_map(|d| Some((d.model_id.clone(), d.storm_id.clone()?))).collect();
+        if !keys.is_empty() {
+            let ids = self.supersede(|x| x.kind == "cell" && x.storm_id.as_ref().map(|s| keys.contains(&(x.model_id.clone(), s.clone()))).unwrap_or(false));
+            self.tell_expired(hub, ids);
+        }
         new.sort_by_key(|d| d.created);
         if let Some(h) = hub {
             for d in &new {
                 h.send(d.ws());
                 if self.opts(&d.model_id).notify.unwrap_or(false) && matches!(d.level, "med" | "high") {
-                    h.send(json!({"type": "ml_notify", "model_id": d.model_id, "model_name": d.model_name, "target": d.target, "prob": (d.prob * 1000.0).round() / 1000.0, "level": d.level, "lat": d.lat, "lon": d.lon, "site": d.site, "kind": d.kind, "t": d.t}));
+                    h.send(json!({"type": "ml_notify", "model_id": d.model_id, "model_name": d.model_name, "target": d.target, "prob": (d.prob * 1000.0).round() / 1000.0, "level": d.level, "confidence": d.confidence, "lat": d.lat, "lon": d.lon, "site": d.site, "kind": d.kind, "t": d.t}));
                 }
             }
         }
@@ -782,6 +916,10 @@ impl Runner {
         let src = live.iter().filter(|_| use_live).chain(hist.iter().filter(|_| use_hist));
         for x in src {
             if x.created < q.since || (!q.models.is_empty() && !q.models.contains(&x.model_id)) {
+                continue;
+            }
+            // 0.8.1: replaced / expired detections only for time-range queries (the timeline)
+            if x.superseded && !ranged {
                 continue;
             }
             if let Some(r) = q.run.as_deref().filter(|r| *r != "live") {
@@ -898,16 +1036,38 @@ impl Runner {
     fn score_cells(&self, vc: &VolCells, models: &[Arc<ModelRecord>], track: bool) -> Vec<Detection> {
         let now = chrono::Utc::now().timestamp_millis();
         let mut out = vec![];
+        // 0.8.1: cells of the same storm (one storm → a few detections per model)
+        let comp = super::storms::cluster(&vc.cells);
         // ensemble groups: (target, mode) → per cell probabilities
         let mut ens: HashMap<(String, String), Vec<Vec<f64>>> = HashMap::new();
         let mut thr_sum: HashMap<(String, String), (f64, usize)> = HashMap::new();
+        let mut ens_conf: HashMap<(String, String), Vec<Arc<super::confidence::ConfModel>>> = HashMap::new();
+        let motion_of = |c: &cells::Cell| c.motion.map(|(d, kt)| json!({"dir": (d * 10.0).round() / 10.0, "kt": (kt * 10.0).round() / 10.0}));
+        // 0.8.1: what the summary sentence needs (current intensity of the cell)
+        let extra_of = |c: &cells::Cell, m: &ModelRecord| {
+            let mut e = serde_json::Map::new();
+            for k in ["ref_max", "vil_max", "area_km2"] {
+                let v = c.feats.get(k);
+                if v.is_finite() {
+                    e.insert(k.into(), json!((v as f64 * 10.0).round() / 10.0));
+                }
+            }
+            if m.target == "storm_intensify" {
+                let tp = m.spec.get("target_params").cloned().unwrap_or(Value::Null);
+                e.insert("lead_min".into(), json!(tp.get("lead_min").and_then(|v| v.as_f64()).unwrap_or(30.0)));
+                e.insert("dref".into(), json!(tp.get("dref").and_then(|v| v.as_f64()).unwrap_or(5.0)));
+                e.insert("dvil".into(), json!(tp.get("dvil").and_then(|v| v.as_f64()).unwrap_or(10.0)));
+            }
+            Some(Value::Object(e))
+        };
         for m in models {
             let o = self.opts(&m.id);
             let levels = o.levels(m);
-            let mut mine = vec![];
+            let cm = self.conf.get(m);
+            let mut mine: Vec<(usize, Detection, f64)> = vec![];
             let mut probs = vec![];
             let is_track = m.target == "storm_track";
-            for c in &vc.cells {
+            for (ci, c) in vc.cells.iter().enumerate() {
                 if o.min_cell_dbz.map(|x| (c.feats.get("ref_max") as f64) < x).unwrap_or(false)
                     || o.max_range_km.map(|x| (c.feats.get("range_km") as f64) > x).unwrap_or(false)
                     || o.min_area_km2.map(|x| (c.feats.get("area_km2") as f64) < x).unwrap_or(false)
@@ -917,29 +1077,43 @@ impl Runner {
                     continue;
                 }
                 if is_track {
+                    let (conf, parts) = cm.combine(None, cm.inputs(&c.feats), cm.coverage(c.lat, c.lon), None);
                     probs.push(1.0);
                     let tr = self.track_of(m, &o, c, vc.t);
                     let last = tr.as_array().and_then(|a| a.last()).cloned().unwrap_or(Value::Null);
-                    mine.push(Detection {
-                        id: self.next_id(now),
-                        model_id: m.id.clone(),
-                        model_name: m.name.clone(),
-                        target: m.target.clone(),
-                        prob: 1.0,
-                        level: "med",
-                        site: Some(vc.site.clone()),
-                        t: vc.t,
-                        created: now,
-                        cell_id: Some(c.id.clone()),
-                        lat: c.lat,
-                        lon: c.lon,
-                        motion: c.motion.map(|(d, kt)| json!({"dir": (d * 10.0).round() / 10.0, "kt": (kt * 10.0).round() / 10.0})),
-                        outline: c.hull.clone(),
-                        kind: "cell",
-                        value: last["strength"].as_f64(),
-                        track: Some(tr),
-                        ..blank_detection()
-                    });
+                    // a cell without motion has no history: the track is a guess
+                    let conf = if c.motion.is_some() { conf } else { (conf * 0.6 * 1000.0).round() / 1000.0 };
+                    let strength = last["strength"].as_f64();
+                    let area = c.feats.get("area_km2") as f64;
+                    mine.push((
+                        ci,
+                        Detection {
+                            id: self.next_id(now),
+                            model_id: m.id.clone(),
+                            model_name: m.name.clone(),
+                            target: m.target.clone(),
+                            prob: 1.0,
+                            level: "med",
+                            site: Some(vc.site.clone()),
+                            t: vc.t,
+                            created: now,
+                            cell_id: Some(c.id.clone()),
+                            lat: c.lat,
+                            lon: c.lon,
+                            motion: motion_of(c),
+                            outline: c.hull.clone(),
+                            kind: "cell",
+                            value: strength,
+                            track: Some(tr),
+                            confidence: Some(conf),
+                            conf_parts: Some(parts),
+                            storm_id: Some(format!("{}:{}", vc.site, c.id)),
+                            extra: extra_of(c, m),
+                            ..blank_detection()
+                        },
+                        // strongest cells first (then the largest)
+                        strength.unwrap_or(0.0) + c.feats.get("ref_max").max(0.0) as f64 * 0.01 + if area.is_finite() { area * 1e-6 } else { 0.0 },
+                    ));
                     continue;
                 }
                 let (p, top) = m.score(&c.feats, 5);
@@ -952,38 +1126,50 @@ impl Runner {
                     continue;
                 };
                 if let Some(n) = o.persistence.filter(|n| *n > 1) {
-                    if track && self.hit(&m.id, &format!("{}:{}", vc.site, c.id), now) < n {
+                    // data time, so historical runs count volumes like the live loop does
+                    if track && self.hit(&m.id, &format!("{}:{}", vc.site, c.id), vc.t) < n {
                         continue;
                     }
                 }
-                mine.push(Detection {
-                    id: self.next_id(now),
-                    model_id: m.id.clone(),
-                    model_name: m.name.clone(),
-                    target: m.target.clone(),
-                    prob: p,
-                    level,
-                    site: Some(vc.site.clone()),
-                    t: vc.t,
-                    created: now,
-                    cell_id: Some(c.id.clone()),
-                    lat: c.lat,
-                    lon: c.lon,
-                    top_features: top,
-                    motion: c.motion.map(|(d, kt)| json!({"dir": (d * 10.0).round() / 10.0, "kt": (kt * 10.0).round() / 10.0})),
-                    outline: c.hull.clone(),
-                    kind: "cell",
-                    ..blank_detection()
-                });
+                let (conf, parts) = cm.combine(Some(p), cm.inputs(&c.feats), cm.coverage(c.lat, c.lon), None);
+                mine.push((
+                    ci,
+                    Detection {
+                        id: self.next_id(now),
+                        model_id: m.id.clone(),
+                        model_name: m.name.clone(),
+                        target: m.target.clone(),
+                        prob: p,
+                        level,
+                        site: Some(vc.site.clone()),
+                        t: vc.t,
+                        created: now,
+                        cell_id: Some(c.id.clone()),
+                        lat: c.lat,
+                        lon: c.lon,
+                        top_features: top,
+                        motion: motion_of(c),
+                        outline: c.hull.clone(),
+                        kind: "cell",
+                        confidence: Some(conf),
+                        conf_parts: Some(parts),
+                        storm_id: Some(format!("{}:{}", vc.site, c.id)),
+                        extra: extra_of(c, m),
+                        ..blank_detection()
+                    },
+                    p,
+                ));
             }
+            let mut mine = super::storms::thin(&vc.cells, &comp, mine);
             if let Some(k) = o.max_detections {
-                mine.sort_by(|a, b| b.prob.partial_cmp(&a.prob).unwrap_or(std::cmp::Ordering::Equal));
+                mine.sort_by(|a, b| super::storms::rank(b).partial_cmp(&super::storms::rank(a)).unwrap_or(std::cmp::Ordering::Equal));
                 mine.truncate(k);
             }
             out.extend(mine);
             if let Some(mode) = o.ensemble.as_ref().filter(|_| !is_track) {
                 let key = (m.target.clone(), mode.clone());
                 ens.entry(key.clone()).or_default().push(probs);
+                ens_conf.entry(key.clone()).or_default().push(cm.clone());
                 let e = thr_sum.entry(key).or_insert((0.0, 0));
                 e.0 += levels.med;
                 e.1 += 1;
@@ -995,28 +1181,44 @@ impl Runner {
             }
             let (ts, tn) = thr_sum[&(target.clone(), mode.clone())];
             let levels = Levels::from_threshold(ts / tn as f64);
+            let cms = &ens_conf[&(target.clone(), mode.clone())];
+            let mut mine: Vec<(usize, Detection, f64)> = vec![];
             for (i, c) in vc.cells.iter().enumerate() {
                 let ps: Vec<f64> = members.iter().map(|v| v[i]).collect();
                 let p = if mode == "max" { ps.iter().copied().fold(0.0, f64::max) } else { ps.iter().sum::<f64>() / ps.len() as f64 };
                 let Some(level) = levels.level(p) else { continue };
-                out.push(Detection {
-                    id: self.next_id(now),
-                    model_id: format!("ensemble:{target}:{mode}"),
-                    model_name: format!("Ensemble ({mode}) · {target}"),
-                    target: target.clone(),
-                    prob: p,
-                    level,
-                    site: Some(vc.site.clone()),
-                    t: vc.t,
-                    created: now,
-                    cell_id: Some(c.id.clone()),
-                    lat: c.lat,
-                    lon: c.lon,
-                    outline: c.hull.clone(),
-                    kind: "cell",
-                    ..blank_detection()
-                });
+                // the members' mean confidence, scaled by how much they agree
+                let (cs, parts): (Vec<f64>, Vec<Value>) = cms.iter().map(|cm| cm.combine(Some(p), cm.inputs(&c.feats), cm.coverage(c.lat, c.lon), None)).unzip();
+                let agree = super::confidence::agreement(&ps);
+                let conf = ((cs.iter().sum::<f64>() / cs.len().max(1) as f64) * agree * 1000.0).round() / 1000.0;
+                let mut part = parts.into_iter().next().unwrap_or(json!({}));
+                part["agreement"] = json!((agree * 1000.0).round() / 1000.0);
+                mine.push((
+                    i,
+                    Detection {
+                        id: self.next_id(now),
+                        model_id: format!("ensemble:{target}:{mode}"),
+                        model_name: format!("Ensemble ({mode}) · {target}"),
+                        target: target.clone(),
+                        prob: p,
+                        level,
+                        site: Some(vc.site.clone()),
+                        t: vc.t,
+                        created: now,
+                        cell_id: Some(c.id.clone()),
+                        lat: c.lat,
+                        lon: c.lon,
+                        outline: c.hull.clone(),
+                        kind: "cell",
+                        confidence: Some(conf),
+                        conf_parts: Some(part),
+                        storm_id: Some(format!("{}:{}", vc.site, c.id)),
+                        ..blank_detection()
+                    },
+                    p,
+                ));
             }
+            out.extend(super::storms::thin(&vc.cells, &comp, mine));
         }
         out
     }
@@ -1157,7 +1359,9 @@ impl Runner {
         let realtime = chrono::Utc::now().timestamp_millis() - t < 2 * 3_600_000;
         let env = fetch.env(&m.feature_schema.sources, t, &pts, realtime).await?;
         let levels = o.levels(m);
+        let cm = self.conf.get(m);
         let mut cand: Vec<(f64, usize, Vec<super::model::Contribution>)> = vec![];
+        let mut confs: HashMap<usize, (f64, Value)> = HashMap::new();
         for (i, (p, mut fm)) in pts.iter().zip(env).enumerate() {
             fm.set("lat", p.0 as f32);
             fm.set("lon", p.1 as f32);
@@ -1166,6 +1370,7 @@ impl Runner {
             super::features::set_context(&mut fm, p.0, p.1, t);
             let (pr, top) = m.score(&fm, 5);
             if pr >= levels.low && o.gate_ok(pr) {
+                confs.insert(i, cm.combine(Some(pr), cm.inputs(&fm), cm.coverage(p.0, p.1), None));
                 cand.push((pr, i, top));
             }
         }
@@ -1186,20 +1391,25 @@ impl Runner {
         let now = chrono::Utc::now().timestamp_millis();
         Ok(kept
             .into_iter()
-            .map(|(p, i, top)| Detection {
-                id: self.next_id(now),
-                model_id: m.id.clone(),
-                model_name: m.name.clone(),
-                target: m.target.clone(),
-                prob: p,
-                level: levels.level(p).unwrap_or("low"),
-                t,
-                created: now,
-                lat: pts[i].0,
-                lon: pts[i].1,
-                top_features: top,
-                kind: "point",
-                ..blank_detection()
+            .map(|(p, i, top)| {
+                let (c, parts) = confs.remove(&i).unwrap_or((0.5, Value::Null));
+                Detection {
+                    id: self.next_id(now),
+                    model_id: m.id.clone(),
+                    model_name: m.name.clone(),
+                    target: m.target.clone(),
+                    prob: p,
+                    level: levels.level(p).unwrap_or("low"),
+                    t,
+                    created: now,
+                    lat: pts[i].0,
+                    lon: pts[i].1,
+                    top_features: top,
+                    kind: "point",
+                    confidence: Some(c),
+                    conf_parts: (!parts.is_null()).then_some(parts),
+                    ..blank_detection()
+                }
             })
             .collect())
     }
@@ -1277,6 +1487,10 @@ impl Runner {
             let thrs: Vec<f64> = if reg { vec![o.threshold.unwrap_or(m.threshold)] } else { area_levels(o, m) };
             let smooth_km = o.area_smoothing_km.unwrap_or(0.0);
             let cap = o.max_detections.unwrap_or(200);
+            // 0.8.1: specks of a few grid cells are noise (a noisy field made hundreds of areas)
+            let min_area = o.min_area_km2.unwrap_or(2.0 * (geom.res * 111.0).powi(2));
+            let cm = self.conf.get(m);
+            let inputs = (1.0 - 0.25 * pred.warnings.len() as f64).max(0.3);
             for f in &pred.frames {
                 let mut vals = f.values.clone();
                 if smooth_km > 0.0 {
@@ -1292,10 +1506,8 @@ impl Runner {
                     let mut areas: Vec<Detection> = vec![];
                     for rings in polys {
                         let outer = &rings[0];
-                        if let Some(min) = o.min_area_km2 {
-                            if predict::ring_area_km2(outer) < min {
-                                continue;
-                            }
+                        if predict::ring_area_km2(outer) < min_area {
+                            continue;
                         }
                         let p = predict::max_inside(&geom, &vals, outer) as f64;
                         if !p.is_finite() {
@@ -1304,6 +1516,7 @@ impl Runner {
                         let (cx, cy) = outer.iter().fold((0.0, 0.0), |a, q| (a.0 + q[0], a.1 + q[1]));
                         let nn = outer.len().max(1) as f64;
                         let level = if reg { "high" } else { lv.level(thr).unwrap_or(match li { 0 => "low", 1 => "med", _ => "high" }) };
+                        let (conf, parts) = cm.combine((!reg).then_some(p), inputs, cm.coverage(cy / nn, cx / nn), None);
                         areas.push(Detection {
                             id: self.next_id(now),
                             model_id: m.id.clone(),
@@ -1322,6 +1535,8 @@ impl Runner {
                             rings: rings.clone(),
                             value: reg.then_some(p),
                             prob_level: Some(thr),
+                            confidence: Some(conf),
+                            conf_parts: Some(parts),
                             ..blank_detection()
                         });
                     }
@@ -1557,6 +1772,7 @@ impl Runner {
             .collect();
         if !radar_models.is_empty() {
             let per_site = self.sites_for(&radar_models, &cfg.radars, &fetch.sites());
+            let keys_before: HashMap<String, String> = self.last_key.lock().clone();
             let sem = self.concurrency.sem.clone();
             let res: Vec<Vec<Detection>> = futures::stream::iter(per_site)
                 .map(|(site, rm)| {
@@ -1572,13 +1788,21 @@ impl Runner {
                 .buffer_unordered(32)
                 .collect()
                 .await;
+            // 0.8.1: one storm seen by several radars → one detection per model
+            let all = super::storms::nms(res.into_iter().flatten().collect(), super::storms::NMS_RADIUS_KM, super::storms::rank);
             let mut counts: HashMap<String, usize> = HashMap::new();
-            for d in res {
-                for x in &d {
-                    *counts.entry(x.model_id.clone()).or_default() += 1;
-                }
-                self.push(hub, d);
+            for x in &all {
+                *counts.entry(x.model_id.clone()).or_default() += 1;
             }
+            self.push(hub, all);
+            // radars with a new volume: their storms that were not detected again expire
+            let fresh: std::collections::HashSet<String> = {
+                let k = self.last_key.lock();
+                k.iter().filter(|(s, v)| keys_before.get(*s) != Some(*v)).map(|(s, _)| s.clone()).collect()
+            };
+            let mut ids: std::collections::HashSet<String> = radar_models.iter().map(|(m, _)| m.id.clone()).collect();
+            ids.extend(radar_models.iter().filter_map(|(m, o)| o.ensemble.as_ref().map(|e| format!("ensemble:{}:{e}", m.target))));
+            self.expire_unseen(hub, &ids, &fresh, now);
             for (m, _) in &radar_models {
                 let n = counts.get(&m.id).copied().unwrap_or(0);
                 self.set_state(&m.id, |s| {
@@ -1601,6 +1825,7 @@ impl Runner {
                     Ok(d) => {
                         let n = d.len();
                         self.report("grid", std::slice::from_ref(m), &d);
+                        self.replace_run(hub, &m.id); // 0.8.1: the new run replaces the previous one
                         self.push(hub, d);
                         self.set_state(&m.id, |s| {
                             s.state = "ok".into();
@@ -1632,6 +1857,7 @@ impl Runner {
                     let pick = if pick.is_finite() { pick } else { lvls.iter().copied().fold(f64::NAN, f64::max) };
                     let cur: Vec<Detection> = out.detections.iter().filter(|d| d.valid_from == first_valid && d.prob_level.map(|l| (l - pick).abs() < 1e-9).unwrap_or(true)).cloned().collect();
                     self.report("grid", std::slice::from_ref(m), &cur);
+                    self.replace_run(hub, &m.id); // 0.8.1: the new run replaces the previous one
                     self.push(hub, out.detections);
                     grid_runs.push((m.clone(), o.clone(), out.pred));
                 }
@@ -1728,7 +1954,7 @@ mod tests {
 
     #[test]
     fn detection_json() {
-        let d = Detection { id: "d1".into(), model_id: "m".into(), model_name: "M".into(), target: "tornado".into(), prob: 0.8123, level: "high", site: Some("KTLX".into()), t: 1, created: 2, cell_id: Some("c".into()), lat: 35.0, lon: -97.0, top_features: vec![], motion: Some(json!({"dir": 45.0, "kt": 30.0})), outline: vec![[-97.0, 35.0], [-96.9, 35.0], [-96.9, 35.1]], kind: "cell", valid_from: None, valid_to: None, rings: vec![], value: None, prob_level: None, track: None, run: None };
+        let d = Detection { id: "d1".into(), model_id: "m".into(), model_name: "M".into(), target: "tornado".into(), prob: 0.8123, level: "high", site: Some("KTLX".into()), t: 1, created: 2, cell_id: Some("c".into()), lat: 35.0, lon: -97.0, top_features: vec![], motion: Some(json!({"dir": 45.0, "kt": 30.0})), outline: vec![[-97.0, 35.0], [-96.9, 35.0], [-96.9, 35.1]], kind: "cell", valid_from: None, valid_to: None, rings: vec![], value: None, prob_level: None, track: None, run: None, ..blank_detection() };
         let w = d.ws();
         assert_eq!(w["type"], "ml_detection");
         assert_eq!(w["prob"], 0.812);
@@ -1741,12 +1967,66 @@ mod tests {
         assert_eq!(r.geojson(3, &[], None)["count"], 0);
         assert_eq!(r.geojson(0, &["x".into()], None)["count"], 0);
         // area detections are polygons with kind "area" and their window
-        let a = Detection { id: "a1".into(), model_id: "g".into(), model_name: "G".into(), target: "instability".into(), prob: 0.6, level: "med", site: None, t: 5, created: 6, cell_id: None, lat: 35.0, lon: -97.0, top_features: vec![], motion: None, outline: vec![], kind: "area", valid_from: Some(10), valid_to: Some(20), rings: vec![vec![[-97.5, 34.5], [-96.5, 34.5], [-96.5, 35.5], [-97.5, 34.5]]], value: None, prob_level: Some(0.5), track: None, run: None };
+        let a = Detection { id: "a1".into(), model_id: "g".into(), model_name: "G".into(), target: "instability".into(), prob: 0.6, level: "med", site: None, t: 5, created: 6, cell_id: None, lat: 35.0, lon: -97.0, top_features: vec![], motion: None, outline: vec![], kind: "area", valid_from: Some(10), valid_to: Some(20), rings: vec![vec![[-97.5, 34.5], [-96.5, 34.5], [-96.5, 35.5], [-97.5, 34.5]]], value: None, prob_level: Some(0.5), track: None, run: None, ..blank_detection() };
         r.push_all(vec![a]);
         let g = r.geojson(0, &["g".into()], None);
         assert_eq!(g["count"], 1);
         assert_eq!(g["features"][0]["properties"]["kind"], "area");
         assert_eq!(g["features"][0]["properties"]["valid_to"], 20);
         assert_eq!(g["features"][0]["properties"]["prob"], 0.6);
+    }
+
+    /// 0.8.1: a storm-track / intensification model running cycle after cycle (two radars seeing
+    /// the same two storms, cell ids changing) used to pile up one detection per cell per volume
+    /// per radar (2312 after a few hours). Each cycle now replaces the storm's previous detection.
+    #[test]
+    fn storm_detections_do_not_accumulate() {
+        use super::super::storms::{nms, rank, NMS_RADIUS_KM};
+        let r = Runner::new(None, 1);
+        r.set_cfg(RunCfg { models: vec![ModelRun::plain("trk"), ModelRun::plain("inst")], enabled: true, ..Default::default() });
+        let now = chrono::Utc::now().timestamp_millis();
+        let mk = |site: &str, cell: String, lat: f64, lon: f64, t: i64| Detection { id: format!("{site}-{cell}-{t}"), model_id: "trk".into(), model_name: "Track".into(), target: "storm_track".into(), prob: 1.0, level: "med", site: Some(site.into()), t, created: now, cell_id: Some(cell.clone()), lat, lon, kind: "cell", value: Some(50.0), storm_id: Some(format!("{site}:{cell}")), motion: Some(json!({"dir": 90.0, "kt": 20.0})), ..blank_detection() };
+        let cycles = 24;
+        for k in 0..cycles {
+            let t = now - (cycles - k) as i64 * 300_000;
+            // storms drift east ~3 km per volume
+            let dx = k as f64 * 0.033;
+            let mut d = vec![];
+            for (si, site) in ["KTLX", "KINX"].iter().enumerate() {
+                // each radar has its own (new every few volumes) cell ids and slightly different centroids
+                d.push(mk(site, format!("a{}", k / 3), 35.0 + si as f64 * 0.01, -97.0 + dx, t));
+                d.push(mk(site, format!("b{}", k / 4), 36.0, -96.0 + dx + si as f64 * 0.01, t));
+            }
+            r.push_live(None, nms(d, NMS_RADIUS_KM, rank));
+        }
+        let cur = r.query(&DetQuery { since: 0, models: vec!["trk".into()], ..Default::default() });
+        let n_cur = cur["features"].as_array().unwrap().iter().filter(|f| f["properties"]["kind"] == "point").count();
+        assert_eq!(n_cur, 2, "one current detection per storm: {n_cur}");
+        assert_eq!(r.model_run("trk")["detections"], 2);
+        // the timeline still sees every cycle's position
+        let ranged = r.query(&DetQuery { since: 0, from: Some(now - 3 * 3_600_000), to: Some(now), models: vec!["trk".into()], ..Default::default() });
+        let n_all = ranged["features"].as_array().unwrap().iter().filter(|f| f["properties"]["kind"] == "point").count();
+        assert_eq!(n_all, cycles * 2);
+        let ids: std::collections::HashSet<String> = ranged["features"].as_array().unwrap().iter().filter_map(|f| f["properties"]["storm_id"].as_str().map(String::from)).collect();
+        assert_eq!(ids.len(), 2, "two storms across all cycles and both radars: {ids:?}");
+        // storm b is not detected again on a radar with a new volume: it expires
+        let t = now;
+        let cycle_start = chrono::Utc::now().timestamp_millis() + 1;
+        let mut d = vec![mk("KTLX", "a9".into(), 35.0, -97.0 + 24.0 * 0.033, t)];
+        d[0].created = cycle_start;
+        r.push_live(None, d);
+        r.expire_unseen(None, &["trk".to_string()].into_iter().collect(), &["KTLX".to_string(), "KINX".to_string()].into_iter().collect(), cycle_start);
+        assert_eq!(r.model_run("trk")["detections"], 1);
+        // grid areas: each run replaces the previous run's areas
+        let area = |id: &str| Detection { id: id.into(), model_id: "inst".into(), target: "instability".into(), prob: 0.6, kind: "area", t: now, created: now, valid_from: Some(now), valid_to: Some(now + 3_600_000), rings: vec![vec![[-97.5, 34.5], [-96.5, 34.5], [-96.5, 35.5], [-97.5, 34.5]]], ..blank_detection() };
+        for run in 0..5 {
+            r.replace_run(None, "inst");
+            r.push_live(None, vec![area(&format!("a{run}-1")), area(&format!("a{run}-2"))]);
+        }
+        assert_eq!(r.model_run("inst")["detections"], 2);
+        // a deleted model's in-flight cycle cannot bring its detections back
+        r.delete_model("trk");
+        r.push_live(None, vec![mk("KTLX", "z".into(), 35.0, -97.0, now)]);
+        assert_eq!(r.model_run("trk")["detections"], 0);
     }
 }

@@ -18,6 +18,7 @@ import { fmtAge, fmtTime } from "../../util";
 import { enableDetectionLayer, showDetection } from "../../overlays/mldefs";
 import { isOn } from "../../overlays/manager";
 import type { Detection, Model, PredLayer } from "../../ml/types";
+import { summarize, confText, CONF_HELP } from "../../ml/summary"; // 0.8.1
 import { Field, Help, TIcon } from "./common";
 
 type RMode = "all" | "states" | "pick" | "current";
@@ -292,16 +293,19 @@ function ModelDets({ m, areas }: { m: Model; areas?: boolean }) {
       </span>
       <div class="ml-det-list">
         {ds.map((d) => (
-          <button key={d.key} class="ml-dl" onClick={() => showDetection(d)} title="Fly there">
+          <button key={d.key} class="ml-dl" onClick={() => showDetection(d)} title={`Fly there\n${CONF_HELP}`}>
             <TIcon t={d.target} size={18} />
-            <span class="ml-dl-p" style={{ "--lc": LEVEL_COLOR[d.level] }}>
-              {Math.round(d.prob * 100)}%
+            <span class="ml-dl-p" style={{ "--lc": LEVEL_COLOR[d.level] }} title={d.target === "storm_track" ? "Confidence" : "Probability"}>
+              {d.target === "storm_track" && d.confidence != null ? `${Math.round(d.confidence * 100)}%` : `${Math.round(d.prob * 100)}%`}
             </span>
             <span class="ml-dl-main">
               <span>
                 <b>{tmeta(d.target).code}</b> {d.kind === "area" ? "area" : d.site || "—"}
                 {d.track?.length ? ` · track ${d.track[d.track.length - 1].lead_min} min` : ""}
+                {` · conf. ${confText(d.confidence)}`}
               </span>
+              {/* 0.8.1: the summary sentence */}
+              <span style={{ fontSize: "11.5px", whiteSpace: "normal" }}>{summarize(d)}</span>
               <small>
                 {fmtTime(d.t)} ({fmtAge(d.t)}){d.valid_from ? ` · valid ${fmtTime(d.valid_from)}${d.valid_to ? `–${fmtTime(d.valid_to)}` : ""}` : ""}
               </small>
