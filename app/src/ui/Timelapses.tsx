@@ -1,8 +1,9 @@
 // Webcam auto-timelapses (server: GET|PUT /api/timelapse/cams, GET /api/timelapse/list?cam=,
-// POST /api/timelapse/build). The server captures a still every few minutes and builds one MP4 per
-// camera per day, with chapters for the warnings and storm reports near the camera that day.
-// A "Daily timelapse" toggle sits in each snapshot camera's viewer; the Recordings panel lists the
-// cameras and their days with a player.
+// POST /api/timelapse/build). The server captures a still every few minutes (0.8.1: or grabs a
+// frame from a video camera with ffmpeg) and builds one MP4 per camera per day (0.8.1: or per set
+// length, or one video ending at a date/time), with chapters for the warnings and storm reports
+// near the camera. A "TL" toggle sits in each camera's viewer; the Recordings panel lists the
+// cameras and their videos with a player.
 
 import { signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -10,16 +11,25 @@ import { Clapperboard, RefreshCw, Trash2, Hammer } from "lucide-preact";
 import { api, ApiError } from "../api";
 import { toast } from "../store";
 import { fileUrl } from "./panels/RecordPanel";
+import { UNITS, DAY, toMinutes, splitLen, fmtLen, toLocalInput, fromLocalInput } from "../tlen"; // 0.8.1
 import type { CamView } from "./CameraPanels";
 
 export interface TlCam {
   id: string;
   name: string;
+  /** 0.8.1: img | hls | yt (video cameras: a frame is grabbed per capture) */
+  kind?: "img" | "hls" | "yt";
   url: string;
   cam_id: string;
   lat?: number | null;
   lon?: number | null;
   interval_min: number;
+  /** 0.8.1: seconds between frames (overrides interval_min when > 0) */
+  interval_s?: number;
+  /** 0.8.1: minutes per video (1440 = daily) */
+  length_min?: number;
+  /** 0.8.1: one timelapse ending at this time (unix ms) */
+  until?: number | null;
   daylight_only: boolean;
   retention_days: number;
   fps: number;
@@ -32,6 +42,10 @@ export interface TlStatus {
   last_error: string;
   next_capture: number;
   daylight?: boolean;
+  segment?: string | null;
+  segment_label?: string | null;
+  segment_end?: number | null;
+  ended?: boolean;
 }
 export interface TlChapter {
   t: number;
@@ -42,6 +56,7 @@ export interface TlChapter {
 export interface TlItem {
   cam: string;
   date: string;
+  label?: string;
   video: string;
   poster: string | null;
   frames: number;
@@ -55,6 +70,7 @@ export interface TlItem {
 export const tlCams = signal<TlCam[]>([]);
 export const tlStatus = signal<Record<string, TlStatus>>({});
 export const tlFfmpeg = signal(true);
+export const tlYtdlp = signal(false);
 /** null = not loaded, false = the server has no timelapses */
 export const tlSupported = signal<boolean | null>(null);
 
@@ -64,6 +80,7 @@ export async function loadTl() {
     tlCams.value = r.cams ?? [];
     tlStatus.value = r.status ?? {};
     tlFfmpeg.value = r.ffmpeg !== false;
+    tlYtdlp.value = !!r.ytdlp;
     tlSupported.value = true;
   } catch (e) {
     if (e instanceof ApiError && (e.status === 404 || e.status === 405)) tlSupported.value = false;
@@ -87,35 +104,92 @@ async function putCams(cams: TlCam[]) {
   }
 }
 
+const isVideo = (c: CamView) => c.type === "hls" || c.type === "yt";
+const ytSingle = (u: string) => /\/watch|youtu\.be\/|\/live\/|\/embed\/|\/shorts\//i.test(u) && !/live_stream\?channel/i.test(u);
+
 /** a camera viewer → the server's timelapse camera (proxied cameras are resolved by id on the server) */
 function fromView(c: CamView): TlCam {
+  if (isVideo(c)) return { id: c.id, name: c.name, kind: c.type as "hls" | "yt", url: c.video ?? "", cam_id: "", lat: c.lat ?? null, lon: c.lon ?? null, interval_min: 5, interval_s: 0, length_min: DAY, daylight_only: c.lat != null, retention_days: 14, fps: 24, enabled: true, event_mi: 15 };
   const proxy = c.img === "proxy" || !c.img;
   return { id: c.id, name: c.name, url: proxy ? "" : c.img!, cam_id: proxy ? c.id : "", lat: c.lat ?? null, lon: c.lon ?? null, interval_min: 5, daylight_only: c.lat != null, retention_days: 14, fps: 24, enabled: true, event_mi: 15 };
 }
 export function setTimelapse(c: CamView, on: boolean) {
   const rest = tlCams.value.filter((x) => x.id !== c.id);
-  return putCams(on ? [...rest, fromView(c)] : rest).then((ok) => ok && toast(on ? `Daily timelapse on for ${c.name}` : `Daily timelapse off for ${c.name}`));
+  return putCams(on ? [...rest, fromView(c)] : rest).then((ok) => ok && toast(on ? `Timelapse on for ${c.name}` : `Timelapse off for ${c.name}`));
 }
 
-/** "Daily timelapse" toggle for a snapshot camera's viewer header */
+/** why a camera can't have a timelapse here ("" = it can) */
+function tlWhy(c: CamView): string {
+  if (!tlFfmpeg.value) return isVideo(c) ? "Video timelapses need ffmpeg on the server" : "Install ffmpeg on the server for timelapses";
+  if (c.type === "yt" && !ytSingle(c.video ?? "")) return "Only single YouTube videos/streams";
+  if (c.type === "yt" && !tlYtdlp.value) return "YouTube timelapses need yt-dlp on the server";
+  return "";
+}
+
+/** "TL" (timelapse) toggle for a camera's viewer header: snapshot and video cameras */
 export function TimelapseToggle({ c }: { c: CamView }) {
   useEffect(() => {
     if (tlSupported.value == null) loadTl();
   }, []);
-  if (c.type !== "img" || tlSupported.value !== true) return null;
-  const on = tlCams.value.some((x) => x.id === c.id && x.enabled);
+  if ((c.type !== "img" && !isVideo(c)) || tlSupported.value !== true) return null;
+  const cam = tlCams.value.find((x) => x.id === c.id);
+  const on = !!cam?.enabled;
   const st = tlStatus.value[c.id];
   const stop = (e: Event) => e.stopPropagation();
+  const why = tlWhy(c);
+  const what = cam?.until ? "Timelapse" : cam && (cam.length_min ?? DAY) !== DAY ? `Timelapse (${fmtLen(cam.length_min!)} videos)` : "Daily timelapse";
   return (
     <button
       class={`cam-rec cam-tl ${on ? "on" : ""}`}
-      title={on ? `Daily timelapse on${st ? ` · ${st.frames_today} frames today${st.last_error ? ` · ${st.last_error}` : ""}` : ""} (click to turn off). Videos: Recordings → Timelapses` : tlFfmpeg.value ? "Daily timelapse: the server takes a still every 5 minutes and makes a video each day" : "Install ffmpeg on the server for timelapses"}
-      disabled={!on && !tlFfmpeg.value}
+      title={on ? `${what} on${st ? ` · ${st.frames_today} frames in this video${st.last_error ? ` · ${st.last_error}` : ""}` : ""} (click to turn off). Videos and length: Recordings → Timelapses` : why || (isVideo(c) ? "Timelapse: the server grabs a frame every 5 minutes and makes a video each day (length: Recordings → Timelapses)" : "Daily timelapse: the server takes a still every 5 minutes and makes a video each day")}
+      disabled={!on && !!why}
       onPointerDown={stop}
       onClick={() => setTimelapse(c, !on)}
     >
       <Clapperboard size={11} /> TL
     </button>
+  );
+}
+
+/** 0.8.1: video length: rolling (N min/hours/days/weeks) or one video ending at a date/time */
+function LengthCtl({ cur, set }: { cur: TlCam; set: (fn: (x: TlCam) => void) => void }) {
+  const [n, u] = splitLen(cur.length_min ?? DAY);
+  const [num, setNum] = useState(String(n));
+  useEffect(() => setNum(String(n)), [cur.id, cur.length_min]);
+  const single = cur.until != null;
+  const ended = single && cur.until! <= Date.now();
+  return (
+    <div class="row tl-len">
+      <select value={single ? "until" : "roll"} title="One video per set length, or one video that ends at a date/time" onChange={(e) => set((x) => ((e.target as HTMLSelectElement).value === "until" ? (x.until = Date.now() + 86_400_000) : (x.until = null)))}>
+        <option value="roll">Video every</option>
+        <option value="until">One video until</option>
+      </select>
+      {single ? (
+        <input
+          type="datetime-local"
+          value={toLocalInput(cur.until!)}
+          class={ended ? "tl-ended" : ""}
+          title={ended ? "Ended: the video is built (pick a later time to start a new one)" : "Captures stop here and the video is built"}
+          onChange={(e) => {
+            const t = fromLocalInput((e.target as HTMLInputElement).value);
+            if (t == null) return;
+            if (t <= Date.now()) return void toast("Pick a time in the future", "warn");
+            set((x) => (x.until = t));
+          }}
+        />
+      ) : (
+        <>
+          <input type="number" class="num" min={1} value={num} onInput={(e) => setNum((e.target as HTMLInputElement).value)} onChange={() => set((x) => (x.length_min = toMinutes(+num, u)))} aria-label="Length" />
+          <select value={u} aria-label="Unit" onChange={(e) => set((x) => (x.length_min = toMinutes(+num, +(e.target as HTMLSelectElement).value)))}>
+            {UNITS.map(([name, m]) => (
+              <option key={m} value={m}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -157,7 +231,7 @@ export function TimelapseSection() {
     setBusy(true);
     try {
       await api.send("POST", "/api/timelapse/build", { cam: cur.id });
-      toast("Today's timelapse built (so far)");
+      toast("Current timelapse built (so far)");
       load();
     } catch (e: any) {
       toast(`Timelapse: ${e.message}`, "warn", 7000);
@@ -190,7 +264,7 @@ export function TimelapseSection() {
                 </option>
               ))}
             </select>
-            <button class="icon-btn" title="Build today's video now (partial day)" disabled={busy || !tlFfmpeg.value} onClick={build}>
+            <button class="icon-btn" title="Build the current video now (so far)" disabled={busy || !tlFfmpeg.value} onClick={build}>
               <Hammer size={13} class={busy ? "spin" : ""} />
             </button>
             <button class="icon-btn danger" title="Stop this camera's timelapse (videos already made stay until they expire)" onClick={() => cur && confirm(`Stop the timelapse of ${cur.name}?`) && putCams(cams.filter((x) => x.id !== cur.id))}>
@@ -202,8 +276,21 @@ export function TimelapseSection() {
               <label class="sk-chk">
                 <input type="checkbox" checked={cur.enabled} onChange={(e) => set((x) => (x.enabled = (e.target as HTMLInputElement).checked))} /> On
               </label>
-              <select value={String(cur.interval_min)} title="Minutes between stills" onChange={(e) => set((x) => (x.interval_min = +(e.target as HTMLSelectElement).value))}>
-                {[1, 2, 5, 10, 15, 30].map((m) => (
+              <select
+                value={cur.interval_s ? `s${cur.interval_s}` : String(cur.interval_min)}
+                title={cur.kind === "hls" || cur.kind === "yt" ? "Time between frames grabbed from the video" : "Time between stills"}
+                onChange={(e) => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  set((x) => (v.startsWith("s") ? (x.interval_s = +v.slice(1)) : ((x.interval_s = 0), (x.interval_min = +v))));
+                }}
+              >
+                {(cur.kind === "hls" || cur.kind === "yt") &&
+                  [10, 30].map((s) => (
+                    <option key={s} value={`s${s}`}>
+                      every {s} s
+                    </option>
+                  ))}
+                {[1, 2, 5, 10, 15, 30, 60].map((m) => (
                   <option key={m} value={m}>
                     every {m} min
                   </option>
@@ -212,7 +299,7 @@ export function TimelapseSection() {
               <label class="sk-chk" title={cur.lat == null ? "Needs the camera's location" : "Only between dawn and dusk"}>
                 <input type="checkbox" disabled={cur.lat == null} checked={cur.daylight_only} onChange={(e) => set((x) => (x.daylight_only = (e.target as HTMLInputElement).checked))} /> Daylight only
               </label>
-              <select value={String(cur.retention_days)} title="Keep the daily videos" onChange={(e) => set((x) => (x.retention_days = +(e.target as HTMLSelectElement).value))}>
+              <select value={String(cur.retention_days)} title="Keep the videos (days after each ends)" onChange={(e) => set((x) => (x.retention_days = +(e.target as HTMLSelectElement).value))}>
                 {[3, 7, 14, 30, 90, 365].map((d) => (
                   <option key={d} value={d}>
                     keep {d} d
@@ -221,9 +308,12 @@ export function TimelapseSection() {
               </select>
             </div>
           )}
+          {cur && <LengthCtl cur={cur} set={set} />}
           {st && (
             <div class="muted small">
-              {st.frames_today} frame{st.frames_today === 1 ? "" : "s"} today
+              {st.ended ? "Ended · " : ""}
+              {st.frames_today} frame{st.frames_today === 1 ? "" : "s"} {(cur?.length_min ?? DAY) === DAY && !cur?.until ? "today" : "in this video"}
+              {st.segment_end && !st.ended && (cur?.until || (cur?.length_min ?? DAY) !== DAY) ? ` · video at ${new Date(st.segment_end).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : ""}
               {st.last_capture ? ` · last ${new Date(st.last_capture).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}` : ""}
               {st.daylight === false ? " · night (paused)" : ""}
               {st.last_error ? <span class="err-text"> · {st.last_error}</span> : null}
@@ -245,10 +335,10 @@ export function TimelapseSection() {
           )}
           <div class="tl-days">
             {items == null && <div class="muted small">Loading…</div>}
-            {items?.length === 0 && <div class="muted small">No videos yet: the first one is made after midnight (or press the hammer).</div>}
+            {items?.length === 0 && <div class="muted small">No videos yet: the first one is made when the current one ends ({cur?.until ? "at the end time" : (cur?.length_min ?? DAY) === DAY ? "after midnight" : `every ${fmtLen(cur!.length_min!)}`}), or press the hammer.</div>}
             {(items ?? []).map((it) => (
               <button key={it.date} class={`tl-day ${play?.date === it.date ? "on" : ""}`} onClick={() => setPlay(play?.date === it.date ? null : it)}>
-                <b>{it.date}</b>
+                <b>{it.label ?? it.date}</b>
                 <small class="muted">
                   {it.duration_s ? fmtDur(it.duration_s) : "—"} · {it.frames ?? 0} frames · {fmtSize(it.size)}
                   {it.partial ? " · partial" : ""}

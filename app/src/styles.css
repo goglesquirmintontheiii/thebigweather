@@ -12788,3 +12788,171 @@ html.a11y-cvd .err-text {
   font-size: 11px;
   color: #fca5a5;
 }
+
+/* ---------- 0.8.1: camera Record for…, timelapse length, message templates, scanner mix ---------- */
+.cam-rec-wrap {
+  display: inline-flex;
+  gap: 3px;
+}
+.cam-rec.stop {
+  padding: 3px 6px;
+}
+.cam-rec-left {
+  font-weight: 500;
+  opacity: 0.8;
+}
+.cam-rec-menu {
+  min-width: 132px;
+}
+.cam-rec-sub {
+  padding: 4px 10px 1px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.cam-rec-custom {
+  display: flex;
+  gap: 4px;
+  padding: 4px 4px 2px;
+  border-top: 1px solid var(--line);
+  margin-top: 3px;
+}
+.cam-rec-custom input {
+  width: 48px;
+  min-width: 0;
+}
+.cam-rec-custom select {
+  min-width: 0;
+}
+.cam-rec-menu .cam-rec-custom button.go {
+  padding: 3px 8px;
+  background: rgba(239, 68, 68, 0.2);
+}
+.tl-sec .tl-len {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tl-len input.num {
+  width: 56px;
+}
+.tl-len input.tl-ended {
+  opacity: 0.6;
+}
+.p8-rl-ch {
+  flex-wrap: wrap;
+}
+.p81-tpl,
+.p81-tpl-closed {
+  flex-basis: 100%;
+}
+.p81-tpl {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0 2px;
+  border-top: 1px dashed var(--line-2);
+  margin-top: 4px;
+}
+.p81-tpl .row > span:first-child,
+.p81-tpl-closed > span:first-child {
+  width: 108px;
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+.p81-tpl .row input,
+.p81-tpl .row textarea {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+}
+.p81-tpl textarea {
+  resize: vertical;
+  min-height: 46px;
+}
+.p81-ph {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.p81-ph .chip {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  font-family: ui-monospace, monospace;
+}
+.p81-tpl-pv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.p81-tpl-pv span {
+  color: var(--muted);
+}
+.scn-watch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+.scn-watch .btn.on {
+  background: rgba(63, 183, 255, 0.2);
+  border-color: var(--accent);
+}
+.scn-watch select {
+  max-width: 180px;
+}
+.scn-lbl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.scn-bulk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.scn-sel {
+  margin: 0;
+  flex: none;
+}
+.scn-mix {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.scn-mix input[type="range"] {
+  width: 64px;
+}
+.scn-solo {
+  font-size: 10.5px;
+  font-weight: 700;
+  width: 20px;
+}
+.scn-solo.on {
+  color: #111;
+  background: var(--warn);
+}
+.scn-row.mixed {
+  background: rgba(255, 255, 255, 0.03);
+}
+.scn-row.loud .scn-call {
+  color: var(--accent);
+}
+.radio-st .rc-scanall {
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 10.5px;
+}
+@media (max-width: 520px) {
+  .scn-mix input[type="range"] {
+    width: 44px;
+  }
+}

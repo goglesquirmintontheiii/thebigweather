@@ -1,18 +1,25 @@
 // radio/dash 0.8: weather-radio scanner panel (inside the Weather radio window). Pick stations, the
 // server watches all of them for SAME / alert tones, the app cycles or holds the audio and jumps to
 // the station that fires. Logic: same/scanner.ts.
+// 0.8.1: "Watch all for SAME" in one click, multi-select, and an audio mix (several stations at
+// once with per-station volume / mute / solo).
 
 import { signal } from "@preact/signals";
 import { useEffect, useState } from "preact/hooks";
-import { Play, Pause, ScanLine, Star, X, Headphones, MapPin, FlaskConical, Trash2, Siren, Server, Cpu, Loader, SkipForward, Lock } from "lucide-preact";
+import { Play, Pause, ScanLine, Star, X, Headphones, MapPin, FlaskConical, Trash2, Siren, Server, Cpu, Loader, SkipForward, Lock, Radar, Volume2, VolumeX, Layers } from "lucide-preact";
 import type { Stream } from "../radio";
 import { scanCfg, setScan, scanOn, scanBackend, scanNote, scanStatus, scanCurrent, scanLock, scanAlerts, startScan, stopScan, resumeScan, listenTo, nextIn, scanTest, clearScanAlerts, toggleScan, inScan, clientDecoded, MAX_CLIENT, scanSince, type ScanAlert } from "../same/scanner";
+import { watchAll, mixStations, setMixEntry, mixLive } from "../same/scanner"; // 0.8.1
 import { areaList, LVL_COLOR, mapHeader } from "../same/monitor";
 import { hideCounties, sameShown } from "../same/mapshow";
 import { fipsNames, loadFips } from "../same/fips";
 
 /** the radio window shows the scanner instead of the station details */
 export const scanView = signal(false);
+/** 0.8.1: stations ticked in the scanner list (bulk actions) */
+const scanSel = signal<string[]>([]);
+/** 0.8.1: "Watch all" audio: "" = muted, or a station id */
+const watchAudio = signal("");
 
 export function ScanRowBtn({ s }: { s: Stream }) {
   if (s.id.startsWith("custom:") && !s.url) return null;
@@ -88,6 +95,12 @@ export function ScannerPanel() {
   const curS = c.stations.find((s) => s.id === cur);
   const nx = nextIn();
   const decodedHere = clientDecoded.value;
+  const sel = scanSel.value.filter((id) => c.stations.some((s) => s.id === id));
+  const mixing = c.mode === "mix";
+  const mix = c.mix ?? {};
+  const heard = mixLive.value;
+  const toggleSel = (id: string) => (scanSel.value = sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]);
+  const allSel = c.stations.length > 0 && sel.length === c.stations.length;
   return (
     <div class="scn">
       <section class="scn-head">
@@ -103,6 +116,23 @@ export function ScannerPanel() {
           <FlaskConical size={14} />
         </button>
       </section>
+      <section class="scn-watch" title="Monitor every station below for SAME headers and alert tones at once; jumps to the one that fires">
+        <button class={`btn sm ${on && c.jump && (!c.audio || c.mode === "hold") ? "on" : ""}`} disabled={!c.stations.length} onClick={() => watchAll(watchAudio.value || null)}>
+          <Radar size={13} /> Watch all for SAME
+        </button>
+        <select value={watchAudio.value} title="Audio while watching" onChange={(e) => {
+          watchAudio.value = (e.target as HTMLSelectElement).value;
+          if (on) watchAll(watchAudio.value || null);
+        }}>
+          <option value="">Audio muted</option>
+          {c.stations.map((s) => (
+            <option key={s.id} value={s.id}>
+              Listen to {s.call ?? s.name}
+            </option>
+          ))}
+        </select>
+        <span class="muted small">{c.stations.length} station{c.stations.length === 1 ? "" : "s"}</span>
+      </section>
       {scanNote.value && <div class="muted small scn-note">{scanNote.value}</div>}
       <section class="scn-ctl">
         <div class="seg" role="radiogroup" aria-label="Scanner mode">
@@ -111,6 +141,16 @@ export function ScannerPanel() {
           </button>
           <button role="radio" aria-checked={c.mode === "hold"} class={c.mode === "hold" ? "on" : ""} onClick={() => setScan((x) => ((x.mode = "hold"), (x.fav ??= cur ?? x.stations[0]?.id ?? null)))}>
             Hold favourite
+          </button>
+          <button role="radio" aria-checked={mixing} class={mixing ? "on" : ""} title="Play several stations at once (tick them, then Mix)" onClick={() =>
+              setScan((x) => {
+                x.mode = "mix";
+                x.audio = true;
+                // nothing mixed yet: start with the ticked stations (or the first two)
+                if (!Object.keys(x.mix ?? {}).length) x.mix = Object.fromEntries((sel.length ? sel : x.stations.slice(0, 2).map((s) => s.id)).map((id) => [id, { vol: 1 }]));
+              })
+            }>
+            Mix
           </button>
         </div>
         <label class="scn-dwell" title="Seconds on each station while cycling">
@@ -145,6 +185,8 @@ export function ScannerPanel() {
                 <>
                   <b class="scn-lockr">{lock.reason}</b> · staying {mmss((lock.until - Date.now()) / 1000)}
                 </>
+              ) : mixing ? (
+                c.solo ? `Solo · ${heard.length} playing` : `Mixing ${heard.length} station${heard.length === 1 ? "" : "s"}`
               ) : c.mode === "hold" ? (
                 "Holding the favourite"
               ) : nx != null ? (
@@ -169,17 +211,40 @@ export function ScannerPanel() {
         </section>
       )}
       <section>
-        <label class="lbl">
+        <div class="lbl scn-lbl">
+          <input type="checkbox" checked={allSel} disabled={!c.stations.length} title="Select all" onChange={() => (scanSel.value = allSel ? [] : c.stations.map((s) => s.id))} />
           Stations <small class="muted">{c.stations.length}</small>
-        </label>
-        {!c.stations.length && <div class="muted small">Add stations with the <ScanLine size={11} /> button in the list on the left (favourites work well).</div>}
+          <span class="rp-fill" />
+          {sel.length > 0 && (
+            <span class="scn-bulk">
+              <small class="muted">{sel.length} selected</small>
+              <button class="btn xs" title="Play the selected stations together" onClick={() => mixStations(sel, true)}>
+                <Layers size={11} /> Mix
+              </button>
+              {mixing && (
+                <button class="btn xs ghost" title="Take them out of the mix" onClick={() => mixStations(sel, false)}>
+                  Unmix
+                </button>
+              )}
+              <button class="btn xs ghost" title="Remove from the scanner" onClick={() => (setScan((y) => (y.stations = y.stations.filter((z) => !sel.includes(z.id)))), (scanSel.value = []))}>
+                <X size={11} /> Remove
+              </button>
+            </span>
+          )}
+        </div>
+        {!c.stations.length && <div class="muted small">Add stations with the <ScanLine size={11} /> button in the list on the left, or "+ Scan" on a state or the favourites.</div>}
+        {mixing && !Object.keys(mix).length && c.stations.length > 0 && <div class="muted small">Tick stations and press Mix to hear them together.</div>}
         <div class="scn-list">
           {c.stations.map((s) => {
             const x = st[s.id];
             const here = be === "client" && !decodedHere.includes(s.id);
+            const m = mix[s.id];
+            const inMix = mixing && !!m;
+            const loud = heard.includes(s.id);
             return (
-              <div key={s.id} class={`scn-row ${cur === s.id ? "cur" : ""} ${x?.tone ? "tone" : ""}`}>
-                <span class={`scn-dot ${!on ? "" : here ? "off" : x?.connected ? "ok" : x ? "bad" : "wait"}`} />
+              <div key={s.id} class={`scn-row ${cur === s.id ? "cur" : ""} ${x?.tone ? "tone" : ""} ${inMix ? "mixed" : ""} ${loud ? "loud" : ""}`}>
+                <input type="checkbox" class="scn-sel" checked={sel.includes(s.id)} aria-label={`Select ${s.call ?? s.name}`} onChange={() => toggleSel(s.id)} />
+                <span class={`scn-dot ${!on ? "" : here ? "off" : x?.connected ? "ok" : x ? "bad" : "wait"}`} title={!on ? "Not monitoring" : here ? "Not decoded" : x?.connected ? "Listening for SAME" : x ? "Offline" : "Connecting"} />
                 <b class="scn-call">{s.call ?? "—"}</b>
                 <span class="scn-name" title={s.url}>
                   {s.name}
@@ -198,6 +263,22 @@ export function ScannerPanel() {
                   </small>
                 )}
                 <span class="rp-fill" />
+                {inMix && (
+                  <span class="scn-mix">
+                    <button class={`icon-btn ${m.mute ? "on" : ""}`} title={m.mute ? "Unmute" : "Mute"} onClick={() => setMixEntry(s.id, { mute: !m.mute })}>
+                      {m.mute ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                    </button>
+                    <input type="range" min={0} max={1} step={0.05} value={m.vol} title={`Volume ${Math.round(m.vol * 100)}%`} onInput={(e) => setMixEntry(s.id, { vol: +(e.target as HTMLInputElement).value })} />
+                    <button class={`icon-btn scn-solo ${c.solo === s.id ? "on" : ""}`} title={c.solo === s.id ? "Unsolo" : "Solo: hear only this one"} onClick={() => setScan((y) => (y.solo = y.solo === s.id ? null : s.id))}>
+                      S
+                    </button>
+                  </span>
+                )}
+                {mixing && !m && (
+                  <button class="icon-btn" title="Add to the mix" onClick={() => mixStations([s.id], true)}>
+                    <Layers size={12} />
+                  </button>
+                )}
                 <button class="icon-btn" title="Listen now" disabled={!on} onClick={() => listenTo(s.id)}>
                   <Headphones size={12} />
                 </button>

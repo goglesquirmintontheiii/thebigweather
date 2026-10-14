@@ -9,6 +9,7 @@ import { api, ApiError } from "../api";
 import { toast, uid } from "../store";
 import { FloatPanel } from "./FloatPanel";
 import { fmtTime } from "../util";
+import { PLACEHOLDERS, PH_HELP, SAMPLE, DEFAULT_TITLE, DEFAULT_BODY, applyTpl } from "../notifytpl"; // 0.8.1
 
 export type ChanType = "ntfy" | "pushover" | "email" | "discord" | "telegram" | "webhook";
 /** client view of a server channel: the server stores it flat ({id, name, kind, enabled, …fields}) */
@@ -103,6 +104,8 @@ function parseChannels(j: any): Channel[] {
 function toServer(c: Channel): Record<string, any> {
   const spec = CHAN_TYPES[c.type];
   const o: Record<string, any> = { id: c.id, name: c.name, kind: c.type, enabled: c.enabled };
+  // 0.8.1: message templates (blank = the default message)
+  for (const k of ["title_tpl", "body_tpl"]) if (typeof c.config[k] === "string" && c.config[k].trim()) o[k] = c.config[k];
   for (const f of spec.fields) {
     let v = c.config[f.k];
     if (f.secret) {
@@ -312,6 +315,7 @@ function Editor({ c, isNew, onDone }: { c: Channel; isNew?: boolean; onDone: () 
         </div>
       ))}
       <div class="muted small">{spec.hint}</div>
+      <TemplateEditor v={{ title_tpl: d.config.title_tpl ?? "", body_tpl: d.config.body_tpl ?? "" }} onChange={(p) => setD({ ...d, config: { ...d.config, ...p } })} />
       <div class="row">
         <button class="btn sm" disabled={!ok} onClick={commit}>
           <Check size={13} /> Save
@@ -319,6 +323,59 @@ function Editor({ c, isNew, onDone }: { c: Channel; isNew?: boolean; onDone: () 
         <button class="btn sm ghost" onClick={onDone}>
           <X size={13} /> Cancel
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- 0.8.1: message templates ---------- */
+type Tpl = { title_tpl: string; body_tpl: string };
+/** Title + body template with placeholder chips and a live preview (sample values). Blank = default. */
+export function TemplateEditor({ v, onChange, rule, chan }: { v: Tpl; onChange: (p: Partial<Tpl>) => void; rule?: boolean; chan?: Partial<Tpl> }) {
+  const [open, setOpen] = useState(!!(v.title_tpl || v.body_tpl));
+  const [focus, setFocus] = useState<"title_tpl" | "body_tpl">("body_tpl");
+  const custom = !!(v.title_tpl.trim() || v.body_tpl.trim());
+  const ins = (k: string) => onChange({ [focus]: `${v[focus] || ""}{${k}}` } as Partial<Tpl>);
+  const pv = rule ? applyTpl(SAMPLE, chan, v) : applyTpl(SAMPLE, v);
+  if (!open)
+    return (
+      <div class="row p81-tpl-closed">
+        <span>Message</span>
+        <button class="btn xs ghost" onClick={() => setOpen(true)} title="Customize the title and text sent">
+          <Pencil size={11} /> {custom ? "Custom template" : rule ? "Channel's message" : "Default"} · edit
+        </button>
+      </div>
+    );
+  return (
+    <div class="p81-tpl">
+      <div class="row">
+        <span>Title</span>
+        <input value={v.title_tpl} placeholder={rule ? "channel's / default" : DEFAULT_TITLE} onFocus={() => setFocus("title_tpl")} onInput={(e) => onChange({ title_tpl: (e.target as HTMLInputElement).value })} />
+      </div>
+      <div class="row">
+        <span>Text</span>
+        <textarea rows={3} value={v.body_tpl} placeholder={rule ? "channel's / default" : DEFAULT_BODY} onFocus={() => setFocus("body_tpl")} onInput={(e) => onChange({ body_tpl: (e.target as HTMLTextAreaElement).value })} />
+      </div>
+      <div class="p81-ph" title="Click to insert into the field you edited last">
+        {PLACEHOLDERS.filter((k) => k !== "place" && k !== "min").map((k) => (
+          <button key={k} class="chip" title={PH_HELP[k] ?? k} onClick={() => ins(k)}>
+            {`{${k}}`}
+          </button>
+        ))}
+      </div>
+      <div class="p81-tpl-pv" title="Preview with example values">
+        <b>{pv.title}</b>
+        <span>{pv.body}</span>
+      </div>
+      <div class="row">
+        <span class="muted small" style={{ flex: 1 }}>
+          {rule ? "Overrides the channel's message for this rule." : "Blank = today's message. Values a message doesn't have are left empty."}
+        </span>
+        {custom && (
+          <button class="btn xs ghost" onClick={() => onChange({ title_tpl: "", body_tpl: "" })}>
+            Reset
+          </button>
+        )}
       </div>
     </div>
   );

@@ -302,7 +302,10 @@ pub async fn check(rule: &Value, cx: &mut Ctx<'_>) -> Result<Option<Hit>, String
                     let area: Vec<&str> = p["areaDesc"].as_str().unwrap_or("").split(';').map(str::trim).take(3).collect();
                     let msg = if d > 0.0 { format!("{ev} {} from {label}", fmt_mi(d)) } else { format!("{ev} covers {label}") };
                     let key = p["id"].as_str().or(a["id"].as_str()).unwrap_or(ev).to_string();
-                    return Ok(Some(Hit { key, msg, vars: vars(&[("event", ev.into()), ("dist", if d > 0.0 { fmt_mi(d) } else { "0".into() }), ("place", label.clone()), ("area", area.join(","))]) }));
+                    // 0.8.1: headline / severity / expires for message templates
+                    let mut v = vars(&[("event", ev.into()), ("dist", if d > 0.0 { fmt_mi(d) } else { "0".into() }), ("place", label.clone()), ("area", area.join(","))]);
+                    v.extend(vars(&[("headline", p["headline"].as_str().unwrap_or("").into()), ("severity", p["severity"].as_str().unwrap_or("").into()), ("expires", local_time(p["ends"].as_str().or(p["expires"].as_str()).unwrap_or("")))]));
+                    return Ok(Some(Hit { key, msg, vars: v }));
                 }
             }
             Ok(None)
@@ -457,7 +460,15 @@ pub async fn check(rule: &Value, cx: &mut Ctx<'_>) -> Result<Option<Hit>, String
                 if d <= r {
                     let what = format!("{} detection ({}%, {})", p["target"].as_str().unwrap_or("model"), (prob * 100.0).round(), p["model_name"].as_str().unwrap_or(""));
                     let key = format!("{}|{}", p["model_id"].as_str().unwrap_or(""), p["cell_id"].as_str().or(p["site"].as_str()).unwrap_or(""));
-                    return Ok(Some(Hit { key, msg: format!("{what} {} from {label}", fmt_mi(d)), vars: vars(&[("event", what), ("dist", fmt_mi(d)), ("place", label.clone()), ("value", (prob * 100.0).round().to_string())]) }));
+                    // 0.8.1: model / probability / confidence for message templates
+                    let conf = match &p["confidence"] {
+                        Value::Number(n) => n.as_f64().map(|c| if c <= 1.0 { format!("{}%", (c * 100.0).round()) } else { format!("{}%", c.round()) }).unwrap_or_default(),
+                        Value::String(s) => s.clone(),
+                        _ => String::new(),
+                    };
+                    let mut v = vars(&[("event", what.clone()), ("dist", fmt_mi(d)), ("place", label.clone()), ("value", (prob * 100.0).round().to_string())]);
+                    v.extend(vars(&[("model", p["model_name"].as_str().unwrap_or("").into()), ("probability", format!("{}%", (prob * 100.0).round())), ("confidence", conf)]));
+                    return Ok(Some(Hit { key, msg: format!("{what} {} from {label}", fmt_mi(d)), vars: v }));
                 }
             }
             Ok(None)
@@ -501,9 +512,17 @@ fn check_same(c: &Value, cx: &mut Ctx<'_>) -> Option<Hit> {
         let ev = if name.is_empty() { m.raw.clone() } else { name };
         // keyed by the header text: the same warning heard again (re-broadcast, or on several
         // monitored stations) stays within the rule's cooldown
-        return Some(Hit { key: format!("same|{}", m.raw), msg: format!("{ev} for {} (SAME on {st})", areas.join("; ")), vars: vars(&[("event", ev), ("place", areas.join("; ")), ("station", st), ("raw", m.raw.clone())]) });
+        let mut v = vars(&[("event", ev.clone()), ("place", areas.join("; ")), ("station", st.clone()), ("raw", m.raw.clone())]);
+        // 0.8.1: message templates
+        v.extend(vars(&[("same_code", h["event"].as_str().unwrap_or("").into()), ("area", areas.join("; ")), ("expires", local_time(h["expires"].as_str().unwrap_or(""))), ("headline", format!("{ev} for {}", areas.join("; ")))]));
+        return Some(Hit { key: format!("same|{}", m.raw), msg: format!("{ev} for {} (SAME on {st})", areas.join("; ")), vars: v });
     }
     None
+}
+
+/// 0.8.1: an RFC 3339 time as local "YYYY-MM-DD HH:MM" ("" when it doesn't parse).
+fn local_time(s: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(s).map(|t| t.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default()
 }
 
 pub fn fill(t: &str, rule: &Value, h: &Hit) -> String {
@@ -544,7 +563,9 @@ pub fn message(rule: &Value, h: &Hit, silent: bool, test: bool) -> Msg {
         let ev = h.vars.get("event").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
         if ev.contains("tornado") || ev.contains("tvs") || ev.contains("emergency") { "urgent".into() } else if ev.contains("warning") { "high".into() } else { "normal".into() }
     });
-    Msg { title: name.clone(), body, level, silent, url: None, rule: name, vars: h.vars.clone(), test }
+    // 0.8.1: the rule's own message templates (else each channel's)
+    let tpl = |k: &str| a[k].as_str().unwrap_or("").to_string();
+    Msg { title: name.clone(), body, level, silent, url: None, rule: name, vars: h.vars.clone(), test, title_tpl: tpl("title_tpl"), body_tpl: tpl("body_tpl") }
 }
 
 /// Run a rule's server actions; returns per-target results.

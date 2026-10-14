@@ -375,6 +375,9 @@ export interface RuleAction {
   open?: string;
   /** data 0.8: server notification channels (ids from /api/notify/channels) */
   channels?: string[];
+  /** 0.8.1: message template for this rule (overrides the channel's; blank = default) */
+  title_tpl?: string;
+  body_tpl?: string;
 }
 export interface Rule {
   id: string;

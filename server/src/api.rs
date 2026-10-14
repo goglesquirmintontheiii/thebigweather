@@ -227,6 +227,7 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/rec/import", post(rec_import).layer(DefaultBodyLimit::disable()))
         .route("/rec/{id}", delete(rec_delete))
         .route("/rec/{id}/stop", post(rec_stop))
+        .route("/rec/{id}/end", post(crate::recorder::set_end_route)) // 0.8.1: Record for… / until stopped
         .route("/rec/{id}/frames", get(rec_frames))
         .route("/rec/{id}/file/{name}", get(rec_file))
         .route("/rec/{id}/timelapse", get(rec_timelapse))

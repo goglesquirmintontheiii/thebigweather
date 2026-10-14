@@ -18,6 +18,7 @@ import { applyWorkspace } from "../workspaces";
 import { freshDetections, startDetections } from "../ml/client"; // detection models
 import { tmeta } from "../ml/targets"; // detection models
 import { passesGate, PG_DET } from "../ml/probgate"; // models 0.7
+import { applyTpl } from "../notifytpl"; // 0.8.1: message templates
 
 export interface FireLog {
   t: number;
@@ -327,7 +328,9 @@ export async function runActions(r: Rule, h: Hit, test = false) {
   const silent = quiet() && !test;
   if (a.sound && a.sound !== "off" && !silent) playNamed(a.sound);
   if (a.desktop && "Notification" in window) {
-    const show = () => new Notification(r.name, { body: h.msg, silent: true });
+    // 0.8.1: the rule's message template applies to desktop notifications too
+    const n = applyTpl({ title: r.name, body: h.msg, rule: r.name, vars: h.vars }, undefined, a);
+    const show = () => new Notification(n.title, { body: n.body, silent: true });
     if (Notification.permission === "granted") show();
     else if (Notification.permission !== "denied") Notification.requestPermission().then((p) => p === "granted" && show());
   }
