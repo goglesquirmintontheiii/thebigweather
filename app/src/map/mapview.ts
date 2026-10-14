@@ -28,6 +28,8 @@ import { distance, bearing, compass, fmtDist, circle, destination } from "../uti
 /* workflow 0.6: offline tiles, terrain, route/plugin layers, precip effect */
 import { offlineTransform } from "../offline/tiles";
 import { attachWf6 } from "./wf6map";
+import { applyPerfToMap, glLost } from "../perf"; // 0.8.1 perf
+import { mountPerfUi } from "../ui/PerfSettings"; // 0.8.1 perf: FPS/memory readout, safe-mode banner
 
 export const mapRef = signal<MLMap | null>(null);
 export const hover = signal<{ lat: number; lon: number; value: number; range: number; az: number; height: number; x: number; y: number } | null>(null);
@@ -454,6 +456,19 @@ export function createMap(container: HTMLElement): MLMap {
     transformRequest: offlineTransform, // workflow 0.6
   } as any);
   map.touchZoomRotate.disableRotation();
+  /* 0.8.1 perf: render resolution / frame-rate cap; a lost WebGL context that doesn't come back
+   * (driver reset, too many contexts) offers a reload instead of a frozen map */
+  applyPerfToMap(map);
+  let lostTimer = 0;
+  map.on("webglcontextlost", () => {
+    clearTimeout(lostTimer);
+    lostTimer = window.setTimeout(() => (glLost.value = true), 4000);
+  });
+  map.on("webglcontextrestored", () => {
+    clearTimeout(lostTimer);
+    glLost.value = false;
+  });
+  mountPerfUi();
   registerPatterns(map);
   radarLayer = new RadarLayer();
   attachLayer(radarLayer);

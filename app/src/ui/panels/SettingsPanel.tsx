@@ -11,6 +11,7 @@ import { ServerSettingsSection } from "../ServerSettings"; // shake/stats/server
 import { LookSection, KioskSection, OfflineSection, PluginsSection } from "../Wf6Settings"; // workflow 0.6
 import { AccessibilitySection } from "../../a11y/A11yUI"; // panes/palette/a11y 0.8
 import { PaneLayoutsSection } from "../PaneLayoutEditor"; // panes/palette/a11y 0.8
+import { PerfSection } from "../PerfSettings"; // 0.8.1 perf
 
 const KEY_LABELS: Record<string, string> = {
   google_maps: "Google Map Tiles",
@@ -149,6 +150,7 @@ export function SettingsPanel() {
       <DesktopSection /> {/* Phase 6: tray, auto-start, built-in server */}
       <UpdatesSection /> {/* p8: app auto-update + server self-update */}
       <AppearanceSection />
+      <PerfSection /> {/* 0.8.1 perf */}
       <AccessibilitySection /> {/* panes/palette/a11y 0.8 */}
       <PaneLayoutsSection /> {/* panes/palette/a11y 0.8 */}
       {/* workflow 0.6 */}

@@ -4,6 +4,7 @@ import type { CustomLayerInterface, CustomRenderMethodInput, Map as MLMap } from
 import type { Raster } from "./raster";
 import { type ColorTable, rasterize, TEX_SIZE } from "../radar/colormaps";
 import { gateFor, mainGridKey, onGateChange } from "../gate";
+import { perfNow } from "../perf"; // 0.8.1 perf
 
 const VS = `#version 300 es
 precision highp float;
@@ -118,7 +119,7 @@ export class GridLayer implements CustomLayerInterface {
   private prog?: WebGLProgram;
   private vao?: WebGLVertexArrayObject;
   private loc: Record<string, WebGLUniformLocation | null> = {};
-  private textures = new Map<Raster, { tex: WebGLTexture; used: number }>();
+  private textures = new Map<Raster, { tex: WebGLTexture; used: number; bytes: number }>();
   private cmaps = new Map<ColorTable, WebGLTexture>();
   raster: Raster | null = null;
   table: ColorTable | null = null;
@@ -128,9 +129,34 @@ export class GridLayer implements CustomLayerInterface {
   gateKey?: string;
   private unGate?: () => void;
 
+  private onRestored?: () => void;
+
   onAdd(map: MLMap, gl: WebGL2RenderingContext) {
     this.map = map;
     this.gl = gl;
+    this.init(gl);
+    this.unGate?.();
+    this.unGate = onGateChange(() => map.triggerRepaint());
+    // 0.8.1 perf: after a lost WebGL context comes back every GL object is gone: rebuild them
+    const cv = map.getCanvas();
+    if (this.onRestored) cv.removeEventListener("webglcontextrestored", this.onRestored);
+    this.onRestored = () => {
+      this.textures.clear();
+      this.texBytes = 0;
+      this.cmaps.clear();
+      this.dummyU = this.dummyFl = undefined;
+      try {
+        this.init(gl);
+      } catch {
+        this.prog = undefined;
+      }
+      map.triggerRepaint();
+    };
+    cv.addEventListener("webglcontextrestored", this.onRestored);
+    map.triggerRepaint();
+  }
+
+  private init(gl: WebGL2RenderingContext) {
     const p = gl.createProgram()!;
     gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VS));
     gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, FS));
@@ -147,18 +173,18 @@ export class GridLayer implements CustomLayerInterface {
     gl.enableVertexAttribArray(a);
     gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
-    this.unGate?.();
-    this.unGate = onGateChange(() => map.triggerRepaint());
-    map.triggerRepaint();
   }
 
   onRemove() {
     this.unGate?.();
     this.unGate = undefined;
+    if (this.onRestored) this.map?.getCanvas().removeEventListener("webglcontextrestored", this.onRestored); // 0.8.1
+    this.onRestored = undefined;
     const gl = this.gl;
     if (!gl) return;
     for (const t of this.textures.values()) gl.deleteTexture(t.tex);
     this.textures.clear();
+    this.texBytes = 0;
     for (const t of this.cmaps.values()) gl.deleteTexture(t);
     this.cmaps.clear();
   }
@@ -174,8 +200,14 @@ export class GridLayer implements CustomLayerInterface {
   release(r: Raster) {
     const t = this.textures.get(r);
     if (t && this.gl) this.gl.deleteTexture(t.tex);
+    if (t) this.texBytes -= t.bytes;
     this.textures.delete(r);
   }
+
+  /** 0.8.1 perf: GPU bytes held by uploaded frames */
+  texBytes = 0;
+  /** 0.8.1 perf: GPU memory cap for this layer's frames (Settings → Performance → frame cache) */
+  maxTexBytes = 1024 * 1024 * 1024;
 
   private texFor(r: Raster): WebGLTexture {
     const hit = this.textures.get(r);
@@ -199,12 +231,17 @@ export class GridLayer implements CustomLayerInterface {
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 2);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, r.w, r.h, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, r.data);
     }
-    this.textures.set(r, { tex, used: performance.now() });
-    // keep GPU memory bounded
-    if (this.textures.size > 40) {
-      const old = [...this.textures.entries()].sort((a, b) => a[1].used - b[1].used).slice(0, this.textures.size - 40);
+    const bytes = r.w * r.h * (r.rgba ? 4 : 2);
+    this.textures.set(r, { tex, used: performance.now(), bytes });
+    this.texBytes += bytes;
+    this.maxTexBytes = perfNow().cacheMB * 1024 * 1024;
+    // keep GPU memory bounded (count and, 0.8.1 perf, bytes; the frame being drawn stays)
+    if (this.textures.size > 40 || this.texBytes > this.maxTexBytes) {
+      const old = [...this.textures.entries()].filter(([k]) => k !== r).sort((a, b) => a[1].used - b[1].used);
       for (const [k, v] of old) {
+        if (this.textures.size <= 40 && this.texBytes <= this.maxTexBytes) break;
         gl.deleteTexture(v.tex);
+        this.texBytes -= v.bytes;
         this.textures.delete(k);
       }
     }
