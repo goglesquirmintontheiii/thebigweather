@@ -1,5 +1,11 @@
 import { PlacefilePanel } from "./PlacefilePanel"; // radar 0.6
 import { openPanel, type PanelId, connection } from "../store";
+import { settings, update } from "../store"; // 0.8.1
+import { signal } from "@preact/signals"; // 0.8.1
+import { useEffect, useRef, useState } from "preact/hooks"; // 0.8.1
+import { createPortal } from "preact/compat"; // 0.8.1
+import { mergeOrder, moveBy, dropAt, isDefaultOrder } from "./uiorder"; // 0.8.1
+import "./hotfix081.css"; // 0.8.1
 import { viewer } from "../share/share"; // share & collab
 import { alerts } from "../alerts";
 import { Layers, Radar, TriangleAlert, MapPin, Activity, Settings, Radio, FolderOpen, CloudSun, Search, X, Map as MapIcon, CircleDot } from "lucide-preact";
@@ -63,56 +69,174 @@ const MORE: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   // route / rules / widgets / placefiles: in the toolbar "…" menu (keeps the rail short)
 ];
 
+/* ---------- 0.8.1: rearrangeable rail ---------- */
+interface RailEntry {
+  id: string;
+  icon: any;
+  label: string;
+  on: () => boolean;
+  click: () => void;
+  extra?: () => any;
+}
+const togglePanel = (id: Exclude<PanelId, null>) => () => (openPanel.value = openPanel.value === id ? null : id);
+const RAIL: RailEntry[] = [
+  ...ITEMS.map(({ id, icon, label }) => ({
+    id,
+    icon,
+    label,
+    on: () => openPanel.value === id,
+    click: togglePanel(id),
+    extra:
+      id === "alerts"
+        ? () => {
+            const nWarn = [...alerts.value.values()].filter((a) => String(a.properties.event).endsWith("Warning")).length;
+            return nWarn > 0 && <span class="badge">{nWarn > 99 ? "99+" : nWarn}</span>;
+          }
+        : id === "sources"
+          ? () => connection.value !== "online" && <span class={`dot ${connection.value}`} />
+          : undefined,
+  })),
+  { id: "sep", icon: null, label: "Separator", on: () => false, click: () => {} },
+  ...MORE.map(({ id, icon, label }) => ({
+    id: id as string,
+    icon,
+    label,
+    on: () => openPanel.value === id || (id === "forecast" && forecastOpen.value) || (id === "radio" && radioOpen.value) || ((id as string) === "seismo" && shakeOpen.value),
+    click: () => (id === "forecast" ? (forecastOpen.value = !forecastOpen.value) : id === "radio" ? (radioOpen.value = !radioOpen.value) : (id as string) === "seismo" ? (shakeOpen.value = !shakeOpen.value) /* shake/stats/server 0.6 */ : togglePanel(id)()),
+    extra:
+      id === "radio"
+        ? () => (nowPlaying.value || players.value.length > 0) && <span class="dot online" />
+        : id === "record"
+          ? () => recs.value.some((r) => r.status === "recording") && <span class="dot rec" />
+          : undefined,
+  })),
+  { id: "hist", icon: History, label: "Historical Storms", on: () => histStormsOpen.value, click: () => (histStormsOpen.value = !histStormsOpen.value) }, // history 0.6
+  { id: "ml", icon: BrainCircuit, label: "Detection models", on: () => mlOpen.value, click: () => (mlOpen.value = !mlOpen.value), extra: () => activeJobs.value.length > 0 && <span class="dot online" title="Training in progress" /> }, // detection models
+  { id: "space", icon: Sun, label: "Space weather", on: () => spaceOpen.value, click: () => (spaceOpen.value = !spaceOpen.value) }, // p7
+  { id: "dash", icon: LayoutDashboard, label: "Dashboard", on: () => dashOpen.value, click: () => (dashOpen.value = !dashOpen.value) }, // radio/dash 0.8
+  { id: "timeline", icon: ChartGantt, label: "Alert timeline", on: () => timelineOpen.value, click: () => (timelineOpen.value = !timelineOpen.value) }, // radio/dash 0.8
+];
+export const RAIL_DEFAULT = RAIL.map((r) => r.id);
+
+function railOrder(): string[] {
+  return mergeOrder(settings.value.railOrder, RAIL_DEFAULT);
+}
+function saveOrder(o: string[]) {
+  update((s) => (s.railOrder = isDefaultOrder(o, RAIL_DEFAULT) ? undefined : o));
+}
+/** right-click menu on a rail button */
+const railMenu = signal<{ id: string; x: number; y: number } | null>(null);
+
 export function Rail() {
-  const nWarn = [...alerts.value.values()].filter((a) => String(a.properties.event).endsWith("Warning")).length;
-  const conn = connection.value;
+  const order = railOrder();
+  const byId = new Map(RAIL.map((r) => [r.id, r]));
+  const [drag, setDrag] = useState<string | null>(null);
+  const [over, setOver] = useState<{ id: string; after: boolean } | null>(null);
+  const navRef = useRef<HTMLElement>(null);
+  const move = (id: string, d: number) => saveOrder(moveBy(order, id, d));
+  const dragProps = (id: string) => ({
+    draggable: true,
+    onDragStart: (e: DragEvent) => {
+      setDrag(id);
+      railMenu.value = null;
+      e.dataTransfer?.setData("text/x-tbw-rail", id);
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+    },
+    onDragOver: (e: DragEvent) => {
+      if (!drag) return;
+      e.preventDefault();
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const after = e.clientY > r.top + r.height / 2;
+      if (over?.id !== id || over.after !== after) setOver({ id, after });
+    },
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      if (drag && over) saveOrder(dropAt(order, drag, over.id, over.after));
+      setDrag(null);
+      setOver(null);
+    },
+    onDragEnd: () => {
+      setDrag(null);
+      setOver(null);
+    },
+    onContextMenu: (e: MouseEvent) => {
+      e.preventDefault();
+      railMenu.value = { id, x: e.clientX, y: e.clientY };
+    },
+    // keyboard: Alt+↑ / Alt+↓ moves the focused button
+    onKeyDown: (e: KeyboardEvent) => {
+      if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      move(id, e.key === "ArrowUp" ? -1 : 1);
+      requestAnimationFrame(() => navRef.current?.querySelector<HTMLElement>(`[data-rail="${id}"]`)?.focus());
+    },
+    "data-rail": id,
+  });
+  const dropCls = (id: string) => (over?.id === id && drag && drag !== id ? (over.after ? " drop-after" : " drop-before") : "") + (drag === id ? " dragging" : "");
   return (
-    <nav class="rail glass">
-      {ITEMS.map(({ id, icon: Icon, label }) => (
-        <button key={id} class={`rail-btn ${openPanel.value === id ? "on" : ""}`} title={label} onClick={() => (openPanel.value = openPanel.value === id ? null : id)}>
-          <Icon size={20} />
-          {id === "alerts" && nWarn > 0 && <span class="badge">{nWarn > 99 ? "99+" : nWarn}</span>}
-          {id === "sources" && conn !== "online" && <span class={`dot ${conn}`} />}
-        </button>
-      ))}
-      <div class="rail-sep" />
-      {MORE.map(({ id, icon: Icon, label }) => (
-        <button key={id} class={`rail-btn ${openPanel.value === id || (id === "forecast" && forecastOpen.value) || (id === "radio" && radioOpen.value) || ((id as string) === "seismo" && shakeOpen.value) ? "on" : ""}`} title={label} onClick={() => (id === "forecast" ? (forecastOpen.value = !forecastOpen.value) : id === "radio" ? (radioOpen.value = !radioOpen.value) : (id as string) === "seismo" ? (shakeOpen.value = !shakeOpen.value) /* shake/stats/server 0.6 */ : (openPanel.value = openPanel.value === id ? null : id))}>
-          <Icon size={20} />
-          {id === "radio" && (nowPlaying.value || players.value.length > 0) && <span class="dot online" />}
-          {id === "record" && recs.value.some((r) => r.status === "recording") && <span class="dot rec" />}
-        </button>
-      ))}
-      {/* history 0.6: Historical Storms window */}
-      <button class={`rail-btn ${histStormsOpen.value ? "on" : ""}`} title="Historical Storms" onClick={() => (histStormsOpen.value = !histStormsOpen.value)}>
-        <History size={20} />
-      </button>
-      {/* detection models */}
-      <button class={`rail-btn ${mlOpen.value ? "on" : ""}`} title="Detection models" onClick={() => (mlOpen.value = !mlOpen.value)}>
-        <BrainCircuit size={20} />
-        {activeJobs.value.length > 0 && <span class="dot online" title="Training in progress" />}
-      </button>
-      {/* end detection models */}
-      {/* p7: Space weather window */}
-      <button class={`rail-btn ${spaceOpen.value ? "on" : ""}`} title="Space weather" onClick={() => (spaceOpen.value = !spaceOpen.value)}>
-        <Sun size={20} />
-      </button>
-      {/* end p7 */}
-      {/* radio/dash 0.8: personal dashboard + alert timeline */}
-      <button class={`rail-btn ${dashOpen.value ? "on" : ""}`} title="Dashboard" onClick={() => (dashOpen.value = !dashOpen.value)}>
-        <LayoutDashboard size={20} />
-      </button>
-      <button class={`rail-btn ${timelineOpen.value ? "on" : ""}`} title="Alert timeline" onClick={() => (timelineOpen.value = !timelineOpen.value)}>
-        <ChartGantt size={20} />
-      </button>
-      {/* end radio/dash 0.8 */}
+    <nav class="rail glass" ref={navRef as any}>
+      {order.map((id) => {
+        const r = byId.get(id)!;
+        if (id === "sep") return <div key="sep" class={`rail-sep rail-sep-drag${dropCls(id)}`} title="Separator (drag to move)" {...(dragProps(id) as any)} />;
+        const Icon = r.icon;
+        return (
+          <button key={id} class={`rail-btn ${r.on() ? "on" : ""}${dropCls(id)}`} title={r.label} onClick={r.click} {...(dragProps(id) as any)}>
+            <Icon size={20} />
+            {r.extra?.()}
+          </button>
+        );
+      })}
       <div class="rail-fill" />
       <button class={`rail-btn ${openPanel.value === "settings" ? "on" : ""}`} title="Settings" onClick={() => (openPanel.value = openPanel.value === "settings" ? null : "settings")}>
         <Settings size={20} />
       </button>
+      <RailMenu order={order} move={move} />
     </nav>
   );
 }
+
+function RailMenu({ order, move }: { order: string[]; move: (id: string, d: number) => void }) {
+  const m = railMenu.value;
+  useEffect(() => {
+    if (!m) return;
+    const close = (e: Event) => {
+      if (!(e.target as HTMLElement)?.closest?.(".rail-menu")) railMenu.value = null;
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && (railMenu.value = null);
+    window.addEventListener("pointerdown", close, true);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [m]);
+  if (!m) return null;
+  const i = order.indexOf(m.id);
+  const custom = !isDefaultOrder(order, RAIL_DEFAULT);
+  const act = (fn: () => void) => () => {
+    fn();
+    railMenu.value = null;
+  };
+  // portal: the rail's backdrop-filter would make it the containing block (and clip the menu)
+  return createPortal(
+    <div class="ctx glass rail-menu" style={{ left: `${m.x + 6}px`, top: `${Math.min(m.y, window.innerHeight - 150)}px` }}>
+      <div class="ctx-title">{RAIL.find((r) => r.id === m.id)?.label}</div>
+      <button disabled={i <= 0} onClick={act(() => move(m.id, -1))}>
+        Move up
+      </button>
+      <button disabled={i >= order.length - 1} onClick={act(() => move(m.id, 1))}>
+        Move down
+      </button>
+      <button disabled={!custom} onClick={act(() => saveOrder(RAIL_DEFAULT.slice()))}>
+        Reset order
+      </button>
+      <div class="muted small rail-menu-hint">Drag buttons to rearrange · Alt+↑/↓</div>
+    </div>,
+    document.body,
+  );
+}
+/* ---------- end 0.8.1 ---------- */
 
 const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */, route: "Route weather", rules: "Notification rules", widgets: "Desktop widgets" /* workflow 0.6 */, placefiles: "Placefiles" /* radar 0.6 */ };
 

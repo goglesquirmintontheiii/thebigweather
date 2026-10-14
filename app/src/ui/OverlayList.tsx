@@ -17,6 +17,28 @@ import { camDialog } from "./Overlays";
 import { AlertConfig } from "./AlertConfig";
 import { Toggle } from "./panels/RadarPanel";
 import { LayerExtra } from "./LayerExtras"; // layers 0.5
+import { LocateFixed } from "lucide-preact"; // 0.8.1
+import { identify, identifying, zoomToLayer } from "../overlays/identify"; // 0.8.1
+import "./hotfix081.css"; // 0.8.1
+
+/** 0.8.1: identify button (pulse the layer's items on the map) + "Zoom to" when none are in view */
+export function IdentifyButton({ id, label, onPick }: { id: string; label?: boolean; onPick?: () => void }) {
+  const st = identifying.value;
+  const mine = st?.id === id ? st : null;
+  return (
+    <>
+      <button class={`icon-btn ident-btn ${mine?.state === "on" ? "on" : ""} ${label ? "with-label" : ""}`} title={mine?.state === "on" ? "Stop identifying" : "Identify on map (pulse this layer's items)"} onClick={() => (identify(id), identifying.value?.state === "on" && onPick?.())}>
+        <LocateFixed size={13} />
+        {label && <span>{mine?.state === "on" ? "Stop" : "Identify on map"}</span>}
+      </button>
+      {mine?.state === "none" && (
+        <button class="chip ident-zoom" title="None in view: zoom the map to this layer's items" onClick={() => (zoomToLayer(id), onPick?.())}>
+          Zoom to {mine.total.toLocaleString()}
+        </button>
+      )}
+    </>
+  );
+}
 
 /** Layer whose settings window is open: overlay id, "file:<id>" or "base:<name>". */
 export const configModal = signal<string | null>(null);
@@ -37,6 +59,13 @@ function Status({ id }: { id: string }) {
     return (
       <span class="ovl-err" title={st.error}>
         <AlertTriangle size={12} />
+      </span>
+    );
+  // 0.8.1: long notes (feed status such as "FEMA: 0 open shelters now") go to the tooltip; the gear shows them in full
+  if (st.note && st.note.length > 16 && st.count !== undefined)
+    return (
+      <span class="ovl-count muted" title={st.note}>
+        {st.count.toLocaleString()} ⓘ
       </span>
     );
   if (st.note) return <span class="ovl-count muted">{st.note}</span>;
@@ -257,6 +286,12 @@ function OverlayConfig({ d }: { d: OverlayDef }) {
           <MyCamList />
         </section>
       )}
+      {/* 0.8.1: identify */}
+      {settings.value.ovl[d.id]?.on && !d.raster && (
+        <section class="ident-sec">
+          <IdentifyButton id={d.id} label onPick={() => (configModal.value = null)} />
+        </section>
+      )}
       <section>
         {d.note && <p class="muted small">{d.note}</p>}
         {st?.error && <p class="err-text small">{st.error}</p>}
@@ -326,6 +361,11 @@ export function ConfigModal() {
           <label class="lbl">Display</label>
           <StyleControls id={id} def={{ color: "#f472b6", opacity: 0.8, size: 2, labels: true }} />
         </section>
+        {settings.value.ovl[id]?.on && (
+          <section class="ident-sec">
+            <IdentifyButton id={id} label onPick={close} /> {/* 0.8.1 */}
+          </section>
+        )}
         <section>
           <p class="muted small">
             {f?.count.toLocaleString()} features
@@ -581,6 +621,7 @@ function ItemRow({ it, sub }: { it: Item; sub?: boolean }) {
         </label>
         <KbdBadge id={it.key} />
         {it.status}
+        {it.on && !it.key.startsWith("base:") && !overlayDef(it.key)?.raster && <IdentifyButton id={it.key} /> /* 0.8.1 */}
         {it.gear && (
           <button class={`icon-btn gear ${configModal.value === it.gear ? "on" : ""}`} title="Settings" onClick={() => (configModal.value = it.gear!)}>
             <Settings2 size={13} />

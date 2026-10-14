@@ -203,6 +203,8 @@ export interface Settings {
   points: SavedPoint[];
   view: { center: [number, number]; zoom: number };
   panels: { stats: { open: boolean; x: number; y: number }; /* shake/stats/server 0.6 */ appstats?: { open: boolean; x: number; y: number } };
+  /** 0.8.1: left-rail button order (ids; missing ids go to their default spot, Sidebar.tsx) */
+  railOrder?: string[];
   /* shake/stats/server 0.6: Seismographs window (favourite stations as "NET.STA") */
   shake?: { favs: string[] };
   /* 3D volume view (ui/View3D.tsx) */

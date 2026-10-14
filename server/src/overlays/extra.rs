@@ -446,33 +446,61 @@ pub async fn overpass(o: &Overlays, q: &str, bbox: &str) -> Result<Value> {
         format!(r#"nwr["name"~"{name}",i]{bb};"#)
     };
     let ql = format!("[out:json][timeout:30];({body});out center 300;");
+    let v = overpass_ql(o, &ql).await?;
+    let feats: Vec<Value> = v["elements"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|e| {
+            let lat = e["lat"].as_f64().or(e["center"]["lat"].as_f64())?;
+            let lon = e["lon"].as_f64().or(e["center"]["lon"].as_f64())?;
+            let t = &e["tags"];
+            let addr = [t["addr:housenumber"].as_str(), t["addr:street"].as_str(), t["addr:city"].as_str()].iter().flatten().cloned().collect::<Vec<_>>().join(" ");
+            let kind = ["amenity", "shop", "tourism", "emergency", "social_facility", "aeroway", "man_made", "building"].iter().find_map(|k| t[*k].as_str().map(|v| v.replace('_', " "))).unwrap_or_default();
+            Some(point(lon, lat, json!({"name": t["name"].as_str().unwrap_or(&kind), "kind": kind, "addr": addr, "phone": t["phone"], "web": t["website"], "hours": t["opening_hours"], "osm": format!("https://www.openstreetmap.org/{}/{}", e["type"].as_str().unwrap_or("node"), e["id"])})))
+        })
+        .collect();
+    Ok(fc(feats))
+}
+
+/// Overpass mirrors tried in order.
+const OVERPASS_HOSTS: &[&str] = &["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://overpass.kumi.systems/api/interpreter"]; // 0.8.1: third mirror
+
+/// Runs one Overpass QL query (raw JSON, `elements`), trying the mirrors in turn. 0.8.1: a
+/// "runtime error" remark with no elements (timeout / out of memory) counts as a failure, so a
+/// broken query no longer looks like "nothing here".
+pub async fn overpass_ql(o: &Overlays, ql: &str) -> Result<Value> {
     let mut last = anyhow!("Overpass unavailable");
-    for host in ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter"] {
-        let r = o.http.post(host).header("Content-Type", "application/x-www-form-urlencoded").body(format!("data={}", enc(&ql))).timeout(Duration::from_secs(45)).send().await;
+    for host in OVERPASS_HOSTS {
+        let r = o.http.post(*host).header("Content-Type", "application/x-www-form-urlencoded").body(format!("data={}", enc(ql))).timeout(Duration::from_secs(45)).send().await;
         match r {
             Ok(r) if r.status().is_success() => {
-                let v: Value = r.json().await?;
-                let feats: Vec<Value> = v["elements"]
-                    .as_array()
-                    .cloned()
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|e| {
-                        let lat = e["lat"].as_f64().or(e["center"]["lat"].as_f64())?;
-                        let lon = e["lon"].as_f64().or(e["center"]["lon"].as_f64())?;
-                        let t = &e["tags"];
-                        let addr = [t["addr:housenumber"].as_str(), t["addr:street"].as_str(), t["addr:city"].as_str()].iter().flatten().cloned().collect::<Vec<_>>().join(" ");
-                        let kind = ["amenity", "shop", "tourism", "emergency", "social_facility", "aeroway", "man_made", "building"].iter().find_map(|k| t[*k].as_str().map(|v| v.replace('_', " "))).unwrap_or_default();
-                        Some(point(lon, lat, json!({"name": t["name"].as_str().unwrap_or(&kind), "kind": kind, "addr": addr, "phone": t["phone"], "web": t["website"], "hours": t["opening_hours"], "osm": format!("https://www.openstreetmap.org/{}/{}", e["type"].as_str().unwrap_or("node"), e["id"])})))
-                    })
-                    .collect();
-                return Ok(fc(feats));
+                let v: Value = match r.json().await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        last = e.into();
+                        continue;
+                    }
+                };
+                if let Some(err) = overpass_error(&v) {
+                    last = anyhow!("Overpass: {err}");
+                    continue;
+                }
+                return Ok(v);
             }
             Ok(r) => last = anyhow!("Overpass HTTP {}", r.status()),
             Err(e) => last = e.into(),
         }
     }
     Err(last)
+}
+
+/// A runtime-error remark on an empty answer (timeouts, memory limits).
+pub fn overpass_error(v: &Value) -> Option<String> {
+    let remark = v["remark"].as_str()?;
+    let empty = v["elements"].as_array().map(|a| a.is_empty()).unwrap_or(true);
+    (empty && remark.contains("error")).then(|| remark.trim().chars().take(160).collect())
 }
 
 #[cfg(test)]

@@ -274,7 +274,12 @@ pub async fn tsunami(o: &Overlays, hours: &str) -> Result<Value> {
 
 // ---------- shelters / hospitals / centres ----------
 
+/// FEMA National Shelter System "Open Shelters" layer (fields: shelter_name, address, city, state,
+/// zip, shelter_status, evacuation_capacity, post_impact_capacity, total_population, org_name,
+/// pet_accommodations_code, ada_compliant, wheelchair_accessible, hours_open, hours_close,
+/// latitude, longitude). 0.8.1: the MapServer copy of the same layer is the fallback.
 pub const FEMA_SHELTERS: &str = "https://gis.fema.gov/arcgis/rest/services/NSS/OpenShelters/FeatureServer/0";
+pub const FEMA_SHELTER_LAYERS: &[&str] = &[FEMA_SHELTERS, "https://gis.fema.gov/arcgis/rest/services/NSS/OpenShelters/MapServer/0"];
 /// HIFLD hospitals (FEMA copy, 2021) and an older public HIFLD copy as fallback.
 pub const HOSPITAL_LAYERS: &[&str] = &["https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/Hospitals_hifld/FeatureServer/0", "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/Hospitals/FeatureServer/0"];
 
@@ -282,23 +287,91 @@ fn pick(p: &Value, keys: &[&str]) -> Value {
     keys.iter().map(|k| &p[*k]).find(|v| !v.is_null() && v.as_str().map(|s| !s.trim().is_empty() && s != "NOT AVAILABLE").unwrap_or(true)).cloned().unwrap_or(Value::Null)
 }
 
-/// FEMA National Shelter System open shelters (`bbox` optional).
-pub async fn shelters(o: &Overlays, bbox: &str) -> Result<Value> {
-    let q = Query { layer: FEMA_SHELTERS, bbox: parse_bbox(bbox)?, max: 5000, page: 2000, ..Default::default() };
-    let feats = agsquery::features(o, &q).await?;
-    Ok(fc(feats
+/// Property `k` in any case (ArcGIS services have switched between lower- and upper-case names).
+fn prop<'a>(p: &'a Value, k: &str) -> &'a Value {
+    let v = &p[k];
+    if !v.is_null() {
+        return v;
+    }
+    let up = &p[k.to_ascii_uppercase().as_str()];
+    if !up.is_null() {
+        return up;
+    }
+    p.as_object().and_then(|m| m.iter().find(|(kk, _)| kk.eq_ignore_ascii_case(k)).map(|(_, v)| v)).unwrap_or(&Value::Null)
+}
+
+/// FEMA NSS GeoJSON features → shelter points (0.8.1: case-insensitive fields, points rebuilt from
+/// the latitude / longitude fields when a feature comes without geometry, closed ones dropped).
+pub fn parse_shelters(feats: Vec<Value>) -> Vec<Value> {
+    feats
         .into_iter()
-        .map(|mut f| {
+        .filter_map(|mut f| {
             let p = f["properties"].take();
-            f["properties"] = json!({
-                "kind": "shelter", "name": p["shelter_name"], "address": p["address"], "city": p["city"], "state": p["state"], "zip": p["zip"],
-                "status": p["shelter_status"], "capacity": p["evacuation_capacity"], "post_impact_capacity": p["post_impact_capacity"], "population": p["total_population"],
-                "org": p["org_name"], "pets": p["pet_accommodations_code"], "ada": p["ada_compliant"], "wheelchair": p["wheelchair_accessible"],
-                "hours_open": p["hours_open"], "hours_close": p["hours_close"],
+            let g = |k: &str| prop(&p, k).clone();
+            let status = prop(&p, "shelter_status").as_str().unwrap_or("").to_ascii_uppercase();
+            if status.contains("CLOSED") {
+                return None;
+            }
+            let props = json!({
+                "kind": "shelter", "name": g("shelter_name"), "address": g("address"), "city": g("city"), "state": g("state"), "zip": g("zip"),
+                "status": g("shelter_status"), "capacity": g("evacuation_capacity"), "post_impact_capacity": g("post_impact_capacity"), "population": g("total_population"),
+                "org": g("org_name"), "pets": g("pet_accommodations_code"), "ada": g("ada_compliant"), "wheelchair": g("wheelchair_accessible"),
+                "hours_open": g("hours_open"), "hours_close": g("hours_close"),
             });
-            f
+            let has_geom = f["geometry"]["coordinates"].as_array().map(|c| c.len() >= 2 && c[0].is_number() && c[1].is_number()).unwrap_or(false);
+            if has_geom {
+                f["properties"] = props;
+                return Some(f);
+            }
+            let num = |k: &str| prop(&p, k).as_f64().or_else(|| prop(&p, k).as_str().and_then(|s| s.trim().parse().ok()));
+            match (num("longitude"), num("latitude")) {
+                (Some(lon), Some(lat)) if lon.abs() <= 180.0 && lat.abs() <= 90.0 && (lon, lat) != (0.0, 0.0) => Some(point(lon, lat, props)),
+                _ => None,
+            }
         })
-        .collect()))
+        .collect()
+}
+
+/// Short status for an empty answer, so "none open" reads differently from "broken".
+pub fn shelters_status(in_view: usize, nationwide: Option<u64>) -> Option<String> {
+    if in_view > 0 {
+        return None;
+    }
+    Some(match nationwide {
+        Some(0) => "FEMA: 0 open shelters now".to_string(),
+        Some(n) => format!("0 here · {n} open in the US"),
+        None => "FEMA: none open here".to_string(),
+    })
+}
+
+/// FEMA National Shelter System open shelters (`bbox` optional). With nothing in the box, the
+/// nationwide count is added as `_status` ("FEMA: 0 open shelters now" outside disasters).
+pub async fn shelters(o: &Overlays, bbox: &str) -> Result<Value> {
+    let bb = parse_bbox(bbox)?;
+    let mut last = anyhow!("FEMA shelters unreachable");
+    let mut got = None;
+    for layer in FEMA_SHELTER_LAYERS {
+        let q = Query { layer, bbox: bb, max: 5000, page: 2000, ..Default::default() };
+        match agsquery::features(o, &q).await {
+            Ok(f) => {
+                got = Some((*layer, f));
+                break;
+            }
+            Err(e) => {
+                tracing::debug!("shelters {layer}: {e:#}");
+                last = e;
+            }
+        }
+    }
+    let Some((layer, feats)) = got else { return Err(last) };
+    let mut v = fc(parse_shelters(feats));
+    let n = v["features"].as_array().map(|a| a.len()).unwrap_or(0);
+    let nationwide = if n == 0 { o.get_json(&format!("{layer}/query?where=1%3D1&returnCountOnly=true&f=json")).await.ok().and_then(|c| c["count"].as_u64()) } else { None };
+    if let Some(st) = shelters_status(n, nationwide) {
+        v["_status"] = json!(st);
+    }
+    v["source"] = json!("FEMA National Shelter System");
+    Ok(v)
 }
 
 /// HIFLD hospitals (`bbox` strongly recommended; at most 8000 without one).
@@ -329,20 +402,106 @@ pub async fn hospitals(o: &Overlays, bbox: &str) -> Result<Value> {
     Err(last)
 }
 
-/// Cooling / warming centres and emergency shelters mapped in OpenStreetMap (no national keyless
-/// feed exists): `bbox` required, at most 25 deg², ≤ 300 results.
-pub async fn centers(o: &Overlays, bbox: &str) -> Result<Value> {
-    if bbox.trim().is_empty() {
-        bail!("bbox required (w,s,e,n)");
-    }
-    let mut v = super::extra::overpass(o, "centers", bbox).await?;
-    if let Some(fs) = v["features"].as_array_mut() {
-        for f in fs {
-            f["properties"]["source"] = json!("OpenStreetMap");
+/// Overpass QL for cooling / warming centres, emergency shelters and assembly points in one box.
+/// Few cooling centres carry a dedicated tag, so names are matched too; the centres are output
+/// first (own cap) so assembly points can't crowd them out.
+pub fn centers_ql(w: f64, s: f64, e: f64, n: f64) -> String {
+    let bb = format!("({s},{w},{n},{e})");
+    let centres = [
+        r#"nwr["cooling_center"]"#,
+        r#"nwr["cooling_centre"]"#,
+        r#"nwr["warming_center"]"#,
+        r#"nwr["warming_centre"]"#,
+        r#"nwr["emergency"~"^((cooling|warming)_cent(er|re)|emergency_shelter|shelter)$"]"#,
+        r#"nwr["social_facility"~"^(cooling|warming)"]"#,
+        r#"nwr["social_facility:for"~"displaced|disaster"]"#,
+        r#"nwr["name"~"cooling (center|centre|station|site|shelter)|warming (center|centre|station|site|shelter)|heat relief|warming hut|emergency shelter",i]"#,
+    ];
+    let others = [r#"nwr["social_facility"="shelter"]"#, r#"nwr["amenity"="shelter"]["shelter_type"="storm_shelter"]"#, r#"nwr["emergency"="assembly_point"]"#];
+    let a: String = centres.iter().map(|x| format!("{x}{bb};")).collect();
+    let b: String = others.iter().map(|x| format!("{x}{bb};")).collect();
+    format!("[out:json][timeout:40];({a})->.c;({b})->.o;(.o; - .c;)->.o;.c out center 300;.o out center 300;")
+}
+
+/// What a centre is, from its tags / name: cooling centre, warming centre, shelter, storm shelter
+/// or assembly point (the map colours by "cooling" / "warming" in name + kind).
+pub fn center_kind(t: &Value) -> String {
+    let g = |k: &str| t[k].as_str().unwrap_or("").to_ascii_lowercase();
+    let text = format!("{} {} {} {} {} {}", g("name"), g("description"), g("emergency"), g("social_facility"), g("social_facility:for"), g("shelter_type"));
+    let key = |k: &str| !t[k].is_null();
+    if key("cooling_center") || key("cooling_centre") || text.contains("cooling") || text.contains("heat relief") {
+        "cooling centre".into()
+    } else if key("warming_center") || key("warming_centre") || text.contains("warming") {
+        "warming centre".into()
+    } else if g("emergency") == "assembly_point" {
+        "assembly point".into()
+    } else if g("shelter_type") == "storm_shelter" {
+        "storm shelter".into()
+    } else {
+        let f = g("social_facility:for");
+        if f.is_empty() {
+            "shelter".into()
+        } else {
+            format!("shelter ({})", f.replace(['_', ';'], " ").trim())
         }
     }
-    v["note"] = json!("OpenStreetMap: social_facility=shelter, cooling/warming centre tags, emergency=assembly_point; coverage varies");
-    Ok(v)
+}
+
+/// Overpass elements → centre points (deduplicated by OSM id).
+pub fn parse_centers(v: &Value) -> Vec<Value> {
+    let mut seen = std::collections::HashSet::new();
+    v["elements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let lat = e["lat"].as_f64().or(e["center"]["lat"].as_f64())?;
+            let lon = e["lon"].as_f64().or(e["center"]["lon"].as_f64())?;
+            let ty = e["type"].as_str().unwrap_or("node");
+            if !seen.insert(format!("{ty}/{}", e["id"])) {
+                return None;
+            }
+            let t = &e["tags"];
+            let kind = center_kind(t);
+            let addr = [t["addr:housenumber"].as_str(), t["addr:street"].as_str(), t["addr:city"].as_str()].iter().flatten().cloned().collect::<Vec<_>>().join(" ");
+            let name = t["name"].as_str().map(|s| s.to_string()).unwrap_or_else(|| {
+                let mut k = kind.clone();
+                k[..1].make_ascii_uppercase();
+                k
+            });
+            Some(point(lon, lat, json!({"name": name, "kind": kind, "addr": addr, "phone": t["phone"], "web": t["website"], "hours": t["opening_hours"], "operator": t["operator"], "source": "OpenStreetMap", "osm": format!("https://www.openstreetmap.org/{ty}/{}", e["id"])})))
+        })
+        .collect()
+}
+
+/// Short status for an empty / centre-less answer.
+pub fn centers_status(total: usize, centres: usize) -> Option<&'static str> {
+    if total == 0 {
+        Some("OSM: none mapped here")
+    } else if centres == 0 {
+        Some("No cooling/warming centres mapped here")
+    } else {
+        None
+    }
+}
+
+/// Cooling / warming centres and emergency shelters mapped in OpenStreetMap (no national keyless
+/// feed exists): `bbox` required, at most 25 deg², ≤ 600 results. `_status` explains an empty map.
+pub async fn centers(o: &Overlays, bbox: &str) -> Result<Value> {
+    let Some([w, s, e, n]) = parse_bbox(bbox)? else { bail!("bbox required (w,s,e,n)") };
+    if (e - w) * (n - s) > 25.0 {
+        bail!("zoom in a bit (search area too large)");
+    }
+    let v = super::extra::overpass_ql(o, &centers_ql(w, s, e, n)).await?;
+    let feats = parse_centers(&v);
+    let centres = feats.iter().filter(|f| f["properties"]["kind"].as_str().map(|k| k.ends_with("centre")).unwrap_or(false)).count();
+    let total = feats.len();
+    let mut out = fc(feats);
+    if let Some(st) = centers_status(total, centres) {
+        out["_status"] = json!(st);
+    }
+    out["note"] = json!("OpenStreetMap: cooling / warming centre tags and names, emergency shelters, assembly points; coverage varies");
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -387,5 +546,72 @@ mod tests {
         assert!(a[1].1.is_empty());
         assert!(valid_event_id("us6000u19w"));
         assert!(!valid_event_id("../x"));
+    }
+
+    /// FEMA NSS OpenShelters `f=geojson` answer (field names as published on gis.fema.gov).
+    const NSS: &str = r#"{"type":"FeatureCollection","features":[
+      {"type":"Feature","id":1,"geometry":{"type":"Point","coordinates":[-82.4572,27.9506]},"properties":{"objectid":1,"shelter_id":401234,"shelter_name":"Middleton High School","address":"4801 N 22nd St","city":"Tampa","state":"FL","zip":"33610","shelter_status":"OPEN","evacuation_capacity":850,"post_impact_capacity":340,"total_population":212,"hours_open":null,"hours_close":null,"org_name":"Hillsborough County","org_id":7,"match_type":"Exact","subfacility_code":"GENERAL","ada_compliant":"Y","pet_accommodations_code":"PETS ALLOWED","wheelchair_accessible":"Y","latitude":27.9506,"longitude":-82.4572}},
+      {"type":"Feature","id":2,"geometry":null,"properties":{"SHELTER_NAME":"Plant City Rec Center","CITY":"Plant City","STATE":"FL","SHELTER_STATUS":"Open","LATITUDE":"28.0186","LONGITUDE":"-82.1129"}},
+      {"type":"Feature","id":3,"geometry":{"type":"Point","coordinates":[-82.0,28.0]},"properties":{"shelter_name":"Old Gym","shelter_status":"CLOSED"}},
+      {"type":"Feature","id":4,"geometry":null,"properties":{"shelter_name":"No location"}}
+    ]}"#;
+
+    #[test]
+    fn fema_shelters_parse() {
+        let v: Value = serde_json::from_str(NSS).unwrap();
+        let f = parse_shelters(v["features"].as_array().unwrap().clone());
+        assert_eq!(f.len(), 2, "closed and unlocated shelters are dropped");
+        let p = &f[0]["properties"];
+        assert_eq!(p["name"], "Middleton High School");
+        assert_eq!(p["capacity"], 850);
+        assert_eq!(p["population"], 212);
+        assert_eq!(p["pets"], "PETS ALLOWED");
+        assert_eq!(p["status"], "OPEN");
+        // upper-case fields + no geometry: rebuilt from LATITUDE / LONGITUDE
+        assert_eq!(f[1]["properties"]["name"], "Plant City Rec Center");
+        assert_eq!(f[1]["geometry"]["coordinates"][0].as_f64().unwrap(), -82.1129);
+        assert_eq!(shelters_status(0, Some(0)).as_deref(), Some("FEMA: 0 open shelters now"));
+        assert_eq!(shelters_status(0, Some(42)).as_deref(), Some("0 here · 42 open in the US"));
+        assert_eq!(shelters_status(3, Some(42)), None);
+        // the query the fetcher sends
+        let q = Query { layer: FEMA_SHELTERS, bbox: Some([-84.0, 26.0, -80.0, 29.0]), max: 5000, page: 2000, ..Default::default() };
+        let u = agsquery::query_url(&q, 0);
+        assert!(u.starts_with("https://gis.fema.gov/arcgis/rest/services/NSS/OpenShelters/FeatureServer/0/query?where=1%3D1&outFields=%2A"));
+        assert!(u.contains("f=geojson") && u.contains("geometry=-84,26,-80,29"));
+    }
+
+    /// Overpass answer for a cooling / warming centre search.
+    const OVERPASS: &str = r#"{"version":0.6,"elements":[
+      {"type":"node","id":101,"lat":33.45,"lon":-112.07,"tags":{"amenity":"community_centre","name":"Heat Relief Station - Burton Barr Library"}},
+      {"type":"way","id":202,"center":{"lat":41.88,"lon":-87.63},"tags":{"amenity":"social_facility","social_facility":"shelter","name":"Garfield Warming Center"}},
+      {"type":"node","id":303,"lat":40.0,"lon":-75.0,"tags":{"cooling_centre":"yes","amenity":"library","name":"Main Library"}},
+      {"type":"node","id":404,"lat":40.1,"lon":-75.1,"tags":{"amenity":"social_facility","social_facility":"shelter","social_facility:for":"homeless"}},
+      {"type":"node","id":505,"lat":40.2,"lon":-75.2,"tags":{"emergency":"assembly_point"}},
+      {"type":"node","id":101,"lat":33.45,"lon":-112.07,"tags":{"name":"dup"}},
+      {"type":"relation","id":606,"tags":{"name":"no centre"}}
+    ]}"#;
+
+    #[test]
+    fn osm_centers_parse() {
+        let v: Value = serde_json::from_str(OVERPASS).unwrap();
+        let f = parse_centers(&v);
+        assert_eq!(f.len(), 5, "duplicates and elements without a position are dropped");
+        let k: Vec<&str> = f.iter().map(|x| x["properties"]["kind"].as_str().unwrap()).collect();
+        assert_eq!(k, ["cooling centre", "warming centre", "cooling centre", "shelter (homeless)", "assembly point"]);
+        assert_eq!(f[1]["geometry"]["coordinates"][1].as_f64().unwrap(), 41.88);
+        assert_eq!(f[3]["properties"]["name"], "Shelter (homeless)");
+        assert_eq!(f[4]["properties"]["osm"], "https://www.openstreetmap.org/node/505");
+        assert_eq!(centers_status(0, 0), Some("OSM: none mapped here"));
+        assert_eq!(centers_status(2, 0), Some("No cooling/warming centres mapped here"));
+        assert_eq!(centers_status(5, 3), None);
+        let ql = centers_ql(-88.0, 41.0, -87.0, 42.0);
+        assert!(ql.starts_with("[out:json]"));
+        assert!(ql.contains(r#"nwr["cooling_centre"](41,-88,42,-87);"#));
+        assert!(ql.contains(".c out center 300;.o out center 300;"));
+        assert_eq!(ql.matches('(').count(), ql.matches(')').count());
+        // a timed-out query is an error, not "nothing here"
+        let to: Value = serde_json::json!({"elements": [], "remark": "runtime error: Query timed out in \"query\" at line 1 after 41 seconds."});
+        assert!(crate::overlays::extra::overpass_error(&to).is_some());
+        assert!(crate::overlays::extra::overpass_error(&v).is_none());
     }
 }
