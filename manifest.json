@@ -1,0 +1,39 @@
+{
+  "version": "0.8.1",
+  "date": "2026-10-14T07:33:39Z",
+  "commit": "3f0b6eb1f2800ec9343a2815b594269614b16977",
+  "files": {
+    "TheBigWeather-0.8.1-portable.exe": { "size": 127941704, "sha256": "e1f02e2de266dc972d59f0c00f210c96b86fa738e99e74d74b2f75c07c1a240f", "parts": [
+      { "path": "parts/TheBigWeather-0.8.1-portable.exe.part00", "size": 47185920, "sha256": "4e5db0f963f830ae4db0084601a3f68eb21f4854ca635f774fa933d4bff82b56" },
+      { "path": "parts/TheBigWeather-0.8.1-portable.exe.part01", "size": 47185920, "sha256": "592705b6df3b37f8f793162192adcb10d44dc7ee5b1f9c096fe42083362dab2c" },
+      { "path": "parts/TheBigWeather-0.8.1-portable.exe.part02", "size": 33569864, "sha256": "93db582d75e1289f99433be59a777807384c936b333d5ff629edbad91978af4e" }
+    ] },
+    "TheBigWeather-0.8.1-setup.exe": { "size": 128223515, "sha256": "7f3432bb463633c20c5bf7df762cef5ff779592ea02ae6ec3e438ac4f55e9610", "parts": [
+      { "path": "parts/TheBigWeather-0.8.1-setup.exe.part00", "size": 47185920, "sha256": "982e3d6e7ca2f31c3fcd2d30a5dc93d25370a7ab3ca6999877fe443ecd748aa5" },
+      { "path": "parts/TheBigWeather-0.8.1-setup.exe.part01", "size": 47185920, "sha256": "175add0a24ac6dc02e09789b2ba34b3f7ed4c88352ac2a5eecc78cabc6651d34" },
+      { "path": "parts/TheBigWeather-0.8.1-setup.exe.part02", "size": 33851675, "sha256": "846c04be40e197ad740c6146d650a71b0c9eba3c039683308dc4b60b71ec14db" }
+    ] },
+    "TheBigWeather-0.8.1-x86_64.AppImage": { "size": 152413067, "sha256": "2cc474bd98453608e04a70cc2e050e6f0c12878883010db1c671e3baf34b2d71", "parts": [
+      { "path": "parts/TheBigWeather-0.8.1-x86_64.AppImage.part00", "size": 47185920, "sha256": "a476ecbfa08aab06f0f2782cc45ccef84a75f294ef376947cb819409acda49c6" },
+      { "path": "parts/TheBigWeather-0.8.1-x86_64.AppImage.part01", "size": 47185920, "sha256": "59cb96d1403f46f33ab2d1b5264c2d4fc2ce7a9222a442f8da1be16a9bd88b5e" },
+      { "path": "parts/TheBigWeather-0.8.1-x86_64.AppImage.part02", "size": 47185920, "sha256": "07eefff1d5c136b739993a329f0cbf79872a9b8b728da446630ec33883ac7c8c" },
+      { "path": "parts/TheBigWeather-0.8.1-x86_64.AppImage.part03", "size": 10855307, "sha256": "8f53f719481143bfe9d2692a55d7437901c5d20ecfecda087d02d6d7247fda55" }
+    ] },
+    "tbw-server-0.8.1-linux-x86_64": { "size": 47225728, "sha256": "45265c8c9d7b768273d17e781faaad190cb75032f9e1cdfd61bd2f49f1eb6949", "parts": [
+      { "path": "parts/tbw-server-0.8.1-linux-x86_64.part00", "size": 47185920, "sha256": "cc429c3766289b45d71414daf302d07ff3a42c6bbf18baaa50f0eca7e021ca6a" },
+      { "path": "parts/tbw-server-0.8.1-linux-x86_64.part01", "size": 39808, "sha256": "d3d0fb402cd684b39ea99415af5fe7c51085c6dcaba0ca13da342c96202d75f6" }
+    ] },
+    "tbw-server-0.8.1-linux-x86_64.tar.gz": { "size": 26418562, "sha256": "66c9a0a54e7303439ec758d07f38476042ecc8b0d5f79812856a3314d8da411b", "parts": [
+      { "path": "parts/tbw-server-0.8.1-linux-x86_64.tar.gz.part00", "size": 26418562, "sha256": "66c9a0a54e7303439ec758d07f38476042ecc8b0d5f79812856a3314d8da411b" }
+    ] },
+    "tbw-server-0.8.1-windows-x86_64.exe": { "size": 41021440, "sha256": "e1be849a36c67c7bcef07c5048de2e1e59b6674936812270d03555115a530e87", "parts": [
+      { "path": "parts/tbw-server-0.8.1-windows-x86_64.exe.part00", "size": 41021440, "sha256": "e1be849a36c67c7bcef07c5048de2e1e59b6674936812270d03555115a530e87" }
+    ] },
+    "tbw-server-0.8.1-windows-x86_64.zip": { "size": 27075330, "sha256": "ceea165708ef697cc62b0538b01a9e3c8d88f8e27347da1464e6e7a3832ca7d3", "parts": [
+      { "path": "parts/tbw-server-0.8.1-windows-x86_64.zip.part00", "size": 27075330, "sha256": "ceea165708ef697cc62b0538b01a9e3c8d88f8e27347da1464e6e7a3832ca7d3" }
+    ] },
+    "tbw-web-0.8.1.zip": { "size": 10332955, "sha256": "3c996d01bcf747068bf1b492f3aba3cacc14f7ed523ef9873d31e46901b6b068", "parts": [
+      { "path": "parts/tbw-web-0.8.1.zip.part00", "size": 10332955, "sha256": "3c996d01bcf747068bf1b492f3aba3cacc14f7ed523ef9873d31e46901b6b068" }
+    ] }
+  }
+}
