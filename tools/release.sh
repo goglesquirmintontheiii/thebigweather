@@ -24,6 +24,10 @@
 #   tbw-web-<v>.zip                                              web app (browser UI served by the server)
 #   install-latest.sh, install-latest.ps1, install-latest.cmd    installers
 #   SHA256SUMS                                                   sha256 of every asset
+#
+# Updates without a release: tools/publish-builds.sh pushes the same files, split into <=45 MB
+# parts, to the `builds` branch (plain git, no gh needed). The installers, the app and the server
+# use whichever is newer: the latest release or the builds branch.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="${TBW_RELEASE_REPO:-goglesquirmintontheiii/thebigweather}"
@@ -77,44 +81,9 @@ if (( ! SKIP_BUILD )); then
 fi
 
 say "collecting assets in $OUT"
-rm -rf "$OUT"; mkdir -p "$OUT"
-rel="$ROOT/app/release"
-cp "$rel/TheBigWeather-$V-x86_64.AppImage" "$OUT/"
-[[ -f "$rel/latest-linux.yml" ]] && cp "$rel/latest-linux.yml" "$OUT/"
-if (( WINDOWS )); then
-  for f in "TheBigWeather-$V-setup.exe" "TheBigWeather-$V-setup.exe.blockmap" "TheBigWeather-$V-portable.exe" latest.yml; do
-    [[ -f "$rel/$f" ]] && cp "$rel/$f" "$OUT/" || echo "    (missing $f)"
-  done
-fi
-cp server/bin/tbw-server "$OUT/tbw-server-$V-linux-x86_64"
-(( WINDOWS )) && cp server/bin/tbw-server.exe "$OUT/tbw-server-$V-windows-x86_64.exe"
-
-# web app zip (files at the root, as the server's self-update expects)
-(cd app/dist && zip -qr "$OUT/tbw-web-$V.zip" .)
-
-# server bundles: start scripts + binary + data tables + web app
-stage="$(mktemp -d)"
-mk_bundle() { # $1 = platform dir name, $2 = binary path, rest = scripts
-  local d="$stage/$1/TheBigWeather-server"
-  mkdir -p "$d/server/bin" "$d/server/data" "$d/app"
-  cp "$2" "$d/server/bin/"
-  echo "$V" > "$d/server/VERSION"
-  cp server/data/camera_sources.json server/data/level3_products.json server/data/sites.json "$d/server/data/"
-  cp -r app/dist "$d/app/dist"
-  shift 2
-  for s in "$@"; do cp "$s" "$d/"; done
-}
-mk_bundle linux server/bin/tbw-server start.sh install-latest.sh README.md
-chmod +x "$stage/linux/TheBigWeather-server/start.sh" "$stage/linux/TheBigWeather-server/server/bin/tbw-server"
-tar -C "$stage/linux" -czf "$OUT/tbw-server-$V-linux-x86_64.tar.gz" TheBigWeather-server
-if (( WINDOWS )); then
-  mk_bundle windows server/bin/tbw-server.exe start.ps1 start.cmd install-latest.ps1 install-latest.cmd README.md
-  for t in ffmpeg.exe yt-dlp.exe; do [[ -f "server/bin/$t" ]] && cp "server/bin/$t" "$stage/windows/TheBigWeather-server/server/bin/"; done
-  (cd "$stage/windows" && zip -qr "$OUT/tbw-server-$V-windows-x86_64.zip" TheBigWeather-server)
-fi
-rm -rf "$stage"
-cp install-latest.sh install-latest.ps1 install-latest.cmd "$OUT/"
-(cd "$OUT" && sha256sum -- * | grep -v ' SHA256SUMS$' > SHA256SUMS)
+# shellcheck source=lib/assets.sh
+source "$ROOT/tools/lib/assets.sh"
+tbw_collect_assets "$ROOT" "$V" "$OUT" "$WINDOWS" 1 || die "collecting the assets failed"
 ls -la "$OUT"
 
 if (( DRY )); then say "dry run: not uploading"; exit 0; fi

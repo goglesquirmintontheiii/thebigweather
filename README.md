@@ -6,16 +6,17 @@ Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted
 
 ## Quick start
 
-### 0. Install from GitHub releases (and stay up to date)
+### 0. Install from GitHub (and stay up to date)
 
 ```bash
 # Linux: desktop app (AppImage) + server bundle into ~/TheBigWeather, SHA-256 checked
-curl -fsSL https://github.com/goglesquirmintontheiii/thebigweather/releases/latest/download/install-latest.sh | bash
-bash install-latest.sh --server-only --dir /opt/tbw     # options: --app-only, --no-desktop-entry, --version X.Y.Z
+curl -fsSL https://raw.githubusercontent.com/goglesquirmintontheiii/thebigweather/main/install-latest.sh | bash
+bash install-latest.sh --server-only --dir /opt/tbw     # options: --app-only, --no-desktop-entry, --version X.Y.Z, --source release|repo
 ```
 
-Windows: download and double-click `install-latest.cmd` from the [latest release](https://github.com/goglesquirmintontheiii/thebigweather/releases/latest) (`-Portable`, `-AppOnly`, `-ServerOnly`, `-Dir`).
-The installed app updates itself (Settings → Updates: daily check, background download, "Restart to update"); the server updates with `./start.sh --update` / `start.ps1 -Update` or from Settings → Updates on the server's computer. Maintainers publish a release with `tools/release.sh --version X.Y.Z`.
+Windows: download and double-click [`install-latest.cmd`](https://raw.githubusercontent.com/goglesquirmintontheiii/thebigweather/main/install-latest.cmd) (`-Portable`, `-AppOnly`, `-ServerOnly`, `-Dir`, `-Source`).
+The installers take the newer of the latest GitHub release and the repository's [`builds` branch](https://github.com/goglesquirmintontheiii/thebigweather/tree/builds) (files split into parts, joined and checked while downloading).
+The installed app updates itself the same way (Settings → Updates: daily check, background download, "Restart to update"; the portable .exe too); the server updates with `./start.sh --update` / `start.ps1 -Update` or from Settings → Updates on the server's computer.
 
 ### 1. Server (your VPS or PC)
 
@@ -46,9 +47,12 @@ The UI also works in a browser at the server URL (phones too, until the Android 
 
 ## Install or update from GitHub
 
-- **Linux:** `curl -fsSL https://github.com/goglesquirmintontheiii/thebigweather/releases/latest/download/install-latest.sh | bash`
-- **Windows:** download `install-latest.cmd` from the latest release and run it.
-- **Updates:** the app updates itself (Settings → Updates). Update the server with `./start.sh --update` (Linux) or `start.ps1 -Update` (Windows), or from Server settings.
+- **Linux:** `curl -fsSL https://raw.githubusercontent.com/goglesquirmintontheiii/thebigweather/main/install-latest.sh | bash`
+- **Windows:** download `install-latest.cmd` (main branch, `builds` branch or a release) and run it.
+- **Source:** the newer of the latest release and the `builds` branch (`--source release|repo` / `-Source` picks one).
+- **Updates:** the app updates itself (Settings → Updates shows "GitHub release" or "repository build"). Update the server with `./start.sh --update` (Linux) or `start.ps1 -Update` (Windows), or from Server settings.
+- **Publishing builds (no release needed):** build (`tools/release.sh --dry-run`), then `tools/publish-builds.sh`. It force-pushes one fresh commit to the `builds` branch with the files in ≤45 MB parts; plain `git` push access is enough. `--dry-run` only builds the commit locally.
+- **By hand:** download the `builds` branch as a ZIP and run `join-appimage.sh` / `join-windows.cmd` in it.
 - **Publishing a release:** `tools/release.sh`. It needs the `gh` CLI signed in to the repo.
 
 ## Phase 8 features (0.8.0)

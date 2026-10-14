@@ -46,9 +46,10 @@ Usage: ./start.sh [options]
   --memory-mb N        In-memory cache budget in MB (0 = auto: 40% of RAM, at least 4 GB).
   --cpu-percent N      Share of CPU cores the server may use, 1-100 (default 100).
   --rebuild            Rebuild the server from source even if a binary exists.
-  --update             Update the server (and web app) to the latest GitHub release: downloads,
-                       checks SHA-256, keeps the old binary as tbw-server.old, then starts it.
-  --check-update       Only show whether a newer release exists.
+  --update             Update the server (and web app) to the latest GitHub release or repository
+                       build (builds branch), whichever is newer: downloads, checks SHA-256, keeps
+                       the old binary as tbw-server.old, then starts it.
+  --check-update       Only show whether a newer version exists.
   --new-token          Generate a new app access token.
   --token              Print the app access token.
   --profile            Show the detected hardware profile.
@@ -247,44 +248,113 @@ else
   ok "using $("$BIN" --version)"
 fi
 
-# ---------- update from GitHub releases ----------
-gh_release_json() { curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/releases/latest"; }
+# ---------- update from GitHub (latest release or the repository's builds branch, whichever is newer) ----------
+RAW="${TBW_RAW_BASE:-https://raw.githubusercontent.com/$REPO}"; GHAPI="${TBW_API_BASE:-https://api.github.com}"; BRANCH="${TBW_BUILDS_BRANCH:-builds}"
+gh_release_json() { curl -fsSL --max-time 30 -H "Accept: application/vnd.github+json" "$GHAPI/repos/$REPO/releases/latest"; }
 json_str() { grep -o "\"$1\": *\"[^\"]*\"" | head -1 | sed -E 's/^"[^"]+": *"(.*)"$/\1/'; }
-asset_url() { grep -o '"browser_download_url": *"[^"]*"' | sed -E 's/.*"(https:[^"]*)"$/\1/' | grep -F "/$1" | head -1; }
-ver_gt() { [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" == "$1" ]]; }
+asset_url() { grep -o '"browser_download_url": *"[^"]*"' | sed -E 's/.*"(https?:[^"]*)"$/\1/' | grep -F "/$1" | head -1; }
+# semver order (prerelease < release): prints -1, 0 or 1
+ver_cmp() {
+  local a="${1#[vV]}" b="${2#[vV]}" i x y ap="" bp=""
+  a="${a%%+*}"; b="${b%%+*}"
+  [[ "$a" == *-* ]] && ap="${a#*-}"
+  [[ "$b" == *-* ]] && bp="${b#*-}"
+  local -a A B
+  IFS=. read -r -a A <<<"${a%%-*}"; IFS=. read -r -a B <<<"${b%%-*}"
+  for i in 0 1 2; do
+    x="${A[$i]:-0}"; y="${B[$i]:-0}"; [[ "$x" =~ ^[0-9]+$ ]] || x=0; [[ "$y" =~ ^[0-9]+$ ]] || y=0
+    (( 10#$x > 10#$y )) && { echo 1; return; }
+    (( 10#$x < 10#$y )) && { echo -1; return; }
+  done
+  [[ -z "$ap" && -z "$bp" ]] && { echo 0; return; }
+  [[ -z "$ap" ]] && { echo 1; return; }
+  [[ -z "$bp" ]] && { echo -1; return; }
+  IFS=. read -r -a A <<<"$ap"; IFS=. read -r -a B <<<"$bp"
+  for (( i = 0; i < ${#A[@]} || i < ${#B[@]}; i++ )); do
+    (( i >= ${#A[@]} )) && { echo -1; return; }
+    (( i >= ${#B[@]} )) && { echo 1; return; }
+    x="${A[$i]}"; y="${B[$i]}"; [[ "$x" == "$y" ]] && continue
+    if [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]]; then (( 10#$x > 10#$y )) && echo 1 || echo -1; return; fi
+    [[ "$x" =~ ^[0-9]+$ ]] && { echo -1; return; }
+    [[ "$y" =~ ^[0-9]+$ ]] && { echo 1; return; }
+    [[ "$x" > "$y" ]] && echo 1 || echo -1; return
+  done
+  echo 0
+}
+ver_gt() { [[ "$(ver_cmp "$1" "$2")" == 1 ]]; }
+# builds branch manifest → MAN, MREF (pinned to the branch's commit when the API answers)
+builds_manifest() {
+  local sha
+  sha="$(curl -fsSL --max-time 20 -H 'Accept: application/vnd.github.sha' "$GHAPI/repos/$REPO/commits/$BRANCH" 2>/dev/null || true)"
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && MREF="$sha" || MREF="$BRANCH"
+  MAN="$(curl -fsSL --max-time 30 "$RAW/$MREF/manifest.json" 2>/dev/null || true)"
+  if [[ -z "$MAN" && "$MREF" != "$BRANCH" ]]; then MREF="$BRANCH"; MAN="$(curl -fsSL --max-time 30 "$RAW/$MREF/manifest.json" 2>/dev/null || true)"; fi
+  [[ -n "$MAN" ]]
+}
+# download $1's parts from the builds branch into $2, checking every part and the joined file
+part_join() {
+  local n="$1" out="$2" line p ps ph try
+  line="$(printf '%s' "$MAN" | grep -F "\"$n\": {" | head -1)"
+  [[ -n "$line" ]] || { warn "the $BRANCH branch has no $n"; return 1; }
+  : > "$out"
+  while IFS= read -r p; do
+    ph="$(printf '%s' "$p" | sed -E 's/.*"sha256": *"([0-9a-f]{64})".*/\1/')"; ps="$(printf '%s' "$p" | sed -E 's/.*"size": *([0-9]+).*/\1/')"
+    p="$(printf '%s' "$p" | sed -E 's/.*"path": *"([^"]+)".*/\1/')"
+    for try in 1 2 3; do
+      if curl -fL --progress-bar --retry 3 --max-time 900 -o "$out.part" "$RAW/$MREF/$p" && [[ "$(sha256sum "$out.part" | cut -d' ' -f1)" == "$ph" && "$(stat -c %s "$out.part")" == "$ps" ]]; then break; fi
+      [[ $try == 3 ]] && { rm -f "$out.part"; warn "can't download $p (checksum or network; try again)"; return 1; }
+      sleep 2
+    done
+    cat "$out.part" >> "$out"; rm -f "$out.part"
+  done < <(printf '%s\n' "$MAN" | grep -F "\"path\": \"parts/$n.part")
+  [[ "$(sha256sum "$out" | cut -d' ' -f1)" == "$(printf '%s' "$line" | sed -E 's/.*"sha256": *"([0-9a-f]{64})".*/\1/')" ]] || { warn "checksum mismatch for $n after joining"; return 1; }
+}
 do_update() {
-  step "Checking for a newer release ($REPO)"
-  local rel tag ver cur arch name url sums want got tmp
-  rel="$(gh_release_json)" || { warn "couldn't reach the GitHub API (offline?)"; return 1; }
+  step "Checking for a newer version ($REPO: releases and the $BRANCH branch)"
+  local rel="" tag ver="" mver="" src cur arch name url sums want got tmp
+  rel="$(gh_release_json 2>/dev/null)" || rel=""
   tag="$(printf '%s' "$rel" | json_str tag_name)"; ver="${tag#v}"
+  MAN=""; builds_manifest || true
+  mver="$(printf '%s' "$MAN" | json_str version)"
+  [[ -n "$ver" || -n "$mver" ]] || { warn "couldn't find a release or builds (offline?)"; return 1; }
+  if [[ -n "$ver" && ( -z "$mver" || "$(ver_cmp "$ver" "$mver")" != -1 ) ]]; then src=release; else src=repo; ver="$mver"; fi
   cur="$("$BIN" --version 2>/dev/null | awk '{print $2}')"
-  [[ -n "$ver" ]] || { warn "no release found"; return 1; }
   if [[ -n "$cur" ]] && ! ver_gt "$ver" "$cur"; then ok "up to date ($cur)"; return 0; fi
-  info "installed: ${cur:-none} · latest: $ver"
+  info "installed: ${cur:-none} · latest: $ver ($([[ $src == repo ]] && echo "repository build" || echo "GitHub release"))"
   (( CHECKUPDATE )) && return 0
   case "$(uname -m)" in x86_64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; *) warn "no server builds for $(uname -m)"; return 1 ;; esac
   name="tbw-server-$ver-linux-$arch"
-  url="$(printf '%s' "$rel" | asset_url "$name")"
-  sums="$(printf '%s' "$rel" | asset_url SHA256SUMS)"
-  [[ -n "$url" && -n "$sums" ]] || { warn "release $tag has no $name or SHA256SUMS"; return 1; }
   tmp="$(mktemp -d)"
-  curl -fsSL --max-time 60 -o "$tmp/SHA256SUMS" "$sums" && curl -fL --progress-bar --max-time 900 -o "$tmp/$name" "$url" || { rm -rf "$tmp"; warn "download failed"; return 1; }
-  want="$(awk -v n="$name" '$2==n || $2=="*"n {print $1}' "$tmp/SHA256SUMS")"; got="$(sha256sum "$tmp/$name" | awk '{print $1}')"
-  [[ -n "$want" && "$want" == "$got" ]] || { rm -rf "$tmp"; warn "checksum mismatch for $name — not installed"; return 1; }
+  if [[ $src == release ]]; then
+    url="$(printf '%s' "$rel" | asset_url "$name")"
+    sums="$(printf '%s' "$rel" | asset_url SHA256SUMS)"
+    [[ -n "$url" && -n "$sums" ]] || { rm -rf "$tmp"; warn "release $tag has no $name or SHA256SUMS"; return 1; }
+    curl -fsSL --max-time 60 -o "$tmp/SHA256SUMS" "$sums" && curl -fL --progress-bar --max-time 900 -o "$tmp/$name" "$url" || { rm -rf "$tmp"; warn "download failed"; return 1; }
+    want="$(awk -v n="$name" '$2==n || $2=="*"n {print $1}' "$tmp/SHA256SUMS")"; got="$(sha256sum "$tmp/$name" | awk '{print $1}')"
+    [[ -n "$want" && "$want" == "$got" ]] || { rm -rf "$tmp"; warn "checksum mismatch for $name — not installed"; return 1; }
+  else
+    info "downloading $name from the $BRANCH branch"
+    part_join "$name" "$tmp/$name" || { rm -rf "$tmp"; warn "not installed"; return 1; }
+  fi
   chmod 0755 "$tmp/$name"
   "$tmp/$name" --version >/dev/null 2>&1 || { rm -rf "$tmp"; warn "the downloaded server doesn't run on this system — not installed"; return 1; }
   [[ -x "$BIN" ]] && mv -f "$BIN" "$BIN.old"
   mv -f "$tmp/$name" "$BIN"
   ok "server $ver installed (previous kept as $BIN.old)"
   # web app for browsers (optional)
-  local web="tbw-web-$ver.zip" wurl
-  wurl="$(printf '%s' "$rel" | asset_url "$web")"
-  if [[ -n "$wurl" && -d "$ROOT/app/dist" ]] && command -v unzip >/dev/null; then
-    if curl -fsSL --max-time 600 -o "$tmp/$web" "$wurl" && [[ "$(awk -v n="$web" '$2==n {print $1}' "$tmp/SHA256SUMS")" == "$(sha256sum "$tmp/$web" | awk '{print $1}')" ]]; then
+  local web="tbw-web-$ver.zip" wurl wok=0
+  if [[ -d "$ROOT/app/dist" ]] && command -v unzip >/dev/null; then
+    if [[ $src == release ]]; then
+      wurl="$(printf '%s' "$rel" | asset_url "$web")"
+      [[ -n "$wurl" ]] && curl -fsSL --max-time 600 -o "$tmp/$web" "$wurl" && [[ "$(awk -v n="$web" '$2==n {print $1}' "$tmp/SHA256SUMS")" == "$(sha256sum "$tmp/$web" | awk '{print $1}')" ]] && wok=1
+    elif printf '%s' "$MAN" | grep -qF "\"$web\": {"; then
+      part_join "$web" "$tmp/$web" && wok=1
+    fi
+    if (( wok )); then
       rm -rf "$ROOT/app/dist.new" && mkdir -p "$ROOT/app/dist.new" && unzip -q -o "$tmp/$web" -d "$ROOT/app/dist.new" \
         && rm -rf "$ROOT/app/dist.old" && mv "$ROOT/app/dist" "$ROOT/app/dist.old" && mv "$ROOT/app/dist.new" "$ROOT/app/dist" && ok "web app updated"
     else
-      warn "web app not updated (download or checksum failed)"
+      warn "web app not updated (not published, or download / checksum failed)"
     fi
   fi
   echo "$ver" > "$SERVER_DIR/VERSION"

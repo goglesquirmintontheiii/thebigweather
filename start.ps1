@@ -8,7 +8,7 @@
   .\start.ps1 -InstallService          install + start a Windows service (runs at boot; needs admin)
   .\start.ps1 -UninstallService        remove the service (and the Caddy service)
   .\start.ps1 -Token / -NewToken       print / regenerate the app access token
-  .\start.ps1 -Update                  update to the latest GitHub release (SHA-256 checked), then start
+  .\start.ps1 -Update                  update to the latest GitHub release or repository build (SHA-256 checked), then start
   Double-click start.cmd to run it without changing the execution policy.
 
   Portable mode keeps everything under server\data next to this script. A service keeps its
@@ -30,8 +30,8 @@ param(
   [switch]$Token,
   [switch]$ShowProfile,
   [switch]$NoTools,            # don't offer ffmpeg / yt-dlp
-  [switch]$Update,             # update the server (+ web app) to the latest GitHub release, then start
-  [switch]$CheckUpdate,        # only show whether a newer release exists
+  [switch]$Update,             # update the server (+ web app) to the newest release or repository build, then start
+  [switch]$CheckUpdate,        # only show whether a newer version exists
   [switch]$NoFirewall
 )
 
@@ -213,51 +213,140 @@ if ($Rebuild -or -not (Bin-Works)) {
   Ok ("using " + ((& $Bin --version) -join " "))
 }
 
-# ---------- update from GitHub releases ----------
+# ---------- update from GitHub (latest release or the repository's builds branch, whichever is newer) ----------
 $Repo = if ($env:TBW_UPDATE_REPO) { $env:TBW_UPDATE_REPO } else { "goglesquirmintontheiii/thebigweather" }
+$RawBase = if ($env:TBW_RAW_BASE) { $env:TBW_RAW_BASE.TrimEnd('/') } else { "https://raw.githubusercontent.com/$Repo" }
+$ApiBase = if ($env:TBW_API_BASE) { $env:TBW_API_BASE.TrimEnd('/') } else { "https://api.github.com" }
+$BuildsBranch = if ($env:TBW_BUILDS_BRANCH) { $env:TBW_BUILDS_BRANCH } else { "builds" }
+# semver order (a prerelease sorts before its release): -1, 0 or 1
+function Split-Ver([string]$s) {
+  $s = (($s.Trim()) -replace '^[vV]', '') -replace '\+.*$', ''
+  $pre = ""
+  $i = $s.IndexOf('-')
+  if ($i -ge 0) { $pre = $s.Substring($i + 1); $s = $s.Substring(0, $i) }
+  $c = $s.Split('.')
+  $n = New-Object 'long[]' 3
+  for ($k = 0; $k -lt 3 -and $k -lt $c.Length; $k++) { $v = [long]0; if ([long]::TryParse($c[$k], [ref]$v)) { $n[$k] = $v } }
+  return @{ N = $n; P = $pre }
+}
+function Compare-Ver([string]$a, [string]$b) {
+  $x = Split-Ver $a; $y = Split-Ver $b
+  for ($k = 0; $k -lt 3; $k++) { if ($x.N[$k] -ne $y.N[$k]) { if ($x.N[$k] -gt $y.N[$k]) { return 1 } else { return -1 } } }
+  $p = [string[]]@(); if ($x.P) { $p = [string[]]$x.P.Split('.') }
+  $q = [string[]]@(); if ($y.P) { $q = [string[]]$y.P.Split('.') }
+  if ($p.Length -eq 0 -and $q.Length -eq 0) { return 0 }
+  if ($p.Length -eq 0) { return 1 }
+  if ($q.Length -eq 0) { return -1 }
+  for ($k = 0; $k -lt [Math]::Max($p.Length, $q.Length); $k++) {
+    if ($k -ge $p.Length) { return -1 }
+    if ($k -ge $q.Length) { return 1 }
+    if ($p[$k] -ceq $q[$k]) { continue }
+    $pn = $p[$k] -match '^\d+$'; $qn = $q[$k] -match '^\d+$'
+    if ($pn -and $qn) { if ([long]$p[$k] -gt [long]$q[$k]) { return 1 } else { return -1 } }
+    if ($pn) { return -1 }
+    if ($qn) { return 1 }
+    if ([string]::CompareOrdinal($p[$k], $q[$k]) -gt 0) { return 1 } else { return -1 }
+  }
+  return 0
+}
+function Get-UpdText($url, $accept = "") {
+  $h = @{ "User-Agent" = "TheBigWeather-start" }; if ($accept) { $h["Accept"] = $accept }
+  $c = (Invoke-WebRequest -Uri $url -Headers $h -UseBasicParsing -TimeoutSec 30).Content
+  if ($c -is [byte[]]) { $c = [Text.Encoding]::UTF8.GetString($c) }
+  return [string]$c
+}
+# builds branch manifest, pinned to the branch's commit when the API answers -> @{ Man; Base } or $null
+function Get-Builds {
+  $ref = $BuildsBranch
+  try { $sha = (Get-UpdText "$ApiBase/repos/$Repo/commits/$BuildsBranch" "application/vnd.github.sha").Trim(); if ($sha -match '^[0-9a-f]{40}$') { $ref = $sha } } catch {}
+  foreach ($r in @($ref, $BuildsBranch) | Select-Object -Unique) {
+    try { return @{ Man = ((Get-UpdText "$RawBase/$r/manifest.json") | ConvertFrom-Json); Base = "$RawBase/$r" } } catch {}
+  }
+  return $null
+}
+# download a builds-branch file part by part into $out, checking every part and the joined file
+function Join-Parts($b, $name, $out) {
+  $p0 = $b.Man.files.PSObject.Properties[$name]
+  if (-not $p0) { throw "the $BuildsBranch branch has no $name" }
+  $e = $p0.Value
+  $fo = [System.IO.File]::Create($out)
+  try {
+    foreach ($p in @($e.parts)) {
+      $pf = "$out.part"; $ok = $false
+      for ($try = 1; $try -le 3 -and -not $ok; $try++) {
+        try {
+          Invoke-WebRequest -Uri "$($b.Base)/$($p.path)" -OutFile $pf -UseBasicParsing -Headers @{ "User-Agent" = "TheBigWeather-start" } -TimeoutSec 900
+          $ok = ((Get-Item -LiteralPath $pf).Length -eq [long]$p.size) -and ((Get-FileHash -Algorithm SHA256 -LiteralPath $pf).Hash.ToLower() -eq $p.sha256)
+        } catch {}
+        if (-not $ok) { Start-Sleep -Seconds 2 }
+      }
+      if (-not $ok) { throw "can't download $($p.path) (checksum or network; try again)" }
+      $fi = [System.IO.File]::OpenRead($pf); try { $fi.CopyTo($fo) } finally { $fi.Close() }
+      Remove-Item -Force -LiteralPath $pf
+    }
+  } finally { $fo.Close() }
+  if ((Get-FileHash -Algorithm SHA256 -LiteralPath $out).Hash.ToLower() -ne $e.sha256) { throw "checksum mismatch for $name after joining" }
+}
 function Do-Update {
-  Step "Checking for a newer release ($Repo)"
-  try { $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "TheBigWeather-start" } -TimeoutSec 30 }
-  catch { Warn "couldn't reach the GitHub API ($($_.Exception.Message))"; return }
-  $ver = ($rel.tag_name -replace '^[vV]', '')
+  Step "Checking for a newer version ($Repo`: releases and the $BuildsBranch branch)"
+  $rel = $null; $ver = ""
+  try { $rel = Invoke-RestMethod -Uri "$ApiBase/repos/$Repo/releases/latest" -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "TheBigWeather-start" } -TimeoutSec 30; $ver = ($rel.tag_name -replace '^[vV]', '') } catch {}
+  $b = Get-Builds
+  $mver = if ($b -and $b.Man.version) { [string]$b.Man.version } else { "" }
+  if (-not $ver -and -not $mver) { Warn "couldn't find a release or builds (offline?)"; return }
+  $src = "release"
+  if (-not $ver -or ($mver -and (Compare-Ver $ver $mver) -lt 0)) { $src = "repo"; $ver = $mver }
   $cur = ""
   if (Test-Path $Bin) { try { $cur = (((& $Bin --version) -join " ") -split " ")[1] } catch {} }
-  if ($cur -and ([version]$ver -le [version]$cur)) { Ok "up to date ($cur)"; return }
-  Info "installed: $(if ($cur) { $cur } else { 'none' }) - latest: $ver"
+  if ($cur -and (Compare-Ver $ver $cur) -le 0) { Ok "up to date ($cur)"; return }
+  $srcText = if ($src -eq "repo") { "repository build" } else { "GitHub release" }
+  Info "installed: $(if ($cur) { $cur } else { 'none' }) - latest: $ver ($srcText)"
   if ($CheckUpdate) { return }
   $name = "tbw-server-$ver-windows-x86_64.exe"
-  $asset = $rel.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
-  $sums = $rel.assets | Where-Object { $_.name -eq "SHA256SUMS" } | Select-Object -First 1
-  if (-not $asset -or -not $sums) { Warn "release $($rel.tag_name) has no $name or SHA256SUMS"; return }
+  $web = "tbw-web-$ver.zip"
   $tmp = Join-Path $env:TEMP ("tbw-update-" + [guid]::NewGuid())
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
   try {
-    Invoke-WebRequest -Uri $sums.browser_download_url -OutFile (Join-Path $tmp "SHA256SUMS") -UseBasicParsing
-    Info "downloading $name"
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile (Join-Path $tmp $name) -UseBasicParsing
-    $want = (Get-Content (Join-Path $tmp "SHA256SUMS") | Where-Object { $_ -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($name))$" } | ForEach-Object { $Matches[1].ToLower() } | Select-Object -First 1)
-    $got = (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $name)).Hash.ToLower()
-    if (-not $want -or $want -ne $got) { Warn "checksum mismatch for $name - not installed"; return }
+    $webOk = $false
+    if ($src -eq "release") {
+      $asset = $rel.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+      $sums = $rel.assets | Where-Object { $_.name -eq "SHA256SUMS" } | Select-Object -First 1
+      if (-not $asset -or -not $sums) { Warn "release $($rel.tag_name) has no $name or SHA256SUMS"; return }
+      Invoke-WebRequest -Uri $sums.browser_download_url -OutFile (Join-Path $tmp "SHA256SUMS") -UseBasicParsing
+      Info "downloading $name"
+      Invoke-WebRequest -Uri $asset.browser_download_url -OutFile (Join-Path $tmp $name) -UseBasicParsing
+      $want = (Get-Content (Join-Path $tmp "SHA256SUMS") | Where-Object { $_ -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($name))$" } | ForEach-Object { $Matches[1].ToLower() } | Select-Object -First 1)
+      $got = (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $name)).Hash.ToLower()
+      if (-not $want -or $want -ne $got) { Warn "checksum mismatch for $name - not installed"; return }
+      $wa = $rel.assets | Where-Object { $_.name -eq $web } | Select-Object -First 1
+      if ($wa) {
+        try {
+          Invoke-WebRequest -Uri $wa.browser_download_url -OutFile (Join-Path $tmp $web) -UseBasicParsing
+          $ww = (Get-Content (Join-Path $tmp "SHA256SUMS") | Where-Object { $_ -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($web))$" } | ForEach-Object { $Matches[1].ToLower() } | Select-Object -First 1)
+          $webOk = $ww -eq (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $web)).Hash.ToLower()
+        } catch {}
+      }
+    } else {
+      Info "downloading $name from the $BuildsBranch branch"
+      Join-Parts $b $name (Join-Path $tmp $name)
+      if ($b.Man.files.PSObject.Properties[$web]) { try { Join-Parts $b $web (Join-Path $tmp $web); $webOk = $true } catch { Warn "web app: $($_.Exception.Message)" } }
+    }
     $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
     if ($svc -and $svc.Status -eq "Running") { & sc.exe stop $ServiceName | Out-Null; Start-Sleep -Seconds 4 }
     if (Test-Path $Bin) { Move-Item -Force $Bin "$Bin.old" }
     Move-Item -Force (Join-Path $tmp $name) $Bin
     Ok "server $ver installed (previous kept as tbw-server.exe.old)"
-    $web = "tbw-web-$ver.zip"
-    $wa = $rel.assets | Where-Object { $_.name -eq $web } | Select-Object -First 1
     $dist = Join-Path $Root "app\dist"
-    if ($wa -and (Test-Path $dist)) {
-      try {
-        Invoke-WebRequest -Uri $wa.browser_download_url -OutFile (Join-Path $tmp $web) -UseBasicParsing
-        $ww = (Get-Content (Join-Path $tmp "SHA256SUMS") | Where-Object { $_ -match "^([0-9a-fA-F]{64})\s+\*?$([regex]::Escape($web))$" } | ForEach-Object { $Matches[1].ToLower() } | Select-Object -First 1)
-        if ($ww -eq (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $web)).Hash.ToLower()) {
+    if (Test-Path $dist) {
+      if ($webOk) {
+        try {
           $new = "$dist.new"; Remove-Item -Recurse -Force $new -ErrorAction SilentlyContinue
           Expand-Archive -Path (Join-Path $tmp $web) -DestinationPath $new -Force
           Remove-Item -Recurse -Force "$dist.old" -ErrorAction SilentlyContinue
           Move-Item $dist "$dist.old"; Move-Item $new $dist
           Ok "web app updated"
-        } else { Warn "web app checksum mismatch - not updated" }
-      } catch { Warn "web app not updated ($($_.Exception.Message))" }
+        } catch { Warn "web app not updated ($($_.Exception.Message))" }
+      } else { Warn "web app not updated (not published, or download / checksum failed)" }
     }
     Write-Utf8 (Join-Path $ServerDir "VERSION") $ver
     if ($svc -and $svc.Status -eq "Running") { & sc.exe start $ServiceName | Out-Null; Ok "restarted the service"; exit 0 }

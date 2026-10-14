@@ -981,13 +981,29 @@ function phase6Ready() {
 }
 // ---------- end Phase 6 ----------
 
-// ---------- p8: auto-update from GitHub releases (electron-updater) ----------
-// AppImage and the NSIS installer update in place; the portable .exe and unpackaged dev runs
-// can only point at the release page. The bundled server (resources/server) updates with the app.
-// Offline / no release: errors are kept in the state for the Updates section, never shown as dialogs.
-const RELEASES_URL = "https://github.com/goglesquirmintontheiii/thebigweather/releases/latest";
-const upd = { state: "idle", current: app.getVersion(), version: "", notes: "", date: "", progress: 0, bytesPerSecond: 0, error: "", supported: false, reason: "", lastCheck: 0, auto: true, url: RELEASES_URL };
-let updater = null;
+// ---------- p8: auto-update from GitHub (releases + the `builds` branch) ----------
+// 0.8.1: two sources, whichever is newer (a tie goes to the release):
+//  - GitHub release: electron-updater for the AppImage and the NSIS installer;
+//  - the repository's `builds` branch (tools/publish-builds.sh, no release needed): the file is
+//    downloaded in parts, checked and joined by electron/repoupdate.cjs, then installed here:
+//    AppImage → atomic rename over $APPIMAGE + relaunch; installer → run setup.exe silently after
+//    quitting; portable .exe → a small .cmd swaps the file once the app has exited and restarts it.
+// The portable .exe also takes releases this way. Unpackaged dev runs only link to the download page.
+// The bundled server (resources/server) updates with the app.
+// Offline / nothing published: errors are kept in the state for the Updates section, never shown as dialogs.
+const RU = require("./repoupdate.cjs");
+const RELEASES_URL = `https://github.com/${RU.REPO}/releases/latest`;
+const BUILDS_URL = `https://github.com/${RU.REPO}/tree/${RU.BRANCH}`;
+/** source: "release" (GitHub release) | "repo" (builds branch) | "" */
+const upd = { state: "idle", current: app.getVersion(), version: "", notes: "", date: "", progress: 0, bytesPerSecond: 0, error: "", supported: false, reason: "", lastCheck: 0, auto: true, url: RELEASES_URL, source: "" };
+let updater = null; // electron-updater (AppImage / NSIS)
+let updKind = null; // "appimage" | "nsis" | "portable"
+let updPending = null; // {source, version, via: "updater"} | {source, version, name, entry, base}
+let updFile = null; // downloaded + verified file (custom path)
+let updBusy = false;
+const updFetch = (u, o) => net.fetch(u, o);
+const updDir = () => path.join(app.getPath("userData"), "updates");
+const updErr = (e) => String((e && e.message) || e).split("\n")[0].slice(0, 300);
 function updSend() {
   for (const w of BrowserWindow.getAllWindows()) {
     try {
@@ -1003,81 +1019,207 @@ function updNotes(n) {
   if (Array.isArray(n)) return n.map((x) => x.note || "").join("\n\n");
   return String(n || "").replace(/<[^>]+>/g, "");
 }
+function updNotify(v) {
+  try {
+    const { Notification } = require("electron");
+    if (Notification.isSupported()) new Notification({ title: "TheBigWeather update ready", body: `Version ${v} is downloaded. Restart the app to update.`, silent: true }).show();
+  } catch {}
+}
 function setupUpdater() {
   upd.auto = desktop.updAuto !== false;
   upd.lastCheck = desktop.updLastCheck || 0;
   if (!app.isPackaged) return (upd.reason = "development build");
-  if (process.env.PORTABLE_EXECUTABLE_DIR) return (upd.reason = "the portable version can't update itself — download the new one from GitHub");
-  if (process.platform === "linux" && !process.env.APPIMAGE) return (upd.reason = "only the AppImage updates itself");
-  try {
-    updater = require("electron-updater").autoUpdater;
-  } catch (e) {
-    return (upd.reason = `updater unavailable (${e.message})`);
-  }
+  if (process.env.PORTABLE_EXECUTABLE_FILE) updKind = "portable";
+  else if (process.platform === "win32") updKind = "nsis";
+  else if (process.platform === "linux" && process.env.APPIMAGE) updKind = "appimage";
+  else return (upd.reason = "only the AppImage updates itself");
   upd.supported = true;
-  updater.autoDownload = upd.auto;
-  updater.autoInstallOnAppQuit = true;
-  updater.allowPrerelease = false; // stable channel only
-  updater.allowDowngrade = false;
-  updater.logger = null;
-  updater.on("checking-for-update", () => updSet({ state: "checking", error: "" }));
-  updater.on("update-available", (i) => updSet({ state: upd.auto ? "downloading" : "available", version: i.version, notes: updNotes(i.releaseNotes), date: i.releaseDate || "" }));
-  updater.on("update-not-available", (i) => updSet({ state: "latest", version: (i && i.version) || upd.current }));
-  updater.on("download-progress", (p) => updSet({ state: "downloading", progress: Math.round(p.percent || 0), bytesPerSecond: p.bytesPerSecond || 0 }));
-  updater.on("update-downloaded", (i) => {
-    updSet({ state: "downloaded", version: i.version, progress: 100, notes: updNotes(i.releaseNotes) || upd.notes });
+  // files of versions already installed
+  try {
+    for (const f of fs.readdirSync(updDir())) {
+      const v = /TheBigWeather-(.+?)-(?:x86_64\.AppImage|setup\.exe|portable\.exe)$/.exec(f)?.[1];
+      if (!v || RU.cmpVersion(v, upd.current) <= 0) fs.rmSync(path.join(updDir(), f), { force: true });
+    }
+  } catch {}
+  if (updKind !== "portable") {
     try {
-      const { Notification } = require("electron");
-      if (Notification.isSupported()) new Notification({ title: "TheBigWeather update ready", body: `Version ${i.version} is downloaded. Restart the app to update.`, silent: true }).show();
-    } catch {}
-  });
-  updater.on("error", (e) => updSet({ state: "error", error: String((e && e.message) || e).split("\n")[0].slice(0, 300) }));
+      updater = require("electron-updater").autoUpdater;
+    } catch {
+      updater = null; // releases then go through the custom path too
+    }
+  }
+  if (updater) {
+    updater.autoDownload = false; // updCheck decides which source to download from
+    updater.autoInstallOnAppQuit = true;
+    updater.allowPrerelease = false; // stable channel only
+    updater.allowDowngrade = false;
+    updater.logger = null;
+    const mine = () => updPending && updPending.via === "updater";
+    updater.on("download-progress", (p) => mine() && updSet({ state: "downloading", progress: Math.round(p.percent || 0), bytesPerSecond: p.bytesPerSecond || 0 }));
+    updater.on("update-downloaded", (i) => {
+      if (!mine()) return;
+      updSet({ state: "downloaded", version: i.version, progress: 100, notes: updNotes(i.releaseNotes) || upd.notes });
+      updNotify(i.version);
+    });
+    updater.on("error", (e) => mine() && upd.state === "downloading" && updSet({ state: "error", error: updErr(e) }));
+  }
   // check at start (after the window is up) and daily
   const due = () => upd.auto && Date.now() - (desktop.updLastCheck || 0) > 24 * 3600_000;
   setTimeout(() => due() && updCheck().catch(() => {}), 15_000);
   setInterval(() => due() && updCheck().catch(() => {}), 3 * 3600_000);
 }
+/** Latest release version from electron-builder's update metadata (no API rate limit); null = no release. */
+async function updReleaseVersion() {
+  const yml = process.platform === "win32" ? "latest.yml" : "latest-linux.yml";
+  try {
+    return RU.ymlVersion(await RU.getText(updFetch, `https://github.com/${RU.REPO}/releases/latest/download/${yml}`));
+  } catch (e) {
+    if (e.status === 404) return null;
+    throw e;
+  }
+}
+/** A release asset as a one-part entry (portable .exe / no electron-updater): sizes from the API, hash from SHA256SUMS. */
+async function updReleaseEntry(name) {
+  const rel = JSON.parse(await RU.getText(updFetch, `https://api.github.com/repos/${RU.REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } }));
+  const a = (rel.assets || []).find((x) => x.name === name);
+  const s = (rel.assets || []).find((x) => x.name === "SHA256SUMS");
+  if (!a || !s) throw new Error(`the release has no ${name}`);
+  const sha256 = RU.parseSums(await RU.getText(updFetch, s.browser_download_url))[name];
+  if (!sha256) throw new Error(`SHA256SUMS has no ${name}`);
+  return { entry: { size: a.size, sha256, parts: [{ url: a.browser_download_url, size: a.size, sha256 }] }, notes: updNotes(rel.body), date: rel.published_at || "" };
+}
 async function updCheck() {
-  if (!updater) return { ...upd };
-  if (upd.state === "downloading" || upd.state === "downloaded") return { ...upd };
+  if (!upd.supported || updBusy) return { ...upd };
+  if (upd.state === "downloading" || upd.state === "downloaded" || upd.state === "installing") return { ...upd };
+  updBusy = true;
   setDesktop({ updLastCheck: Date.now() });
   upd.lastCheck = Date.now();
+  updSet({ state: "checking", error: "" });
   try {
-    await updater.checkForUpdates();
+    const [rel, rep] = await Promise.allSettled([updReleaseVersion(), RU.buildsInfo({ fetchFn: updFetch })]);
+    if (rel.status === "rejected" && rep.status === "rejected") throw rel.reason;
+    const relV = rel.status === "fulfilled" ? rel.value : null;
+    const repo = rep.status === "fulfilled" ? rep.value : null;
+    const pick = RU.pickUpdate(upd.current, relV, repo && repo.manifest.version);
+    upd.url = pick && pick.source === "repo" ? BUILDS_URL : RELEASES_URL;
+    if (!pick) {
+      updPending = null;
+      updSet({ state: "latest", version: upd.current, source: "" });
+      return { ...upd };
+    }
+    const name = RU.appAssetName(updKind, pick.version);
+    if (pick.source === "release" && updater) {
+      const r = await updater.checkForUpdates();
+      const i = r && r.updateInfo;
+      if (!i || RU.cmpVersion(i.version, upd.current) <= 0) {
+        updSet({ state: "latest", version: upd.current, source: "" });
+        return { ...upd };
+      }
+      updPending = { source: "release", version: i.version, via: "updater" };
+      updSet({ state: "available", version: i.version, notes: updNotes(i.releaseNotes), date: i.releaseDate || "", source: "release", progress: 0 });
+    } else if (pick.source === "release") {
+      const r = await updReleaseEntry(name);
+      updPending = { source: "release", version: pick.version, name, entry: r.entry, base: "" };
+      updSet({ state: "available", version: pick.version, notes: r.notes, date: r.date, source: "release", progress: 0 });
+    } else {
+      const m = repo.manifest;
+      const entry = m.files[name];
+      if (!entry) throw new Error(`build ${m.version} has no ${name}`);
+      updPending = { source: "repo", version: m.version, name, entry, base: repo.base };
+      const c = m.commit && m.commit !== "unknown" ? ` (commit ${m.commit.slice(0, 7)})` : "";
+      updSet({ state: "available", version: m.version, notes: `Repository build${c}.`, date: m.date, source: "repo", progress: 0 });
+    }
   } catch (e) {
-    updSet({ state: "error", error: String((e && e.message) || e).split("\n")[0].slice(0, 300) });
+    updSet({ state: "error", error: updErr(e) });
+    return { ...upd };
+  } finally {
+    updBusy = false;
+  }
+  if (upd.auto) updDownload().catch(() => {});
+  return { ...upd };
+}
+async function updDownload() {
+  const p = updPending;
+  if (!p || upd.state === "downloading" || upd.state === "downloaded") return { ...upd };
+  updSet({ state: "downloading", progress: 0, bytesPerSecond: 0, error: "" });
+  try {
+    if (p.via === "updater") {
+      await updater.downloadUpdate(); // progress + "downloaded" come from the events
+      return { ...upd };
+    }
+    const target = updKind === "appimage" ? process.env.APPIMAGE : updKind === "portable" ? process.env.PORTABLE_EXECUTABLE_FILE : null;
+    if (target && !RU.dirWritable(target)) throw new Error(`can't write to ${path.dirname(target)}`);
+    fs.mkdirSync(updDir(), { recursive: true });
+    for (const f of fs.readdirSync(updDir())) if (f !== p.name) fs.rmSync(path.join(updDir(), f), { force: true });
+    updFile = await RU.downloadAsset({
+      fetchFn: updFetch,
+      entry: p.entry,
+      base: p.base,
+      dest: path.join(updDir(), p.name),
+      onProgress: (x) => updSet({ state: "downloading", progress: x.total ? Math.floor((100 * x.received) / x.total) : 0, bytesPerSecond: x.bytesPerSecond }),
+    });
+    if (updPending !== p) return { ...upd };
+    updSet({ state: "downloaded", progress: 100, bytesPerSecond: 0 });
+    updNotify(p.version);
+  } catch (e) {
+    updSet({ state: "error", error: updErr(e) });
   }
   return { ...upd };
 }
-ipcMain.handle("update-get", () => ({ ...upd }));
-ipcMain.handle("update-check", () => updCheck());
-ipcMain.handle("update-download", async () => {
-  if (!updater) return { ...upd };
+async function updInstall() {
+  const p = updPending;
+  if (!p || upd.state !== "downloaded") return { ...upd };
   try {
-    updSet({ state: "downloading", progress: 0 });
-    await updater.downloadUpdate();
+    if (p.via !== "updater") {
+      if (!updFile || !fs.existsSync(updFile)) throw new Error("the downloaded file is gone; check again");
+      // put the new files in place first: nothing is stopped when this fails
+      if (updKind === "appimage") RU.installAppImage(updFile, process.env.APPIMAGE);
+      else if (updKind === "portable") {
+        const exe = process.env.PORTABLE_EXECUTABLE_FILE;
+        fs.copyFileSync(updFile, `${exe}.new`);
+        const cmd = path.join(require("node:os").tmpdir(), `tbw-update-${process.pid}.cmd`);
+        fs.writeFileSync(cmd, RU.portableSwapScript(`${exe}.new`, exe));
+        fs.rmSync(updFile, { force: true });
+        updFile = cmd;
+      }
+    }
   } catch (e) {
-    updSet({ state: "error", error: String((e && e.message) || e).slice(0, 300) });
+    updSet({ state: "error", error: updErr(e) });
+    return { ...upd };
   }
-  return { ...upd };
-});
-ipcMain.handle("update-set", (_e, p) => {
-  if (p && typeof p.auto === "boolean") {
-    setDesktop({ updAuto: p.auto });
-    upd.auto = p.auto;
-    if (updater) updater.autoDownload = p.auto;
-  }
-  updSend();
-  return { ...upd };
-});
-ipcMain.handle("update-install", async () => {
-  if (!updater || upd.state !== "downloaded") return { ...upd };
+  updSet({ state: "installing" });
   // stop the bundled server first so its binary can be replaced
   quitting = true;
   await stopLocalServer().catch(() => {});
   stopped = true;
-  setImmediate(() => updater.quitAndInstall(false, true));
-  return { ...upd, state: "installing" };
+  setImmediate(() => {
+    if (p.via === "updater") return updater.quitAndInstall(false, true);
+    if (updKind === "appimage") {
+      app.relaunch({ execPath: process.env.APPIMAGE, args: process.argv.slice(1) });
+      return app.exit(0);
+    }
+    const run = updKind === "nsis" ? [updFile, ["--updated", "/S", "--force-run"]] : [process.env.ComSpec || "cmd.exe", ["/d", "/c", updFile]];
+    try {
+      spawn(run[0], run[1], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    } catch (e) {
+      quitting = false;
+      return updSet({ state: "error", error: updErr(e) });
+    }
+    app.quit();
+  });
+  return { ...upd };
+}
+ipcMain.handle("update-get", () => ({ ...upd }));
+ipcMain.handle("update-check", () => updCheck());
+ipcMain.handle("update-download", () => updDownload());
+ipcMain.handle("update-set", (_e, p) => {
+  if (p && typeof p.auto === "boolean") {
+    setDesktop({ updAuto: p.auto });
+    upd.auto = p.auto;
+  }
+  updSend();
+  return { ...upd };
 });
-ipcMain.handle("update-open-page", () => shell.openExternal(RELEASES_URL));
+ipcMain.handle("update-install", () => updInstall());
+ipcMain.handle("update-open-page", () => shell.openExternal(upd.url || RELEASES_URL));
 app.whenReady().then(setupUpdater);

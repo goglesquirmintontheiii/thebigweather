@@ -4,7 +4,7 @@ import { useEffect, useState } from "preact/hooks";
 import { Download, RefreshCw, RotateCw, ExternalLink } from "lucide-preact";
 import { Toggle } from "../ui/panels/RadarPanel";
 import { toast } from "../store";
-import { appUpdate, hasAppUpdater, watchAppUpdate, checkApp, downloadApp, installApp, setAutoUpdate, openReleasePage, serverUpdateStatus, updateServer, fmtSpeed, type ServerUpdateState } from "./update";
+import { appUpdate, hasAppUpdater, watchAppUpdate, checkApp, downloadApp, installApp, setAutoUpdate, openReleasePage, serverUpdateStatus, updateServer, fmtSpeed, sourceLabel, type ServerUpdateState } from "./update";
 
 const when = (t: number) => (t ? new Date(t).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "never");
 
@@ -13,12 +13,14 @@ function AppUpdates() {
   const u = appUpdate.value;
   if (!u) return null;
   const busy = u.state === "checking" || u.state === "downloading" || u.state === "installing";
+  const src = sourceLabel(u.source);
+  const from = src ? ` (${src})` : "";
   let line = `Version ${u.current}`;
   if (u.state === "checking") line += " · checking…";
   else if (u.state === "latest") line += " · up to date";
-  else if (u.state === "available") line += ` · ${u.version} is available`;
-  else if (u.state === "downloading") line += ` · downloading ${u.version} ${u.progress}% ${fmtSpeed(u.bytesPerSecond)}`;
-  else if (u.state === "downloaded") line += ` · ${u.version} is ready`;
+  else if (u.state === "available") line += ` · ${u.version} is available${from}`;
+  else if (u.state === "downloading") line += ` · downloading ${u.version}${from} ${u.progress}% ${fmtSpeed(u.bytesPerSecond)}`;
+  else if (u.state === "downloaded") line += ` · ${u.version} is ready${from}`;
   else if (u.state === "error") line += ` · couldn't check (${u.error || "offline?"})`;
   return (
     <>
@@ -45,13 +47,13 @@ function AppUpdates() {
             </button>
           )}
           {u.notes && (u.state === "available" || u.state === "downloaded" || u.state === "downloading") && <pre class="muted small" style={{ whiteSpace: "pre-wrap", maxHeight: "10em", overflow: "auto" }}>{u.notes.slice(0, 2000)}</pre>}
-          <div class="muted small">Last check: {when(u.lastCheck)}. Updates come from GitHub releases (stable only); the built-in server updates with the app.</div>
+          <div class="muted small">Last check: {when(u.lastCheck)}. Updates come from GitHub releases or repository builds, whichever is newer; the built-in server updates with the app.</div>
         </>
       ) : (
         <div class="muted small">
           Automatic updates aren't available here ({u.reason}).{" "}
-          <button class="icon-btn" title="Open the releases page" onClick={() => openReleasePage()}>
-            <ExternalLink size={12} />
+          <button class="btn" title="Open the download page" onClick={() => openReleasePage()}>
+            <ExternalLink size={12} /> Download page
           </button>
         </div>
       )}
@@ -71,7 +73,7 @@ function ServerUpdates() {
       <div class="row">
         <span class="muted small">
           Server {s.current}
-          {s.error ? ` · couldn't check (${s.error})` : s.update_available ? ` · ${s.latest} is available` : s.latest ? " · up to date" : ""}
+          {s.error ? ` · couldn't check (${s.error})` : s.update_available ? ` · ${s.latest} is available${s.source ? ` (${sourceLabel(s.source)})` : ""}` : s.latest ? " · up to date" : ""}
         </span>
         <button class="icon-btn" title="Check now" disabled={!!busy} onClick={() => load(true)}>
           <RefreshCw size={13} />

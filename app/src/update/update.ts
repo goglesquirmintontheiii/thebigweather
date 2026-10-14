@@ -1,5 +1,6 @@
-// p8: updates — the desktop app (electron-updater, GitHub releases) and the server this app is
-// connected to when it runs on this computer (GET/POST /api/admin/update, local admin only).
+// p8: updates — the desktop app (GitHub releases via electron-updater, or the repository's `builds`
+// branch, whichever is newer; see electron/repoupdate.cjs) and the server this app is connected to
+// when it runs on this computer (GET/POST /api/admin/update, local admin only).
 
 import { signal } from "@preact/signals";
 import { api } from "../api";
@@ -21,6 +22,8 @@ export interface AppUpdateState {
   /** check daily + download in the background */
   auto: boolean;
   url: string;
+  /** 0.8.1: where the update comes from: "release" (GitHub release) | "repo" (builds branch) | "" */
+  source?: string;
 }
 
 export interface ServerUpdateState {
@@ -36,6 +39,8 @@ export interface ServerUpdateState {
   managed?: string | null;
   error?: string;
   assets?: { name: string; size: number; url: string }[];
+  /** 0.8.1: "release" | "repo" */
+  source?: string;
 }
 
 const tbw: any = (window as any).tbw;
@@ -57,6 +62,9 @@ export const downloadApp = async () => (appUpdate.value = await tbw.update.downl
 export const installApp = async () => (appUpdate.value = await tbw.update.install());
 export const setAutoUpdate = async (auto: boolean) => (appUpdate.value = await tbw.update.set({ auto }));
 export const openReleasePage = () => tbw?.update?.openPage?.() ?? window.open("https://github.com/goglesquirmintontheiii/thebigweather/releases/latest", "_blank");
+
+/** 0.8.1: " · GitHub release" / " · repository build" */
+export const sourceLabel = (s?: string) => (s === "repo" ? "repository build" : s === "release" ? "GitHub release" : "");
 
 /** Server update status; null when the server isn't on this computer (admin API refused). */
 export async function serverUpdateStatus(refresh = false): Promise<ServerUpdateState | null> {
