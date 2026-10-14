@@ -11,6 +11,9 @@ import { gridDef, gridTable } from "../weather";
 import { gridExtraQ, ensThr } from "../weather"; // data 0.8: ensemble threshold
 import { tableById } from "../radar/controller";
 import type { Map as MLMap } from "maplibre-gl";
+import { rasterBudget } from "./budget"; // 0.8.1 perf
+import { perfNow } from "../perf"; // 0.8.1 perf
+import { fitImage } from "../perfcore"; // 0.8.1 perf
 
 export interface GridFrame {
   key: string;
@@ -49,33 +52,30 @@ let layer: GridLayer | null = null;
 let map: MLMap | null = null;
 
 // ---------- raster cache (per frame key, best raster for latest view) ----------
+// 0.8.1 perf: bytes are counted in the budget shared with the panes (Settings → Performance → frame
+// cache); the frame on screen is never evicted.
 const rasters = new Map<string, { r: Raster; view: string }>();
-let rasterBytes = 0;
-const MAX_BYTES = 220 * 1024 * 1024;
+const BID = "main|";
 
 function storeRaster(key: string, r: Raster, view: string) {
   const old = rasters.get(key);
-  if (old) {
-    rasterBytes -= old.r.bytes;
-    layer?.release(old.r);
-  }
+  if (old && old.r !== layer?.raster) layer?.release(old.r);
   rasters.set(key, { r, view });
-  rasterBytes += r.bytes;
-  while (rasterBytes > MAX_BYTES && rasters.size > 1) {
-    const k = rasters.keys().next().value!;
-    if (k === key) break;
-    const v = rasters.get(k)!;
-    rasterBytes -= v.r.bytes;
+  rasterBudget.set(BID + key, r.bytes, () => {
+    const v = rasters.get(key);
+    if (!v) return true;
+    if (v.r === layer?.raster) return false; // on screen
     layer?.release(v.r);
-    rasters.delete(k);
-  }
+    rasters.delete(key);
+    return true;
+  });
 }
 
 function clearRasters() {
   layer?.set(null, null, 0, 0);
   for (const v of rasters.values()) layer?.release(v.r);
   rasters.clear();
-  rasterBytes = 0;
+  rasterBudget.deletePrefix(BID);
   gridReady.value = new Set();
 }
 
@@ -104,8 +104,16 @@ function currentView(): View | null {
   y1 = Math.min(1, y1);
   const q = settings.value.grid.quality;
   const scale = Math.min(window.devicePixelRatio || 1, 1.5) * q;
-  const w = Math.min(2400, Math.max(64, Math.round(c.clientWidth * 1.3 * scale)));
-  const h = Math.min(2400, Math.max(64, Math.round(c.clientHeight * 1.3 * scale)));
+  let w = Math.min(2400, Math.max(64, Math.round(c.clientWidth * 1.3 * scale)));
+  let h = Math.min(2400, Math.max(64, Math.round(c.clientHeight * 1.3 * scale)));
+  // 0.8.1 perf: never bigger than the image-size cap, and small enough that the loop fits the main
+  // map's share of the frame cache (a loop that doesn't fit re-downloads every frame, forever)
+  const p = perfNow();
+  const wd = settings.value.weather;
+  const bpp = wd.kind === "grid" && gridDef(wd.id)?.cmap === "RGB" ? 4 : 2;
+  // (rounded up so a loop gaining a frame doesn't change the size and re-download everything)
+  const n = Math.ceil(Math.max(1, Math.min(gridFrames.value.length || 1, prefetchCount(gridFrames.value.length))) / 8) * 8;
+  ({ w, h } = fitImage(w, h, p.imgRes, n, bpp, p.cacheMB * 1024 * 1024 * 0.6));
   const r = (v: number) => v.toFixed(6);
   return { sig: `${r(x0)},${r(y0)},${r(x1)},${r(y1)},${w},${h}`, bbox: [x0, y0, x1, y1], w, h };
 }
@@ -174,7 +182,10 @@ async function refreshRasters() {
   if (gen !== prefetchGen) return;
   // others: long forecast runs prefetch a window ahead of the current hour; short loops get everything
   const ci = frameIndex.value;
-  const inWin = fs.length > 40 ? (i: number) => i >= ci - 3 && i <= ci + 30 : () => true;
+  // 0.8.1 perf: Settings → Performance → prefetch ("near" = the next few, "none" = just the next)
+  const pf = perfNow().prefetch;
+  const ahead = (i: number) => (i - ci + fs.length) % fs.length;
+  const inWin = pf === "none" ? (i: number) => ahead(i) <= 1 : pf === "near" ? (i: number) => ahead(i) <= 6 : fs.length > 40 ? (i: number) => i >= ci - 3 && i <= ci + 30 : () => true;
   const rest = fs
     .map((f, i) => ({ f, i }))
     .filter(({ f, i }) => inWin(i) && f.key !== cur?.key && rasters.get(f.key)?.view !== view!.sig)
@@ -187,6 +198,12 @@ async function refreshRasters() {
     }
   };
   await Promise.all([worker(), worker(), worker()]);
+}
+
+/** 0.8.1 perf: how many frames of a loop are kept loaded */
+function prefetchCount(n: number): number {
+  const pf = perfNow().prefetch;
+  return pf === "none" ? 2 : pf === "near" ? 7 : n > 40 ? 34 : n;
 }
 
 // ---------- frames ----------
@@ -303,9 +320,19 @@ effect(() => {
   push();
   // if the frame's raster for this view isn't there yet, get it
   const f = gridFrames.value[frameIndex.value];
-  if (f && view && rasters.get(f.key)?.view !== view.sig && settings.value.weather.kind === "grid") fetchRaster(f.key, view);
+  // 0.8.1 perf: while playing, don't stack up downloads (the prefetch loop gets the rest)
+  if (f && view && rasters.get(f.key)?.view !== view.sig && settings.value.weather.kind === "grid" && !(playing.peek() && inflight.size >= 3)) fetchRaster(f.key, view);
+  if (f && rasters.has(f.key)) rasterBudget.touch(BID + f.key);
   // long runs: slide the prefetch window along as the user steps through hours
   const n = gridFrames.value.length;
+  // 0.8.1 perf: a short preload window ("next few" / "next only") slides along with every frame
+  if (n > 1 && n <= 40 && view && settings.value.weather.kind === "grid" && perfNow().prefetch !== "all") {
+    const nx = gridFrames.value[(frameIndex.value + 1) % n];
+    if (nx && rasters.get(nx.key)?.view !== view.sig) {
+      clearTimeout(slideTimer);
+      slideTimer = window.setTimeout(() => refreshRasters(), 60);
+    }
+  }
   if (n > 40 && view && settings.value.weather.kind === "grid") {
     const ahead = gridFrames.value[Math.min(n - 1, frameIndex.value + 20)];
     if (ahead && rasters.get(ahead.key)?.view !== view.sig) {

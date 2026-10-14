@@ -5,6 +5,32 @@ try {
   if (process.env.TBW_SETTINGS && !location.hash.includes("popout") && !location.pathname.endsWith("widget.html") /* workflow 0.6 */) window.localStorage.setItem("tbw.settings.v1", process.env.TBW_SETTINGS);
 } catch {}
 
+// 0.8.1: safe mode (after crashes, or --safe-mode): before the app reads its settings, keep the
+// layout aside ("tbw.settings.safe-backup") and start with one map, no satellite imagery, no 3D.
+// Same rules as safeSettings() in crashguard.cjs (this sandboxed preload can't require it).
+const SAFE_KEY = "tbw.settings.v1";
+const SAFE_BACKUP = "tbw.settings.safe-backup";
+let tbwSafe = { active: false, reason: "" };
+try {
+  tbwSafe = ipcRenderer.sendSync("safe-mode-get") || tbwSafe;
+} catch {}
+const tbwMainPage = !location.hash.includes("popout") && !location.pathname.endsWith("widget.html");
+try {
+  if (tbwSafe.active && tbwMainPage) {
+    const raw = window.localStorage.getItem(SAFE_KEY);
+    if (raw) {
+      if (!window.localStorage.getItem(SAFE_BACKUP)) window.localStorage.setItem(SAFE_BACKUP, raw); // the oldest = the real layout
+      const s = JSON.parse(raw) || {};
+      const o = { ...s, panes: { ...(s.panes || {}), layout: "1" } };
+      const w = s.weather || {};
+      if (w.kind === "gibs" || (w.kind === "grid" && /^goes\//.test(String(w.id || "")))) o.weather = { kind: "radar" };
+      if (o.view3d) o.view3d = { ...o.view3d, on: false };
+      window.localStorage.setItem(SAFE_KEY, JSON.stringify(o));
+    }
+  }
+  tbwSafe.backup = tbwMainPage && !!window.localStorage.getItem(SAFE_BACKUP);
+} catch {}
+
 contextBridge.exposeInMainWorld("tbw", {
   capture: () => ipcRenderer.invoke("capture"),
   info: () => ipcRenderer.invoke("app-info"),
@@ -64,6 +90,34 @@ contextBridge.exposeInMainWorld("tbw", {
       return () => ipcRenderer.removeListener("update-state", h);
     },
   },
+  /* 0.8.1: safe mode banner, Settings → Performance */
+  safe: {
+    info: () => ({ ...tbwSafe }),
+    /** put the layout from before safe mode back and start normally */
+    restore: () => {
+      try {
+        const b = window.localStorage.getItem(SAFE_BACKUP);
+        if (b) window.localStorage.setItem(SAFE_KEY, b);
+        window.localStorage.removeItem(SAFE_BACKUP);
+      } catch {}
+      try {
+        ipcRenderer.sendSync("safe-mode-clear");
+      } catch {}
+      location.reload();
+    },
+    /** keep the trimmed layout; the next start is normal */
+    keep: () => {
+      try {
+        window.localStorage.removeItem(SAFE_BACKUP);
+      } catch {}
+      try {
+        ipcRenderer.sendSync("safe-mode-clear");
+      } catch {}
+    },
+  },
+  perf: { setThrottle: (on) => ipcRenderer.invoke("perf-throttle", !!on) },
+  // automated screenshots keep today's full quality (their software GL would pick Low-end)
+  perfForce: process.env.TBW_PERF || (process.env.TBW_SHOT ? "quality" : ""),
   onOpenFile: (cb) => {
     const h = (_e, f) => cb(f);
     ipcRenderer.on("open-file", h);

@@ -13,6 +13,7 @@ import { settings, toast } from "../store";
 import { OVERLAYS, overlayDef, optsFor, type OverlayDef } from "../overlays/defs";
 import { activeTime, isForecast } from "../active";
 import { histRange } from "../anim";
+import { perf } from "../perf"; // 0.8.1 perf
 
 export const OVL_ID = "windparticles";
 
@@ -592,7 +593,7 @@ effect(() => {
   layer.colors = (["outline", "speed", "dark", "white"].includes(o.color) ? o.color : "speed") as ParticleColors;
   layer.width = Math.max(0.5, Math.min(4, +o.width || 2));
   layer.fade = o.trail === "short" ? 0.86 : o.trail === "long" ? 0.965 : 0.93;
-  layer.setOn(c.on);
+  layer.setOn(c.on && perf.value.anim); // 0.8.1 perf: Settings → Performance → animations
   const sig = c.on ? `${o.model}|${o.level}|${api.base}` : "";
   if (sig !== lastSig) {
     lastSig = sig;

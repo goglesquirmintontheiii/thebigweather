@@ -4,7 +4,7 @@
 
 import * as maplibregl from "maplibre-gl";
 import type { Map as MLMap, GeoJSONSource } from "maplibre-gl";
-import { signal, effect } from "@preact/signals";
+import { signal, effect, untracked } from "@preact/signals";
 import { api, lastHello } from "../api";
 import { settings, type PaneCfg, type PaneLink } from "../store";
 import { buildStyle, isDarkBasemap } from "./basemaps";
@@ -20,6 +20,10 @@ import { alerts } from "../alerts";
 import { mapRef } from "./mapview";
 import { myKind, myLink, linkedTime } from "../linkwin"; // panes 0.8
 import { alertStyle } from "../alertstyle"; // panes 0.8: colour-vision palettes reach the panes too
+import { perf, perfNow, applyPerfToMap, pageHidden, pausedNow } from "../perf"; // 0.8.1 perf
+import { fitImage } from "../perfcore"; // 0.8.1 perf
+import { rasterBudget } from "../grid/budget"; // 0.8.1 perf
+import { playing } from "../anim"; // 0.8.1 perf
 
 export const paneStatus = signal<Record<number, { loading?: boolean; error?: string; time?: number; label?: string }>>({});
 const panes = new Map<number, PaneView>();
@@ -50,7 +54,10 @@ function gibsTiles(id: string, t: number): { tiles: string[]; maxzoom: number; k
 /* ---------- end data 0.6 ---------- */
 
 function setStatus(i: number, s: { loading?: boolean; error?: string; time?: number; label?: string }) {
-  paneStatus.value = { ...paneStatus.value, [i]: { ...paneStatus.value[i], ...s } };
+  // 0.8.1 perf: peek — this runs inside the time-follow effect, and reading the signal it writes made a
+  // cycle ("Cycle detected"), which killed that effect: panes then stopped following the timeline
+  const cur = paneStatus.peek();
+  paneStatus.value = { ...cur, [i]: { ...cur[i], ...s } };
 }
 
 function mercView(m: MLMap) {
@@ -64,8 +71,11 @@ function mercView(m: MLMap) {
   let x0 = mx(b.getWest()), x1 = mx(b.getEast()), y0 = my(b.getNorth()), y1 = my(b.getSouth());
   const px = (x1 - x0) * 0.1, py = (y1 - y0) * 0.1;
   x0 -= px; x1 += px; y0 = Math.max(0, y0 - py); y1 = Math.min(1, y1 + py);
-  const w = Math.min(1800, Math.max(64, Math.round(c.clientWidth * 1.1)));
-  const h = Math.min(1800, Math.max(64, Math.round(c.clientHeight * 1.1)));
+  let w = Math.min(1800, Math.max(64, Math.round(c.clientWidth * 1.1)));
+  let h = Math.min(1800, Math.max(64, Math.round(c.clientHeight * 1.1)));
+  // 0.8.1 perf: image-size cap, and a pane's loop fits its share of the frame cache (40% for all panes)
+  const p = perfNow();
+  ({ w, h } = fitImage(w, h, p.imgRes, 16, 4, (p.cacheMB * 1024 * 1024 * 0.4) / Math.max(1, panes.size)));
   return { sig: [x0, y0, x1, y1, w, h].map((v) => v.toFixed(5)).join(","), bbox: [x0, y0, x1, y1], w, h };
 }
 
@@ -96,6 +106,7 @@ class PaneView {
       keyboard: false,
     } as any);
     this.grid.id = "pane-grid";
+    applyPerfToMap(this.map); // 0.8.1 perf: render resolution, frame-rate cap
     this.map.on("style.load", () => this.addLayers());
     this.map.on("move", () => {
       if (syncing || !synced(this.idx)) return; // data 0.6, panes 0.8
@@ -240,7 +251,26 @@ class PaneView {
     return best;
   }
 
-  async show() {
+  /* 0.8.1 perf: one load at a time per pane. Animation ticks that arrive while a frame is still
+   * downloading used to start another download each (unbounded, for the same frame too): with a slow
+   * full-disk satellite image that queue never drained, starved every other request and ran the
+   * renderer out of memory. Now later ticks only note that the newest time must be shown next. */
+  busy = false;
+  again = false;
+  show(): Promise<void> {
+    if (pausedNow()) return (this.again = true), Promise.resolve(); // hidden window: catch up when shown
+    if (this.busy) return (this.again = true), Promise.resolve();
+    this.busy = true;
+    return this.show0().finally(() => {
+      this.busy = false;
+      if (this.again) {
+        this.again = false;
+        setTimeout(() => this.show(), 0);
+      }
+    });
+  }
+
+  private async show0() {
     const cfg = this.cfg;
     /* data 0.6: satellite imagery (one image near the main map's time) */
     if (cfg && this.map.getStyle()) this.showGibs(cfg.weather.kind === "gibs" ? cfg.weather.id : null);
@@ -273,15 +303,20 @@ class PaneView {
           const buf = await api.bin(`/api/grid/render?key=${encodeURIComponent(f.key)}&bbox=${v.bbox.join(",")}&w=${v.w}&h=${v.h}&sv=${lastHello.value?.version ?? ""}`);
           if (gen !== this.gen) return;
           const r = parseRaster(buf, f.key);
-          if (hit) this.grid.release(hit.r);
+          if (hit && hit.r !== this.grid.raster) this.grid.release(hit.r);
           hit = { r, sig: v.sig };
           this.rasters.set(f.key, hit);
-          if (this.rasters.size > 24) {
-            const k = this.rasters.keys().next().value!;
-            this.grid.release(this.rasters.get(k)!.r);
-            this.rasters.delete(k);
-          }
-        }
+          // 0.8.1 perf: counted in the frame cache shared by all maps (was: 24 per pane, any size)
+          const key = f.key;
+          rasterBudget.set(this.bid + key, r.bytes, () => {
+            const e = this.rasters.get(key);
+            if (!e) return true;
+            if (e.r === this.grid.raster) return false;
+            this.grid.release(e.r);
+            this.rasters.delete(key);
+            return true;
+          });
+        } else rasterBudget.touch(this.bid + f.key);
         const d = gridDef(cfg.weather.id);
         const table = !d || d.cmap === "RGB" ? null : settings.value.tables[d.cmap] ? tableById(settings.value.tables[d.cmap]) : gridTable(d.cmap);
         this.grid.set(hit.r, table, settings.value.grid.opacity, settings.value.grid.smooth);
@@ -294,10 +329,17 @@ class PaneView {
 
   /* data 0.6 */
   gibsKey = "";
+  gibsWait = false;
   showGibs(id: string | null) {
     const m = this.map;
     const g = id ? gibsTiles(id, activeTime.value) : null;
     if ((g?.key ?? "") === this.gibsKey && (!g || m.getSource("pane-gibs"))) return;
+    // 0.8.1 perf: while playing, switch the image time only once the current one has loaded (each
+    // switch drops the source and refetches every tile; at animation speed that never settled)
+    if (g && playing.peek() && m.getSource("pane-gibs") && !m.isSourceLoaded("pane-gibs")) {
+      if (!this.gibsWait) (this.gibsWait = true), m.once("idle", () => ((this.gibsWait = false), this.show()));
+      return;
+    }
     this.gibsKey = g?.key ?? "";
     if (m.getLayer("pane-gibs")) m.removeLayer("pane-gibs");
     if (m.getSource("pane-gibs")) m.removeSource("pane-gibs");
@@ -312,7 +354,24 @@ class PaneView {
     this.map.setStyle(buildStyle(s.basemap === "google" ? "satellite" : s.basemap, { labels: s.overlays.labels, provider: s.basemapProvider, custom: s.customBasemaps }), { diff: false });
   }
 
+  /** 0.8.1 perf: this pane's entries in the shared frame cache */
+  get bid() {
+    return `pane${this.idx}#${this.uid}|`;
+  }
+  uid = Math.random().toString(36).slice(2, 8);
+
   destroy() {
+    // 0.8.1 perf: free GPU copies and drop the module-level references (the radar layer registry kept
+    // closed panes' maps alive) before the map and its WebGL context go
+    rasterBudget.deletePrefix(this.bid);
+    for (const id of ["pane-radar", "pane-grid"])
+      try {
+        if (this.map.getLayer(id)) this.map.removeLayer(id);
+      } catch {
+        /* style gone */
+      }
+    this.sweeps.clear();
+    this.rasters.clear();
     this.map.remove();
   }
 }
@@ -325,13 +384,57 @@ export function label(cfg: PaneCfg): string {
 
 export function mountPane(idx: number, el: HTMLElement) {
   panes.get(idx)?.destroy();
-  const p = new PaneView(idx, el);
-  panes.set(idx, p);
-  const cfg = settings.value.panes.list[idx - 1];
-  if (cfg) p.configure(cfg);
+  /* 0.8.1 perf: Settings → Performance → max panes (each pane is a full map with its own WebGL
+   * context), and a pane whose WebGL context is lost for good (Chromium drops the oldest when too many
+   * exist, or the GPU process restarted) is rebuilt instead of staying blank */
+  let p: PaneView | null = null;
+  let lostTimer = 0;
+  let dead = false;
+  const make = () => {
+    if (dead) return;
+    if (idx > perfNow().maxPanes) {
+      el.innerHTML = `<div class="muted small" style="display:grid;place-items:center;height:100%;text-align:center;padding:12px">Pane off · Settings → Performance → Max panes</div>`;
+      return;
+    }
+    el.innerHTML = "";
+    const v = new PaneView(idx, el);
+    p = v;
+    panes.set(idx, v);
+    const cfg = settings.value.panes.list[idx - 1];
+    if (cfg) v.configure(cfg);
+    v.map.on("webglcontextlost", () => {
+      clearTimeout(lostTimer);
+      lostTimer = window.setTimeout(() => {
+        if (dead || p !== v) return;
+        v.destroy();
+        if (panes.get(idx) === v) panes.delete(idx);
+        p = null;
+        make();
+      }, 3000);
+    });
+    v.map.on("webglcontextrestored", () => clearTimeout(lostTimer));
+  };
+  make();
+  const stop = effect(() => {
+    const allowed = idx <= perf.value.maxPanes;
+    untracked(() => {
+      if (allowed === !!p) return;
+      if (!allowed && p) {
+        p.destroy();
+        if (panes.get(idx) === p) panes.delete(idx);
+        p = null;
+      }
+      make();
+    });
+  });
   return () => {
-    p.destroy();
-    if (panes.get(idx) === p) panes.delete(idx);
+    dead = true;
+    stop();
+    clearTimeout(lostTimer);
+    if (p) {
+      p.destroy();
+      if (panes.get(idx) === p) panes.delete(idx);
+    }
   };
 }
 
@@ -374,13 +477,22 @@ effect(() => {
   void myLink.value;
   for (const p of panes.values()) p.show();
 });
+// 0.8.1 perf: settings change on every pan (the saved view), which re-sent all alert polygons to every
+// pane each time; now only when something these depend on really changed
+let lastAlertSig = "";
+let lastAlerts: unknown = null;
 effect(() => {
-  void alerts.value;
-  void settings.value.overlays; // panes 0.8
-  void settings.value.panes.links;
-  void settings.value.alertCfg;
-  void myLink.value;
+  const a = alerts.value;
+  const s = settings.value;
+  const sig = JSON.stringify([s.overlays, s.panes.links, s.alertCfg, myLink.value, panes.size]);
+  if (a === lastAlerts && sig === lastAlertSig) return;
+  lastAlerts = a;
+  lastAlertSig = sig;
   for (const p of panes.values()) (p.refreshAlerts(), p.layerVis(), p.refreshSites());
+});
+// 0.8.1 perf: panes paused while the window was hidden catch up when it is shown again
+effect(() => {
+  if (!pageHidden.value) for (const p of panes.values()) if (p.again) p.show();
 });
 /* panes 0.8: a pane whose position link is switched on jumps to the main map */
 let lastLinks = "";

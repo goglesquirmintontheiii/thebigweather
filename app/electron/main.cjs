@@ -1,8 +1,9 @@
 // Electron shell for TheBigWeather.
-const { app, BrowserWindow, ipcMain, shell, screen, nativeTheme, protocol, net, session, desktopCapturer, Tray, Menu, nativeImage } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, screen, nativeTheme, protocol, net, session, desktopCapturer, Tray, Menu, nativeImage, dialog } = require("electron");
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
 const fs = require("node:fs");
+const guard = require("./crashguard.cjs"); // 0.8.1: crash-loop guard / safe mode
 
 const isDev = !!process.env.TBW_DEV_URL;
 const ICON = path.join(__dirname, "..", "build", "icon.png");
@@ -32,6 +33,176 @@ if (process.env.TBW_SOFTWARE_GL) {
 if (!process.env.TBW_SHOT && !app.requestSingleInstanceLock()) {
   app.quit();
 }
+
+// ---------- 0.8.1: crash recovery, safe mode ----------
+// A crashed or hung map window offers Reload / Reload in safe mode; two failed starts in a row (crash,
+// hang or kill within the first minute) start in safe mode: one map, no satellite / 3D, Low-end
+// performance settings. `--safe-mode` does the same on purpose. The layout from before is kept by the
+// preload ("tbw.settings.safe-backup") and the in-app banner can restore it.
+let safeMode = { active: false, reason: "" };
+let guardState = null;
+let loadedAt = 0;
+let stableTimer = null;
+let mainBad = false; // the main renderer crashed or hangs right now
+let expectGone = null; // { safe } when we kill a hung renderer on purpose
+const guardFile = () => path.join(app.getPath("userData"), "crashguard.json");
+function guardLoad() {
+  try {
+    return JSON.parse(fs.readFileSync(guardFile(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+function guardSave(s) {
+  guardState = s;
+  try {
+    fs.mkdirSync(app.getPath("userData"), { recursive: true });
+    fs.writeFileSync(guardFile(), JSON.stringify(s));
+  } catch {}
+}
+function guardStart() {
+  const flag = process.argv.includes("--safe-mode") || !!process.env.TBW_SAFE;
+  if (process.env.TBW_SHOT) return void (safeMode = { active: flag, reason: flag ? "flag" : "" });
+  const r = guard.onStart(guardLoad(), Date.now(), { flag });
+  guardSave(r.state);
+  safeMode = { active: r.safe, reason: r.reason };
+  if (r.safe) console.warn(`[tbw] starting in safe mode (${r.reason})`);
+}
+const errLog = (msg) => {
+  console.error(msg);
+  try {
+    fs.appendFileSync(path.join(app.getPath("userData"), "errors.log"), `${new Date().toISOString()} ${msg}\n`);
+  } catch {}
+};
+// never show Electron's "Uncaught Exception" box for a main-process slip (e.g. a window that is gone)
+process.on("uncaughtException", (err) => errLog(`main: ${(err && err.stack) || err}`));
+const alive = (w) => !!w && !w.isDestroyed();
+function hookMainWindow(w) {
+  const wc = w.webContents;
+  wc.on("did-finish-load", () => {
+    loadedAt = Date.now();
+    mainBad = false;
+    clearTimeout(stableTimer);
+    stableTimer = setTimeout(() => {
+      if (!mainBad && guardState && guardState.pending) guardSave(guard.onStable());
+    }, guard.STABLE_MS);
+  });
+  w.on("closed", () => {
+    clearTimeout(stableTimer);
+    if (win === w) win = null;
+    // the main window is gone for good (not hidden to the tray): don't linger as a zombie that holds
+    // the single-instance lock with pop-outs or widgets open
+    if (!quitting && !(tray && desktop.closeToTray)) app.quit();
+  });
+}
+/** Reload the main window (recreate it if it's gone); `kill` first for a hung renderer. */
+function reloadMain(safeReason, kill) {
+  if (safeReason) safeMode = { active: true, reason: safeReason };
+  if (!alive(win)) return createWindow();
+  if (kill) {
+    expectGone = { at: Date.now() };
+    try {
+      win.webContents.forcefullyCrashRenderer();
+      return; // render-process-gone reloads
+    } catch {}
+  }
+  mainBad = false;
+  win.webContents.reload();
+}
+function mainGone(d) {
+  mainBad = true;
+  if (expectGone && Date.now() - expectGone.at < 10_000) {
+    expectGone = null;
+    mainBad = false;
+    return void setTimeout(() => alive(win) && win.webContents.reload(), 300);
+  }
+  const r = guard.onCrash(guardState || guardLoad(), Date.now(), loadedAt);
+  guardSave(r.state);
+  errLog(`renderer gone: ${d.reason} (${d.exitCode})`);
+  if (process.env.TBW_SHOT) return app.exit(3);
+  const loop = r.state.fails >= guard.FAILS_FOR_SAFE;
+  dialog
+    .showMessageBox(alive(win) ? win : undefined, {
+      type: "error",
+      title: "TheBigWeather",
+      message: "The map window stopped",
+      detail: `Reason: ${d.reason}${d.exitCode ? ` (code ${d.exitCode})` : ""}.${loop ? " It stopped right after starting again — safe mode opens one map without satellite or 3D." : ""}`,
+      buttons: ["Reload", "Reload in safe mode", "Quit"],
+      defaultId: loop ? 1 : 0,
+      cancelId: 0,
+      noLink: true,
+    })
+    .then(({ response }) => {
+      if (response === 2) {
+        quitting = true;
+        return app.quit();
+      }
+      reloadMain(response === 1 ? "crash" : "", false);
+    })
+    .catch(() => reloadMain("", false));
+}
+app.on("render-process-gone", (_e, wc, d) => {
+  if (!d || d.reason === "clean-exit") return;
+  const w = BrowserWindow.fromWebContents(wc);
+  if (!alive(w)) return;
+  if (w === win) return mainGone(d);
+  // pop-outs and widgets: reload quietly (at most every 30 s)
+  errLog(`pop-out renderer gone: ${d.reason}`);
+  if (Date.now() - (w.tbwGone || 0) < 30_000) return;
+  w.tbwGone = Date.now();
+  setTimeout(() => alive(w) && w.webContents.reload(), 1000);
+});
+app.on("child-process-gone", (_e, d) => {
+  if (d && d.reason !== "clean-exit") errLog(`${d.type} process gone: ${d.reason} (${d.exitCode})`);
+});
+// a window that stops answering: Wait / Reload / Reload in safe mode (closes itself if it recovers)
+app.on("browser-window-created", (_e, w) => {
+  let ac = null;
+  w.on("unresponsive", () => {
+    if (w === win) mainBad = true;
+    if (process.env.TBW_SHOT || ac) return;
+    ac = new AbortController();
+    const main = w === win;
+    dialog
+      .showMessageBox(w, {
+        type: "warning",
+        title: "TheBigWeather",
+        message: "TheBigWeather isn't responding",
+        detail: "The map is busy or stuck. Wait, or reload it.",
+        buttons: main ? ["Wait", "Reload", "Reload in safe mode"] : ["Wait", "Reload"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        signal: ac.signal,
+      })
+      .then(({ response }) => {
+        ac = null;
+        if (!response || !alive(w)) return;
+        if (main) return reloadMain(response === 2 ? "manual" : "", true);
+        try {
+          w.webContents.forcefullyCrashRenderer();
+        } catch {}
+        setTimeout(() => alive(w) && w.webContents.reload(), 300);
+      })
+      .catch(() => (ac = null));
+  });
+  w.on("responsive", () => {
+    if (w === win) mainBad = false;
+    if (ac) ac.abort();
+    ac = null;
+  });
+});
+ipcMain.on("safe-mode-get", (e) => (e.returnValue = { ...safeMode }));
+ipcMain.on("safe-mode-clear", (e) => {
+  safeMode = { active: false, reason: "" };
+  e.returnValue = true;
+});
+// Settings → Performance → pause hidden windows (the main window normally keeps drawing when hidden)
+ipcMain.handle("perf-throttle", (e, on) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (alive(w)) w.webContents.setBackgroundThrottling(w === win ? !!on : true);
+});
+// ---------- end 0.8.1 ----------
 
 const stateFile = () => path.join(app.getPath("userData"), "window.json");
 function loadBounds() {
@@ -75,6 +246,7 @@ function createWindow() {
   });
   if (saved?.maximized && !process.env.TBW_SHOT) win.maximize();
   win.setMenuBarVisibility(false);
+  hookMainWindow(win); // 0.8.1: crash / hang recovery, crash-loop guard
 
   // external links open in the system browser
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -90,10 +262,11 @@ function createWindow() {
   };
   win.on("close", save);
   // Phase 6: closing can hide the window to the tray instead of quitting
+  const self = win; // 0.8.1: handlers act on their own window, never a later one
   win.on("close", (e) => {
     if (!quitting && desktop.closeToTray && tray && !process.env.TBW_SHOT) {
       e.preventDefault();
-      win.hide();
+      self.hide();
       if (!desktop.trayHintShown && process.platform === "win32" && tray.displayBalloon) {
         tray.displayBalloon({ title: "TheBigWeather", content: "Still running in the tray. Right-click the icon to quit.", iconType: "info" });
         setDesktop({ trayHintShown: true });
@@ -130,7 +303,7 @@ function createWindow() {
 }
 
 ipcMain.handle("capture", async () => {
-  if (!win) return null;
+  if (!alive(win)) return null; // 0.8.1
   const img = await win.webContents.capturePage();
   const dir = path.join(app.getPath("pictures"), "TheBigWeather");
   fs.mkdirSync(dir, { recursive: true });
@@ -143,7 +316,7 @@ ipcMain.handle("capture", async () => {
 // downloads (recording exports): saved to ~/Downloads/TheBigWeather without a dialog
 const pendingDownloads = new Map();
 ipcMain.handle("download", async (_e, url, name) => {
-  if (!win || !/^https?:\/\//.test(url)) return null;
+  if (!alive(win) || !/^https?:\/\//.test(url)) return null; // 0.8.1
   const dir = path.join(app.getPath("downloads"), "TheBigWeather");
   fs.mkdirSync(dir, { recursive: true });
   return new Promise((resolve) => {
@@ -240,7 +413,7 @@ ipcMain.handle("save-file", (_e, name, buf) => {
   return file;
 });
 ipcMain.handle("capture-buf", async (_e, rect) => {
-  if (!win) return null;
+  if (!alive(win)) return null; // 0.8.1
   const img = await win.webContents.capturePage(rect || undefined);
   return img.toPNG();
 });
@@ -384,7 +557,7 @@ ipcMain.handle("wf6-widget-open", (_e, cfg) => {
     if (win && !win.isDestroyed() && !wf6Quitting) win.webContents.send("wf6-widget-closed", id);
   });
   // widgets go away with the main window
-  if (win && !win.wf6Hooked) {
+  if (alive(win) && !win.wf6Hooked) {
     win.wf6Hooked = true;
     win.on("closed", () => {
       wf6Quitting = true;
@@ -469,11 +642,10 @@ ipcMain.handle("wf6-plugins-dir", async () => {
 ipcMain.handle("app-info", () => ({ version: app.getVersion(), platform: process.platform, displays: screen.getAllDisplays().length }));
 
 app.on("second-instance", (_e, argv) => {
-  if (win) {
-    if (!win.isVisible()) win.show();
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  }
+  // 0.8.1: the main window may be gone (closed, crashed): recreate / reload it instead of touching a
+  // destroyed object ("Object has been destroyed"); `--safe-mode` from a second start reloads safe
+  if ((argv || []).includes("--safe-mode")) reloadMain("flag", alive(win) && mainBad);
+  showMain();
   openFilesFromArgv(argv); // Phase 6: file associations (Windows/Linux pass the file as an argument)
 });
 /** Camera streams and embeds: public HLS servers rarely send CORS headers, and YouTube embeds
@@ -518,6 +690,7 @@ app.whenReady().then(() => {
   });
   // Phase 6: start the bundled server first so the window finds it on its first connect
   if (desktop.localServer) startLocalServer();
+  guardStart(); // 0.8.1
   createWindow();
   phase6Ready();
 });
@@ -611,6 +784,7 @@ function trayImage(count) {
 }
 function showMain() {
   if (!win || win.isDestroyed()) return createWindow();
+  if (win.webContents.isCrashed()) win.webContents.reload(); // 0.8.1: a crashed page comes back
   win.show();
   if (win.isMinimized()) win.restore();
   win.focus();
@@ -652,7 +826,7 @@ function setupTray() {
     return;
   }
   tray.setToolTip("TheBigWeather");
-  tray.on("click", () => (win && win.isVisible() && win.isFocused() ? win.hide() : showMain()));
+  tray.on("click", () => (alive(win) && win.isVisible() && win.isFocused() ? win.hide() : showMain())); // 0.8.1
   rebuildTrayMenu();
 }
 ipcMain.handle("tray-update", (_e, info) => {
@@ -963,6 +1137,8 @@ process.on("exit", () => {
 let stopped = false;
 app.on("before-quit", (e) => {
   quitting = true;
+  // 0.8.1: quitting normally before the first minute isn't a failed start (closing a hung window is)
+  if (guardState && guardState.pending && !mainBad) guardSave(guard.onCleanQuit(guardState));
   // quitting (tray, Cmd+Q): widget windows close without telling the renderer, so they reopen next start
   wf6Quitting = true;
   if (stopped || !srv || !srv.child || srv.child.exitCode !== null) return;

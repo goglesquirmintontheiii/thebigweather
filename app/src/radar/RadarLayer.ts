@@ -9,11 +9,14 @@ import { type ColorTable, rasterize, TEX_SIZE } from "./colormaps";
 import { gateFor, radarGateKey, onGateChange } from "../gate";
 import { effect } from "@preact/signals";
 import { srvMotion } from "./srv";
+import { perfNow, perf } from "../perf"; // 0.8.1 perf
+import { radarSmooth } from "../perfcore"; // 0.8.1 perf
 
 /** all live radar layers (main map + panes), repainted when the SRV motion changes */
 const layers = new Set<RadarLayer>();
 effect(() => {
   void srvMotion.value;
+  void perf.value.radarQ; // 0.8.1 perf
   for (const l of layers) l.map?.triggerRepaint();
 });
 
@@ -173,6 +176,7 @@ interface GpuSweep {
   az: WebGLTexture;
   lut: WebGLTexture;
   lastUsed: number;
+  bytes: number;
 }
 
 export interface DrawItem {
@@ -222,10 +226,34 @@ export class RadarLayer implements CustomLayerInterface {
     this.id = id;
   }
 
+  private onRestored?: () => void;
+
   onAdd(map: MLMap, gl: WebGL2RenderingContext) {
     this.map = map;
     this.gl = gl;
     layers.add(this);
+    this.init(gl);
+    this.unGate?.();
+    this.unGate = onGateChange(() => this.repaint());
+    // 0.8.1 perf: a WebGL context that comes back after being lost has none of our GL objects
+    const cv = map.getCanvas();
+    if (this.onRestored) cv.removeEventListener("webglcontextrestored", this.onRestored);
+    this.onRestored = () => {
+      this.cache.clear();
+      this.gpuBytes = 0;
+      this.cmaps.clear();
+      try {
+        this.init(gl);
+      } catch {
+        this.prog = undefined;
+      }
+      this.repaint();
+    };
+    cv.addEventListener("webglcontextrestored", this.onRestored);
+    this.repaint();
+  }
+
+  private init(gl: WebGL2RenderingContext) {
     const p = gl.createProgram()!;
     gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, VS));
     gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, FS));
@@ -244,9 +272,6 @@ export class RadarLayer implements CustomLayerInterface {
     gl.enableVertexAttribArray(a);
     gl.vertexAttribPointer(a, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
-    this.unGate?.();
-    this.unGate = onGateChange(() => this.repaint());
-    this.repaint();
   }
 
   private unGate?: () => void;
@@ -255,10 +280,13 @@ export class RadarLayer implements CustomLayerInterface {
     this.unGate?.();
     this.unGate = undefined;
     layers.delete(this);
+    if (this.onRestored) this.map?.getCanvas().removeEventListener("webglcontextrestored", this.onRestored); // 0.8.1
+    this.onRestored = undefined;
     const gl = this.gl;
     if (!gl) return;
     for (const g of this.cache.values()) this.freeGpu(g);
     this.cache.clear();
+    this.gpuBytes = 0;
     for (const t of this.cmaps.values()) gl.deleteTexture(t);
     this.cmaps.clear();
   }
@@ -282,7 +310,11 @@ export class RadarLayer implements CustomLayerInterface {
     gl.deleteTexture(g.azidx);
     gl.deleteTexture(g.az);
     gl.deleteTexture(g.lut);
+    this.gpuBytes -= g.bytes;
   }
+
+  /** 0.8.1 perf: GPU bytes held by uploaded sweeps (capped at half the frame cache per layer) */
+  gpuBytes = 0;
 
   /** Drop GPU copies for sweeps no longer needed. */
   release(s: Sweep) {
@@ -318,11 +350,16 @@ export class RadarLayer implements CustomLayerInterface {
     const l = new Float32Array(256).fill(-99999);
     if (s.lut) for (let i = 0; i < 256; i++) l[i] = Number.isNaN(s.lut[i]) ? -99999 : s.lut[i];
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, 256, 1, 0, gl.RED, gl.FLOAT, l);
-    const g = { data, azidx, az, lut, lastUsed: performance.now() };
+    const bytes = s.ngates * s.nrad * (s.word === 2 ? 2 : 1) + 3600 * 2 + s.nrad * 4 + 1024;
+    const g = { data, azidx, az, lut, lastUsed: performance.now(), bytes };
     this.cache.set(s, g);
-    if (this.cache.size > this.maxCached) {
-      const old = [...this.cache.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed).slice(0, this.cache.size - this.maxCached);
+    this.gpuBytes += bytes;
+    const maxBytes = perfNow().cacheMB * 1024 * 1024 * 0.5; // 0.8.1 perf
+    if (this.cache.size > this.maxCached || this.gpuBytes > maxBytes) {
+      const drawn = new Set(this.items.map((it) => it.sweep));
+      const old = [...this.cache.entries()].filter(([k]) => k !== s && !drawn.has(k)).sort((a, b) => a[1].lastUsed - b[1].lastUsed);
       for (const [k, v] of old) {
+        if (this.cache.size <= this.maxCached && this.gpuBytes <= maxBytes) break;
         this.freeGpu(v);
         this.cache.delete(k);
       }
@@ -406,7 +443,7 @@ export class RadarLayer implements CustomLayerInterface {
       gl.uniform1f(L.u_cmin, it.table.min);
       gl.uniform1f(L.u_cmax, it.table.max);
       gl.uniform1f(L.u_opacity, it.opacity);
-      gl.uniform1f(L.u_smooth, this.smooth);
+      gl.uniform1f(L.u_smooth, radarSmooth(this.smooth, perfNow().radarQ)); // 0.8.1 perf: radar quality
       const gate = gateFor(radarGateKey(s.product || it.table.id));
       gl.uniform1f(L.u_gmin, gate ? gate[0] : -1e30);
       gl.uniform1f(L.u_gmax, gate ? gate[1] : 1e30);
