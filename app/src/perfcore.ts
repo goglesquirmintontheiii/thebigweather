@@ -37,7 +37,7 @@ export interface PerfCfg {
 export const PRESETS: Record<Exclude<PerfPreset, "auto">, PerfValues> = {
   // today's behaviour: nothing reduced (caches are bounded, which never changes the picture)
   quality: { pixelRatio: 1, maxFps: 0, anim: true, maxPanes: 8, imgRes: 2400, cacheMB: 1024, radarQ: "high", pauseHidden: false, prefetch: "all" },
-  balanced: { pixelRatio: 1, maxFps: 60, anim: true, maxPanes: 3, imgRes: 1600, cacheMB: 512, radarQ: "med", pauseHidden: true, prefetch: "near" },
+  balanced: { pixelRatio: 1, maxFps: 60, anim: true, maxPanes: 5 /* every layout (6 maps) */, imgRes: 1600, cacheMB: 512, radarQ: "med", pauseHidden: true, prefetch: "near" },
   low: { pixelRatio: 0.6, maxFps: 30, anim: false, maxPanes: 1, imgRes: 1024, cacheMB: 192, radarQ: "low", pauseHidden: true, prefetch: "none" },
 };
 

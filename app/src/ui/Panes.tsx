@@ -362,9 +362,8 @@ export function popOutPane(idx: number) {
 function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: string; headStyle?: Sty; standalone?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const off = mountPane(idx, ref.current!, settings.peek().panes.list[idx - 1] ?? defaultCfg(idx)); // 0.8.1: load the shown product right away
-    if (standalone) linkMap.value = paneMap(idx);
-    return off;
+    // 0.8.1: load the shown product right away; a pane window re-links when its map is rebuilt
+    return mountPane(idx, ref.current!, settings.peek().panes.list[idx - 1] ?? defaultCfg(idx), standalone ? (m) => (linkMap.value = m) : undefined);
   }, [idx]);
   const cfg = settings.value.panes.list[idx - 1] ?? defaultCfg(idx);
   const st = paneStatus.value[idx] ?? {};

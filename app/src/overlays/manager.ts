@@ -496,10 +496,8 @@ api.on("connected", () => {
 });
 
 /* ---------- 0.8.1: identify (overlays/identify.ts) ---------- */
-/** The data currently drawn for an overlay (catalog, files or client feeds). */
-export function overlayData(id: string): any {
-  return data.get(id);
-}
+/** The data currently drawn for an overlay (catalog, files or client feeds); same as ovlData. */
+export const overlayData = ovlData;
 /** The map the overlays are attached to. */
 export function overlayMap(): MLMap | null {
   return map;

@@ -302,6 +302,7 @@ class PaneView {
   busy = false;
   again = false;
   show(): Promise<void> {
+    if (this.dead) return Promise.resolve(); // 0.8.1: destroyed (closed, or rebuilt after a lost GPU context)
     if (pausedNow()) return (this.again = true), Promise.resolve(); // hidden window: catch up when shown
     if (this.busy) return (this.again = true), Promise.resolve();
     this.busy = true;
@@ -514,7 +515,12 @@ class PaneView {
   }
   uid = Math.random().toString(36).slice(2, 8);
 
+  dead = false;
   destroy() {
+    // 0.8.1: stop pending reloads and in-flight loads of this view (a rebuilt pane gets a new one)
+    this.dead = true;
+    this.gen++;
+    clearTimeout(this.timer);
     this.offDraw(); // 0.8.1
     if (popup.peek()?.pane === this.idx) popup.value = null;
     setCenter(this.idx, null);
@@ -539,7 +545,7 @@ export function label(cfg: PaneCfg): string {
   return `${cfg.site ?? settings.value.radar.site} ${cfg.product ?? "REF"}`;
 }
 
-export function mountPane(idx: number, el: HTMLElement, fallback?: PaneCfg) {
+export function mountPane(idx: number, el: HTMLElement, fallback?: PaneCfg, onMap?: (m: MLMap | null) => void) {
   panes.get(idx)?.destroy();
   /* 0.8.1 perf: Settings → Performance → max panes (each pane is a full map with its own WebGL
    * context), and a pane whose WebGL context is lost for good (Chromium drops the oldest when too many
@@ -547,9 +553,13 @@ export function mountPane(idx: number, el: HTMLElement, fallback?: PaneCfg) {
   let p: PaneView | null = null;
   let lostTimer = 0;
   let dead = false;
+  let rebuilds = 0; // 0.8.1: back off when the GPU keeps dropping the context
+  // a pane window is its own process: the limit is for the panes inside the main window
+  const limit = () => (myKind === "pane" ? 8 : perfNow().maxPanes);
   const make = () => {
     if (dead) return;
-    if (idx > perfNow().maxPanes) {
+    if (idx > limit()) {
+      onMap?.(null);
       el.innerHTML = `<div class="muted small" style="display:grid;place-items:center;height:100%;text-align:center;padding:12px">Pane off · Settings → Performance → Max panes</div>`;
       return;
     }
@@ -557,6 +567,7 @@ export function mountPane(idx: number, el: HTMLElement, fallback?: PaneCfg) {
     const v = new PaneView(idx, el);
     p = v;
     panes.set(idx, v);
+    onMap?.(v.map); // 0.8.1: a pane window links through this map (also after a rebuild)
     // 0.8.1: a new pane has no saved config yet (the layout adds it a moment later): load what its selector shows
     const cfg = settings.value.panes.list[idx - 1] ?? fallback;
     if (cfg) v.configure(cfg);
@@ -567,14 +578,15 @@ export function mountPane(idx: number, el: HTMLElement, fallback?: PaneCfg) {
         v.destroy();
         if (panes.get(idx) === v) panes.delete(idx);
         p = null;
+        rebuilds++;
         make();
-      }, 3000);
+      }, 3000 * 2 ** Math.min(rebuilds, 5));
     });
     v.map.on("webglcontextrestored", () => clearTimeout(lostTimer));
   };
   make();
   const stop = effect(() => {
-    const allowed = idx <= perf.value.maxPanes;
+    const allowed = idx <= (myKind === "pane" ? 8 : perf.value.maxPanes);
     untracked(() => {
       if (allowed === !!p) return;
       if (!allowed && p) {

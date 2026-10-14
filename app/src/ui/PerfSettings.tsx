@@ -68,7 +68,7 @@ export function PerfSection() {
       <Opt k="pixelRatio" label="Render resolution" choices={[[1, "100%"], [0.85, "85%"], [0.75, "75%"], [0.6, "60%"], [0.5, "50%"]]} hint="Map pixels drawn per screen pixel. Lower = faster, softer." />
       <Opt k="maxFps" label="Max frame rate" choices={[[0, "Unlimited"], [60, "60 fps"], [30, "30 fps"]]} />
       <Opt k="anim" label="Animations & particles" choices={[[true, "On"], [false, "Off"]]} hint="Wind particles, pulsing, transitions" />
-      <Opt k="maxPanes" label="Max extra panes" choices={[[8, "No limit"], [3, "3"], [2, "2"], [1, "1"], [0, "None"]]} hint="Each pane is a full map. Extra ones show as off." />
+      <Opt k="maxPanes" label="Max extra panes" choices={[[8, "No limit"], [5, "5"], [4, "4"], [3, "3"], [2, "2"], [1, "1"], [0, "None"]]} hint="Each pane is a full map. Extra ones show as off." />
       <Opt k="imgRes" label="Satellite / grid image size" choices={[[2400, "Full (2400 px)"], [1600, "1600 px"], [1024, "1024 px"], [768, "768 px"]]} />
       <Opt k="cacheMB" label="Frame cache" choices={[[2048, "2 GB"], [1024, "1 GB"], [512, "512 MB"], [256, "256 MB"], [192, "192 MB"], [128, "128 MB"]]} hint="Decoded frames kept for animation, all maps together. Long loops get smaller images to fit." />
       <Opt k="radarQ" label="Radar smoothing" choices={[["high", "As set"], ["med", "Light at most"], ["low", "Off"]]} />
