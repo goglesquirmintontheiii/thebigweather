@@ -1364,6 +1364,8 @@ async function updInstall() {
     return { ...upd };
   }
   updSet({ state: "installing" });
+  // 0.8.1: an update restart is a clean quit, not a failed start (app.exit skips before-quit)
+  if (guardState && guardState.pending) guardSave(guard.onCleanQuit(guardState));
   // stop the bundled server first so its binary can be replaced
   quitting = true;
   await stopLocalServer().catch(() => {});
