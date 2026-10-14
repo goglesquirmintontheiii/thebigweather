@@ -7,6 +7,7 @@ import type { Map as MLMap } from "maplibre-gl";
 import { settings } from "../store";
 import { frameIndex, frameCount, playing, setFrameReady, framesToRequest, historyEnd, histRange } from "../anim";
 import { GIBS } from "../weather";
+import { perfNow } from "../perf"; // 0.8.1 perf
 
 export const gibsTimes = signal<number[]>([]);
 let map: MLMap | null = null;
@@ -176,6 +177,19 @@ function frameLoaded(m: MLMap, i: number): boolean {
   }
 }
 
+/** 0.8.1 perf: out-of-view tiles a GIBS frame source may keep (MapLibre internals, guarded) */
+function capTileCache(m: MLMap, id: string, sources: number) {
+  try {
+    const st = (m as any).style;
+    const tm = st?.tileManagers?.[id] ?? st?.sourceCaches?.[id];
+    if (!tm) return;
+    const tiles = Math.floor((perfNow().cacheMB * 1024 * 1024 * 0.5) / (256 * 256 * 4) / Math.max(1, sources));
+    tm._maxTileCacheSize = Math.max(8, Math.min(256, tiles));
+  } catch {
+    /* other MapLibre version: keep its default */
+  }
+}
+
 let buildGen = 0;
 async function build() {
   const gen = ++buildGen;
@@ -222,6 +236,10 @@ async function build() {
         ...(cov ? { bounds: cov[p] } : {}),
         attribution: g.attribution ? `Imagery: ${g.attribution}` : "Imagery: NASA EOSDIS GIBS",
       });
+      // 0.8.1 perf: each frame's source keeps a tile cache sized from the viewport (×5 zoom levels):
+      // with 24–36 frames on a large screen that was thousands of 256² textures (GBs of GPU memory).
+      // Cap the tiles a source keeps out of view so the whole loop stays within the frame cache.
+      capTileCache(m, sid(i, p), ts.length * parts);
       // every frame starts hidden (no tile requests); show() opens the current one and a short preload window
       m.addLayer({ id: lid(i, p), type: "raster", source: sid(i, p), layout: { visibility: "none" }, paint: { "raster-opacity": 0, "raster-fade-duration": 0 } }, before());
     }
