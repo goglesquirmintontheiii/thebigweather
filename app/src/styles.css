@@ -12971,6 +12971,7 @@ html.a11y-cvd .err-text {
   .scn-mix input[type="range"] {
     width: 44px;
   }
+}
 /* ---------- 0.8.1 panes ---------- */
 /* pane header: the selector shrinks first; the link / detections / pop-out buttons never get squeezed under it */
 .pane-head > select {
