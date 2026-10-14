@@ -15,7 +15,8 @@ import { stormCellsNow, cellEtaTo, nearestStrike, nearestAqi, nearestMetar, spcL
 import { mesoRank, hasTvs } from "../overlays/stormcells";
 import { route } from "../route/route";
 import { applyWorkspace } from "../workspaces";
-import { freshDetections, startDetections } from "../ml/client"; // detection models
+import { freshDetections, startDetections, models as mlModels, modelsEps } from "../ml/client"; // detection models
+import { stoppedModels } from "../ml/m8"; // 0.8.1: no rules from stopped / deleted models
 import { tmeta } from "../ml/targets"; // detection models
 import { passesGate, PG_DET } from "../ml/probgate"; // models 0.7
 import { applyTpl } from "../notifytpl"; // 0.8.1: message templates
@@ -241,7 +242,11 @@ export async function check(r: Rule): Promise<Hit | null> {
       const dets = await freshDetections(25);
       const minp = (c.value ?? 50) / 100;
       const cut = Date.now() - 20 * 60_000;
+      const stoppedM = stoppedModels.peek(); // 0.8.1: skip stopped and deleted models
+      const epsM = modelsEps.peek();
+      const knownM = new Set(mlModels.peek().map((m) => `${m.ep}|${m.id}`));
       for (const d of dets) {
+        if (!d.hist && (stoppedM.has(`${d.ep}|${d.model_id}`) || (epsM.has(d.ep) && !d.model_id.startsWith("ensemble:") && !knownM.has(`${d.ep}|${d.model_id}`)))) continue;
         if (d.test || d.t < cut || d.prob < minp || (c.model && d.model_id !== c.model)) continue;
         if ((c.maxp != null && d.prob > c.maxp / 100 + 1e-9) || (c.useGate && !passesGate(PG_DET, d.prob, undefined, d.confidence)) /* 0.8.1: gate by probability or confidence */) continue; // models 0.7: probability window / map gate
         for (const l of locs) {
