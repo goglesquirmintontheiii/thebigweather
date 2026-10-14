@@ -190,6 +190,10 @@ export interface Settings {
     swipeMode?: "v" | "h" | "d";
     swipeAngle?: number;
     links?: Record<string, PaneLink>;
+    /* 0.8.1: main map in the position group (default true); per-pane model detections (default shown); drawings in linked panes (default true) */
+    mainPos?: boolean;
+    ml?: Record<string, boolean>;
+    drawAll?: boolean;
   };
   /* panes/palette/a11y 0.8 */
   paneLayouts?: PaneLayoutDef[];

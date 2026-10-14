@@ -4,7 +4,7 @@
 // closing it, or until "New drawing") belongs to one drawing (`group`), which gets a single ×
 // at its top-right corner that deletes the whole drawing.
 
-import { signal, effect } from "@preact/signals";
+import { signal, effect, untracked } from "@preact/signals";
 import * as maplibregl from "maplibre-gl";
 import type { Map as MLMap, GeoJSONSource, MapMouseEvent } from "maplibre-gl";
 import { settings, update, tool, uid } from "../store";
@@ -125,12 +125,38 @@ function toFeatures(list: Drawing[]): any[] {
   return out;
 }
 
+/* 0.8.1: drawings also show in linked map panes (each pane says whether it wants them) */
+const paneMaps = new Map<MLMap, () => boolean>();
+export function attachDrawPane(m: MLMap, show: () => boolean) {
+  paneMaps.set(m, show);
+  const add = () => {
+    if (!paneMaps.has(m) || m.getSource("draw")) return;
+    m.addSource("draw", { type: "geojson", data: EMPTY });
+    for (const l of drawLayerSpecs()) m.addLayer(l);
+    render();
+  };
+  m.on("style.load", add);
+  if (m.isStyleLoaded()) add();
+  return () => {
+    paneMaps.delete(m);
+    m.off("style.load", add);
+  };
+}
+/** re-check which panes show the drawings (links changed) */
+export function refreshDrawPanes() {
+  render();
+}
+
 function render() {
   const src = map?.getSource("draw") as GeoJSONSource | undefined;
-  if (!src) return;
+  if (!src && !paneMaps.size) return;
   const list = [...drawings.value, ...(preview ? [preview] : [])];
-  src.setData({ type: "FeatureCollection", features: toFeatures(list) } as any);
-  refreshMarkers();
+  const fc = { type: "FeatureCollection", features: toFeatures(list) } as any;
+  src?.setData(fc);
+  untracked(() => {
+    for (const [pm, show] of paneMaps) (pm.getSource("draw") as GeoJSONSource | undefined)?.setData(list.length && show() ? fc : EMPTY); // 0.8.1
+  });
+  if (src) refreshMarkers();
 }
 
 /** One delete button per drawing, at the top-right corner of its bounding box. */
@@ -171,27 +197,33 @@ function refreshMarkers() {
   }
 }
 
-export function addDrawLayers(m: MLMap) {
-  if (m.getSource("draw")) return;
-  m.addSource("draw", { type: "geojson", data: EMPTY });
+function drawLayerSpecs(): any[] {
   const isPoly: any = ["==", ["geometry-type"], "Polygon"];
-  m.addLayer({ id: "draw-fill", type: "fill", source: "draw", filter: ["all", isPoly, ["==", ["get", "fill"], 1]], paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["==", ["get", "head"], 1], 1, 0.22] } });
-  m.addLayer({
+  return [
+  { id: "draw-fill", type: "fill", source: "draw", filter: ["all", isPoly, ["==", ["get", "fill"], 1]], paint: { "fill-color": ["get", "color"], "fill-opacity": ["case", ["==", ["get", "head"], 1], 1, 0.22] } },
+  {
     id: "draw-line",
     type: "line",
     source: "draw",
     filter: ["all", ["!=", ["geometry-type"], "Point"], ["!=", ["get", "head"], 1]],
     layout: { "line-cap": "round", "line-join": "round" },
     paint: { "line-color": ["get", "color"], "line-width": ["get", "width"] },
-  });
-  m.addLayer({
+  },
+  {
     id: "draw-text",
     type: "symbol",
     source: "draw",
     filter: ["==", ["geometry-type"], "Point"],
     layout: { "text-field": ["get", "text"], "text-font": ["Noto Sans Bold"], "text-size": ["+", 10, ["*", 2, ["get", "width"]]], "text-allow-overlap": true },
     paint: { "text-color": ["get", "color"], "text-halo-color": "rgba(0,0,0,.85)", "text-halo-width": 1.6 },
-  });
+  },
+  ];
+}
+
+export function addDrawLayers(m: MLMap) {
+  if (m.getSource("draw")) return;
+  m.addSource("draw", { type: "geojson", data: EMPTY });
+  for (const l of drawLayerSpecs()) m.addLayer(l);
   render();
 }
 

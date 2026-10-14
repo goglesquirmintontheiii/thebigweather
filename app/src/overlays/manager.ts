@@ -12,7 +12,7 @@ import { refreshMul, pollPaused } from "../saver"; // workflow
 import { histRange, histTime, histAllowed, histFeedFor, histFeed } from "../history"; // history replay
 
 export const ovlStatus = signal<Record<string, { loading?: boolean; error?: string; count?: number; note?: string }>>({});
-export const popup = signal<{ x: number; y: number; lng: number; lat: number; p: Popup; overlay: string } | null>(null);
+export const popup = signal<{ x: number; y: number; lng: number; lat: number; p: Popup; overlay: string; /* 0.8.1: opened from map pane n (it repositions it) */ pane?: number } | null>(null);
 /** extra info returned with some feeds (camera sources, ship sources) */
 export const ovlMeta = signal<Record<string, any>>({});
 
@@ -173,8 +173,15 @@ async function withWaffleStatus(fc: any) {
   }
 }
 
+/* 0.8.1: map panes draw some overlays (model detections) from the same data */
+export const ovlDataVer = signal(0);
+export function ovlData(id: string): any {
+  return data.get(id);
+}
+
 export function setData(id: string, fc: any) {
   data.set(id, fc);
+  ovlDataVer.value = ovlDataVer.peek() + 1; // 0.8.1
   const s = map?.getSource(`o-${id}`) as GeoJSONSource | undefined;
   s?.setData(fc);
 }
@@ -252,7 +259,7 @@ export function attachOverlays(m: MLMap) {
   // the popup sticks to the clicked spot; it closes once that spot leaves the screen
   m.on("move", () => {
     const p = popup.value;
-    if (!p) return;
+    if (!p || p.pane) return; // 0.8.1: pane popups follow their pane
     const pt = m.project([p.lng, p.lat]);
     const c = m.getCanvas();
     if (pt.x < -20 || pt.y < -20 || pt.x > c.clientWidth + 20 || pt.y > c.clientHeight + 20) popup.value = null;

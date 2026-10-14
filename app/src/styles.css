@@ -58,6 +58,22 @@ select:focus {
 select option {
   background: #12161d;
 }
+/* 0.8.1: group headers ("Level II · KTLX", "MRMS - Reflectivity") in native dropdowns were white with
+   grey text on Linux/Windows; give them the dark list colours and a readable accent label */
+select optgroup {
+  background: #0b0e13;
+  color: #8fd0ff;
+  font-weight: 700;
+  font-style: normal;
+}
+select option {
+  color: var(--text);
+  font-weight: 400;
+}
+select option:disabled {
+  color: #7d8896;
+  background: #0b0e13;
+}
 code {
   background: rgba(255, 255, 255, 0.08);
   padding: 1px 5px;
@@ -11433,7 +11449,7 @@ html[data-theme="light"] .same-foot .same-hide.on {
   border-color: var(--accent);
   background: var(--accent-soft, rgba(63, 183, 255, 0.15));
 }
-.lk8.pop {
+.lk8.pane-out {
   width: 20px;
   height: 20px;
   justify-content: center;
@@ -12955,4 +12971,41 @@ html.a11y-cvd .err-text {
   .scn-mix input[type="range"] {
     width: 44px;
   }
+/* ---------- 0.8.1 panes ---------- */
+/* pane header: the selector shrinks first; the link / detections / pop-out buttons never get squeezed under it */
+.pane-head > select {
+  flex: 0 1 auto;
+  min-width: 72px;
+}
+.pane-head > .pane-time {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane-head > .lk8-icons,
+.pane-head > .ph-tools {
+  flex: none;
+}
+.ph-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  position: relative;
+  z-index: 1;
+}
+.ph-tools .lk8,
+.pane-head .lk8-icons .lk8 {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  flex: none;
+  justify-content: center;
+}
+.ph-tools .lk8.pane-out {
+  margin-left: 2px;
+}
+/* centre crosshair: one per pane in grid layouts (the window-centred one only for one map / swipe) */
+.panes.pg8 ~ .crosshair {
+  display: none;
 }

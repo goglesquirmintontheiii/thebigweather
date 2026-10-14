@@ -6,51 +6,25 @@ import { useState } from "preact/hooks";
 import { settings, update, uid, toast, type PaneLayoutDef } from "../store";
 import { LayoutIcon, MAX_MAPS } from "./Panes";
 import { Plus, Trash2, Pencil, Check, X, Scissors, Star, Copy } from "lucide-preact";
+import { type Cell, unitCells, hits, order, merge, bounds, unit, sameCell } from "./paneGrid"; // 0.8.1: testable grid maths
 
-type Cell = PaneLayoutDef["cells"][number];
-const unitCells = (rows: number, cols: number): Cell[] => Array.from({ length: rows * cols }, (_, i) => ({ r: Math.floor(i / cols), c: i % cols, rs: 1, cs: 1 }));
-const hits = (a: Cell, r: number, c: number) => r >= a.r && r < a.r + a.rs && c >= a.c && c < a.c + a.cs;
-const overlap = (a: Cell, b: Cell) => a.r < b.r + b.rs && b.r < a.r + a.rs && a.c < b.c + b.cs && b.c < a.c + a.cs;
-
-/** main first, the rest in reading order */
-function order(cells: Cell[], main: Cell | undefined): Cell[] {
-  const m = (main && cells.find((x) => hits(x, main.r, main.c))) ?? cells[0];
-  const rest = cells.filter((x) => x !== m).sort((a, b) => a.r - b.r || a.c - b.c);
-  return [m, ...rest];
-}
-
-/** merge a rectangle into one cell; cells cut by it fall apart into unit cells */
-function merge(cells: Cell[], R: Cell): Cell[] {
-  const out: Cell[] = [];
-  for (const x of cells) {
-    if (!overlap(x, R)) {
-      out.push(x);
-      continue;
-    }
-    for (let r = x.r; r < x.r + x.rs; r++) for (let c = x.c; c < x.c + x.cs; c++) if (!hits(R, r, c)) out.push({ r, c, rs: 1, cs: 1 });
-  }
-  out.push(R);
-  return out;
-}
+/** touch/pen capture the pointer on press; release it so the cells under the finger get pointerenter */
+const free = (e: PointerEvent) => (e.target as Element).hasPointerCapture?.(e.pointerId) && (e.target as Element).releasePointerCapture(e.pointerId);
 
 function Editor({ init, onDone }: { init: PaneLayoutDef; onDone: () => void }) {
   const [d, setD] = useState<PaneLayoutDef>(init);
   const [sel, setSel] = useState(0);
-  const [drag, setDrag] = useState<{ a: [number, number]; b: [number, number] } | null>(null);
+  // 0.8.1: the drag spans from the cell it started on to the cell under the pointer (both whole)
+  const [drag, setDrag] = useState<{ a: Cell; b: Cell } | null>(null);
   const setGrid = (rows: number, cols: number) => (setD({ ...d, rows, cols, cells: unitCells(rows, cols) }), setSel(0));
-  const rect = (g: { a: [number, number]; b: [number, number] }): Cell => {
-    const r0 = Math.min(g.a[0], g.b[0]), r1 = Math.max(g.a[0], g.b[0]), c0 = Math.min(g.a[1], g.b[1]), c1 = Math.max(g.a[1], g.b[1]);
-    return { r: r0, c: c0, rs: r1 - r0 + 1, cs: c1 - c0 + 1 };
-  };
+  const rect = (g: { a: Cell; b: Cell }): Cell => bounds(g.a, g.b);
   const finish = () => {
     if (!drag) return;
     const R = rect(drag);
     setDrag(null);
-    if (R.rs === 1 && R.cs === 1) {
-      const i = d.cells.findIndex((x) => hits(x, R.r, R.c));
-      if (i >= 0) setSel(i);
-      return;
-    }
+    // a click (or a drag within one pane) selects that pane instead of merging
+    const same = d.cells.findIndex((x) => sameCell(x, R));
+    if (same >= 0) return setSel(same);
     const cells = order(merge(d.cells, R), d.cells[0]);
     setD({ ...d, cells });
     setSel(cells.indexOf(cells.find((x) => x.r === R.r && x.c === R.c && x.rs === R.rs)!));
@@ -125,8 +99,8 @@ function Editor({ init, onDone }: { init: PaneLayoutDef; onDone: () => void }) {
               key={`u${i}`}
               class={`ple-unit ${cur && hits(cur, r, c) ? "hl" : ""}`}
               style={{ gridArea: `${r + 1} / ${c + 1}` }}
-              onPointerDown={(e) => (e.preventDefault(), setDrag({ a: [r, c], b: [r, c] }))}
-              onPointerEnter={() => drag && setDrag({ ...drag, b: [r, c] })}
+              onPointerDown={(e) => (e.preventDefault(), free(e), setDrag({ a: unit(r, c), b: unit(r, c) }))}
+              onPointerEnter={() => drag && setDrag({ ...drag, b: unit(r, c) })}
             />
           );
         })}
@@ -136,9 +110,9 @@ function Editor({ init, onDone }: { init: PaneLayoutDef; onDone: () => void }) {
             class={`ple-cell ${i === 0 ? "main" : ""} ${i === sel ? "sel" : ""}`}
             style={{ gridArea: `${x.r + 1} / ${x.c + 1} / span ${x.rs} / span ${x.cs}` }}
             aria-label={`${i === 0 ? "Main map" : `Pane ${i + 1}`}: row ${x.r + 1}, column ${x.c + 1}, ${x.rs} by ${x.cs}`}
-            onPointerDown={(e) => (e.preventDefault(), setDrag({ a: [x.r, x.c], b: [x.r + x.rs - 1, x.c + x.cs - 1] }))}
-            onPointerEnter={() => drag && setDrag({ ...drag, b: [x.r + x.rs - 1, x.c + x.cs - 1] })}
-            onClick={() => setSel(i)}
+            onPointerDown={(e) => (e.preventDefault(), free(e), setDrag({ a: x, b: x }))}
+            onPointerEnter={() => drag && setDrag({ ...drag, b: x })}
+            onClick={(e) => e.detail === 0 && setSel(i) /* keyboard; pointer clicks are handled on pointer-up */}
           >
             {i === 0 ? "Main" : i + 1}
           </button>
