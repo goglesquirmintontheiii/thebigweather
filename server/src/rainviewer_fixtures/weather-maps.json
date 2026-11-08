@@ -1,0 +1,22 @@
+{
+  "_note": "shape from rainviewer.com/api/weather-maps-api (api.rainviewer.com could not be fetched: robots.txt)",
+  "version": "2.0",
+  "generated": 1794113460,
+  "host": "https://tilecache.rainviewer.com",
+  "radar": {
+    "past": [
+      { "time": 1794112800, "path": "/v2/radar/1794112800" },
+      { "time": 1794113400, "path": "/v2/radar/1794113400" },
+      { "time": 1794114000, "path": "/v2/radar/../../etc" }
+    ],
+    "nowcast": [
+      { "time": 1794114000, "path": "/v2/radar/nowcast_a1b2c3d4" },
+      { "time": 1794114600, "path": "/v2/radar/nowcast_e5f6a7b8" }
+    ]
+  },
+  "satellite": {
+    "infrared": [
+      { "time": 1794112800, "path": "/v2/satellite/a1b2c3" }
+    ]
+  }
+}

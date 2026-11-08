@@ -1,0 +1,526 @@
+# id	location	state	country	lat	lon	max_range_km	status  (github.com/rainviewer/weather-radar-database, MIT)
+AU02	Melbourne	VIC	Australia	-37.8520	144.7520	256	1
+AU03	Wollongong (Appin)	NSW	Australia	-34.2625	150.8752	256	1
+AU04	Newcastle	NSW	Australia	-32.7300	152.0254	256	1
+AU05	Carnarvon	WA	Australia	-24.8830	113.6670	256	1
+AU06	Geraldton	WA	Australia	-28.8046	114.6973	256	1
+AU07	Wyndham	WA	Australia	-15.4517	128.1208	256	1
+AU08	Gympie (Mt Kanigan)	QLD	Australia	-25.9575	152.5770	256	1
+AU09	Gove	NT	Australia	-12.2750	136.8224	256	1
+AU14	Mt Gambier	SA	Australia	-37.7500	140.7800	256	1
+AU15	Dampier	WA	Australia	-20.6538	116.6832	256	1
+AU16	Port Hedland	WA	Australia	-20.3720	118.6316	256	1
+AU17	Broome	WA	Australia	-17.9484	122.2353	256	1
+AU18	Weipa	QLD	Australia	-12.6693	141.9230	256	1
+AU19	Cairns	QLD	Australia	-16.8170	145.6830	256	1
+AU22	Mackay	QLD	Australia	-21.1173	149.2175	256	1
+AU23	Gladstone	QLD	Australia	-23.8550	151.2625	256	1
+AU24	Bowen	QLD	Australia	-19.8858	148.0756	256	1
+AU25	Alice Springs	NT	Australia	-23.7952	133.8890	256	1
+AU27	Woomera	SA	Australia	-31.1560	136.8045	256	1
+AU28	Grafton	NSW	Australia	-29.6220	152.9510	256	1
+AU29	Learmonth	WA	Australia	-22.1033	113.9997	256	1
+AU30	Mildura	VIC	Australia	-34.2330	142.0830	256	1
+AU31	Albany	WA	Australia	-34.9500	117.8000	256	1
+AU32	Esperance	WA	Australia	-33.8302	121.8918	256	1
+AU33	Ceduna	SA	Australia	-32.1300	133.6963	256	1
+AU36	Mornington Island (Gulf of Carpentaria)	QLD	Australia	-16.6660	139.1670	256	1
+AU39	Halls Creek	WA	Australia	-18.2290	127.6628	256	1
+AU40	Canberra (Captains Flat)	NSW	Australia	-35.6630	149.5110	256	1
+AU41	Willis Island	QLD	Australia	-16.2900	149.9700	256	1
+AU42	Katherine (Tindal)	NT	Australia	-14.5110	132.4470	256	1
+AU44	Giles	WA	Australia	-25.0334	128.3017	256	1
+AU46	Adelaide (Sellicks Hill)	SA	Australia	-35.3310	138.5010	256	1
+AU48	Kalgoorlie	WA	Australia	-30.7850	121.4520	256	1
+AU49	Yarrawonga	VIC	Australia	-36.0300	146.0230	256	1
+AU50	Brisbane (Marburg)	QLD	Australia	-27.6060	152.5400	256	1
+AU52	NW Tasmania (West Takone)	TAS	Australia	-41.1790	145.5800	256	1
+AU53	Moree	NSW	Australia	-29.5000	149.8500	256	1
+AU55	Wagga Wagga	NSW	Australia	-35.1670	147.4670	256	1
+AU56	Longreach	QLD	Australia	-23.4281	144.2882	256	1
+AU62	Norfolk Island	NSW	Australia	-29.0383	167.9413	256	1
+AU63	Darwin (Berrimah)	NT	Australia	-12.4561	130.9265	256	1
+AU64	Adelaide (Buckland Park)	SA	Australia	-34.6170	138.4690	256	1
+AU65	Tennant Creek	NT	Australia	-19.6420	134.1830	256	1
+AU66	Brisbane (Mt Stapylton)	QLD	Australia	-27.7180	153.2400	256	1
+AU67	Warrego	QLD	Australia	-26.4390	147.3490	256	1
+AU68	Bairnsdale	VIC	Australia	-37.8880	147.5750	256	1
+AU69	Namoi (Blackjack Mountain)	NSW	Australia	-31.0240	150.1915	256	1
+AU70	Perth (Serpentine)	WA	Australia	-32.3917	115.8669	256	1
+AU71	Sydney (Terrey Hills)	NSW	Australia	-33.7010	151.2095	256	1
+AU72	Emerald	QLD	Australia	-23.5498	148.2392	256	1
+AU73	Townsville (Hervey Range)	QLD	Australia	-19.4199	146.5510	256	1
+AU75	Mount Isa	QLD	Australia	-20.7112	139.5553	256	1
+AU76	Hobart (Mt Koonya)	TAS	Australia	-43.1120	147.8060	256	1
+AU77	Warruwi	NT	Australia	-11.6520	133.3716	256	1
+OS41	Wien/Schwechat		Austria	48.0740	16.5360	224	1
+OS43	Salzburg/Feldkirchen		Austria	48.0650	13.0620	224	1
+OS44	Patscherkofel		Austria	47.2090	11.4610	224	1
+OS46	Zirbitzkogel		Austria	47.0720	14.5600	224	1
+OSAA	Valluga		Austria	47.1575	10.2131	224	1
+UMBB	Brest		Belarus	52.1148	23.9143	200	1
+UMMN	Minsk		Belarus	53.8828	27.9808	200	1
+BX40	Zaventem		Belgium	50.9010	4.4510	240	1
+BX41	Wideumont		Belgium	49.9140	5.5045	240	1
+BX42	Jabbeke		Belgium	51.1927	3.0654	240	1
+BUAAS	Gelemenovo		Bulgaria	42.2710	24.3260	230	1
+BUAAX	Gelemenovo		Bulgaria	42.2710	24.3260	230	1
+CWBI	Georgian Bay	Ontario	Canada	45.7932	-80.5339	0	1
+CWGJ	Sault Ste Marie	Ontario	Canada	47.2478	-84.5958	0	1
+CWHK	Edmonton	Alberta	Canada	53.5606	-114.1449	0	1
+CWHN	NW Saskatchewan/NE Alberta	Saskatchewan	Canada	54.9133	-109.9553	0	1
+CWKR	Southern Ontario	Ontario	Canada	43.9639	-79.5739	0	1
+CWMB	Saguenay River	Quebec	Canada	48.5758	-70.6678	0	1
+CWMN	Montreal	Quebec	Canada	45.4242	-73.9373	0	1
+CWSO	Southwestern Ontario	Ontario	Canada	43.3703	-81.3842	0	1
+CWTP	Eastern Newfoundland	Newfoundland and Labrador	Canada	47.3256	-53.1786	0	1
+CWUJ	Vancouver	British Columbia	Canada	49.0166	-122.4870	0	1
+CWVY	Southwest of Quebec City	Quebec	Canada	46.4500	-71.9153	0	1
+CWWW	Grande Prairie	Alberta	Canada	55.6925	-119.2300	0	1
+CXAM	Lower St. Lawrence	Quebec	Canada	48.4803	-67.6011	0	1
+CXBE	Regina	Saskatchewan	Canada	50.5711	-105.1827	0	1
+CXBU	Medicine Hat	Alberta	Canada	50.3125	-110.1956	0	1
+CXDR	Western Ontario	Ontario	Canada	49.8582	-92.7970	0	1
+CXFT	Eastern Ontario	Ontario	Canada	45.0410	-76.1162	0	1
+CXFW	Eastern Saskatchewan/Western Manitoba	Manitoba	Canada	50.5489	-101.0857	0	1
+CXGO	Central Hants County	Nova Scotia	Canada	45.0985	-63.7043	0	1
+CXLA	Amos	Quebec	Canada	48.5515	-77.8081	0	1
+CXMB	Southeastern Cape Breton County	Nova Scotia	Canada	45.9495	-60.2058	0	1
+CXME	Western Newfoundland	Newfoundland and Labrador	Canada	48.9303	-57.8342	0	1
+CXNC	Central New Brunswick	New Brunswick	Canada	46.2222	-65.6986	0	1
+CXNI	Superior West	Ontario	Canada	48.8535	-89.1215	0	1
+CXPG	Northern B.C.	British Columbia	Canada	53.6131	-122.9544	0	1
+CXRA	Saskatoon	Saskatchewan	Canada	52.5206	-107.4436	0	1
+CXSI	Victoria	British Columbia	Canada	48.8610	-123.7565	0	1
+CXSM	Calgary	Alberta	Canada	51.2063	-113.3991	0	1
+CXSS	Vernon	British Columbia	Canada	50.3695	-119.0644	0	1
+CXTI	Northeastern Ontario	Ontario	Canada	49.2815	-81.7941	0	1
+CXWL	Winnipeg	Manitoba	Canada	50.1539	-97.7783	0	1
+RH42	Bilogora		Croatia	45.8834	17.2008	240	1
+RH43	Osijek		Croatia	45.5027	18.5613	240	1
+CZ50	Skalky		Czech Republic	49.5011	16.7885	260	1
+CZ60	Brdy-Praha		Czech Republic	49.6583	13.8178	260	1
+DN41	Stevns		Denmark	55.3262	12.4493	240	1
+DN42	Römö		Denmark	55.1731	8.5520	240	1
+DN43	Sindal		Denmark	57.4893	10.1365	240	1
+DN44	Bornholm		Denmark	55.1127	14.8875	240	1
+DN45	Virring		Denmark	56.0240	10.0246	240	1
+EE40	Harku		Estonia	59.3977	24.6021	240	1
+EE41	Syrgavere		Estonia	58.4823	25.5187	240	1
+FI42	Vantaa		Finland	60.2706	24.8690	250	1
+FI43	Ikaalinen		Finland	61.7673	23.0764	250	1
+FI44	Anjalankoski		Finland	60.9039	27.1081	250	1
+FI45	Kuopio		Finland	62.8626	27.3815	250	1
+FI46	Korpo		Finland	60.1285	21.6434	250	1
+FI47	Utajärvi		Finland	64.7749	26.3189	250	1
+FI48	Luosto		Finland	67.1391	26.8969	250	1
+FI49	Vimpeli		Finland	63.1048	23.8209	250	1
+FR40	Abbeville		France	50.1358	1.8347	256	1
+FR41	Bordeaux		France	44.8314	-0.6917	256	1
+FR42	Bourges		France	47.0586	2.3594	256	1
+FR44	Grèzes		France	45.1044	1.3694	256	1
+FR45	Falaise		France	48.9272	-0.1494	256	1
+FR47	Nancy		France	48.7158	6.5816	256	1
+FR49	Nîmes		France	43.8061	4.5027	256	1
+FR50	Toulouse		France	43.5744	1.3761	256	1
+FR51	Trappes		France	48.7739	2.0075	256	1
+FR52	Arcis-sur-Aube		France	48.4622	4.3094	256	1
+FR53	Sembadel		France	45.2900	3.7094	256	1
+FR54	Treillères		France	47.3355	-1.6538	256	1
+FR55	Bollène		France	44.3230	4.7622	256	1
+FR56	Plabennec		France	48.4608	-4.4300	256	1
+FR57	Opoul		France	42.9183	2.8650	256	1
+FR58	Saint Nizier		France	46.0663	4.4455	256	1
+FR59	Collobrières		France	43.2166	6.3727	256	1
+FR61	Aléria		France	42.1297	9.4964	256	1
+FR62	Montclar		France	43.9905	2.6097	256	1
+FR63	LAvesnois		France	50.1283	3.8119	256	1
+FR64	Cherves		France	46.6986	0.0655	256	1
+FR65	Blaisy-Haut		France	47.3552	4.7758	256	1
+FR66	Momuy		France	43.6247	-0.6091	256	1
+FR67	Montancy		France	47.3686	7.0191	256	1
+DL41	Emden		Germany	53.3387	7.0237	180	1
+DL42	Hamburg		Germany	53.6219	9.9978	180	1
+DL43	Rostock		Germany	54.1764	12.0592	180	1
+DL44	Hannover		Germany	52.4631	9.6983	180	1
+DL45	Berlin		Germany	52.4786	13.3881	180	1
+DL51	Essen		Germany	51.4055	6.9669	180	1
+DL52	Flechtdorf		Germany	51.3119	8.8033	180	1
+DL53	Ummendorf		Germany	52.1601	11.1761	180	0
+DL62	Neuhaus		Germany	50.5001	11.1350	180	1
+DL63	Dresden		Germany	51.1253	13.7697	180	1
+DL71	Neuheilenbach		Germany	50.1111	6.5489	180	0
+DL72	Tuerkheim		Germany	48.5861	9.7839	180	0
+DL73	Eisberg		Germany	49.5414	12.4044	180	1
+DL81	Feldberg		Germany	47.8736	8.0039	180	1
+DL82	München		Germany	48.3372	11.6128	180	1
+DL84	Memminggen		Germany	48.0421	10.2192	180	1
+DLAA	Offenthal		Germany	49.9847	8.7129	180	1
+GR41	Imittos		Greece	37.9461	23.8138	300	1
+GR42	Andravida		Greece	37.9261	21.2894	300	1
+GR43	Larisa		Greece	39.6446	22.4603	300	1
+GR44	Thessaloniki		Greece	40.5282	22.9757	300	1
+GR45	Aigina		Greece	37.4312	23.3000	300	1
+GR46	Aktio		Greece	38.9166	20.7528	300	1
+GR47	Xrisoupoli		Greece	40.9277	24.6330	300	1
+GR48	Astypalaia		Greece	36.5993	26.4404	300	1
+HU42	Budapest		Hungary	47.4290	19.1820	240	1
+HU43	Napkor		Hungary	47.9630	21.8890	240	1
+HU90	Poganyvar		Hungary	46.6600	17.0620	240	1
+IL40	Keflavik		Iceland	64.0250	-22.6360	240	1
+IE40	Shannon		Ireland	52.6928	-8.9201	250	1
+IE41	Dublin		Ireland	53.4299	-6.2443	250	1
+IY43	Istrana (AF)		Italy	45.6882	12.0818	256	0
+IY44	Teolo		Italy	45.3628	11.6736	250	0
+IY45	Fossalon di Grado		Italy	45.7267	13.4775	480	0
+IY46	S. Pietro Capofiume		Italy	44.6547	11.6236	500	0
+IY48	Pisa (AF)		Italy	43.6918	10.3868	400	0
+IY52	Grazzanise (AF)		Italy	41.0536	14.0742	256	0
+IY54	Brindisi (AF)		Italy	40.6500	17.9500	400	0
+IY57	Decimomannu (AF)		Italy	39.3397	8.9692	256	0
+IY58	Capo Caccia (AF)		Italy	40.5700	8.1700	200	0
+IYAA	Concordia Sagittaria		Italy	45.6950	12.7867	250	0
+IYAB	Milano-Linate (CA)		Italy	45.3400	9.2900	400	0
+IYAC	Fiumicino (CA)		Italy	41.9100	12.2300	400	0
+IYAD	Monte-Rasu		Italy	40.4225	9.0053	500	0
+IYAE	Macaion		Italy	46.4933	11.2091	120	0
+IYAF	Settepani		Italy	44.2500	8.2000	360	0
+IYAG	Monte Mida		Italy	42.0578	13.1772	480	0
+IYAH	Bric della Croce		Italy	45.0340	7.7330	250	0
+IYAI	Gattatico		Italy	44.7914	10.4992	500	0
+IYAJ	Spino d’Adda (OT)		Italy	45.4000	9.5000	150	0
+IYAK	Monte Crocione-Lucca (CPD)		Italy	43.9560	10.6070	200	0
+IYAL	Monte Pettinascura - Cosenza (CPD)		Italy	39.3730	16.6240	200	0
+IYAM	Monte Zoufplan - Udine (CPD)		Italy	46.5560	12.9740	175	0
+IYAN	Monte Serano - Perugia (CPD)		Italy	42.8560	12.7910	200	0
+IYAO	Monte Il  Monte - Chieti (CPD)		Italy	41.9390	14.6240	175	0
+LVAA	Riga		Latvia	56.9143	23.9897	0	1
+NL50	De Bilt		Netherlands	52.1017	5.1783	320	1
+NL51	Den Helder		Netherlands	52.9533	4.7899	320	1
+NZAU	Auckland		New Zealand	-36.3000	174.7600	300	1
+NZBA	Bay of Plenty		New Zealand	-38.0800	176.1750	300	1
+NZCA	Canterbury		New Zealand	-43.8600	172.0800	300	1
+NZGI	Gisborne/Hawke's Bay		New Zealand	-39.1600	177.8500	300	1
+NZNO	Northland		New Zealand	-35.1500	173.8400	300	1
+NZSO	Southland		New Zealand	-46.0450	168.3200	300	1
+NZTA	Taranaki		New Zealand	-39.2300	174.2700	300	1
+NZWE	Wellington		New Zealand	-41.3800	174.6700	300	1
+NZWS	Westland		New Zealand	-43.1170	171.1300	300	1
+NO32	Haegebostad		Norway	58.3608	7.1661	240	1
+NO33	Boemlo		Norway	59.8540	5.0900	240	1
+NO34	Rissa		Norway	63.6900	10.2040	240	1
+NO35	Rost		Norway	67.5307	12.0986	240	1
+NO36	Andoya		Norway	69.2414	16.0028	240	1
+NO37	Hasvik		Norway	70.6052	22.4430	240	1
+NO38	Stad		Norway	62.1871	5.1275	240	1
+NO39	Hurum		Norway	59.6271	10.5645	240	1
+NO40	Berlevaag		Norway	70.5107	29.0184	240	1
+PL41	Legionowo		Poland	52.4052	20.9609	200	1
+PL42	Ramża		Poland	50.1517	18.7267	200	1
+PL43	Pastewnik		Poland	50.8920	16.0395	200	1
+PL44	Rzeszów		Poland	50.1138	22.0367	200	1
+PL45	Poznań		Poland	52.4133	16.7971	200	1
+PL46	Świdwin		Poland	53.7903	15.8311	200	1
+PL47	Gdańk		Poland	54.3843	18.4563	200	1
+PL48	Brzuchania		Poland	50.3942	20.0797	200	1
+PO41	Cruz do Leão		Portugal	39.0725	-8.3989	300	1
+PO42	Cavalos do Caldeirão		Portugal	37.3053	-7.9517	300	1
+RDBB	Bobohalma		Romania	46.3600	24.2259	230	1
+RDBU	Bucuresti		Romania	44.5110	26.0790	240	1
+RDCV	Craiova		Romania	44.3110	23.8680	240	1
+RDIS	Barnova		Romania	47.1670	27.6330	230	1
+RDMD	Medgidia		Romania	44.2431	28.2513	230	1
+RDOD	Oradea		Romania	47.0333	21.9000	230	1
+RDOR	Oradea		Romania	47.0900	21.9400	240	1
+RDTM	Timisoara		Romania	45.7710	21.2580	230	1
+RAVN	Vnukovo, Moskva		Russia	55.4800	37.1300	0	1
+RUAD	Adler, Sochi		Russia	43.3700	39.8500	0	1
+RUAP	Vityazevo, Anapa		Russia	45.0052	37.3136	200	1
+RUDB	Bryansk		Russia	53.2183	34.1487	200	1
+RUDE	Moscow (Dolgoprudny)		Russia	55.9248	37.4705	200	1
+RUDG	Gumrak, Volgograd		Russia	48.6950	44.2500	0	1
+RUDI	Izhevsk		Russia	56.8370	53.4060	200	1
+RUDK	Kostroma		Russia	57.8084	40.9630	200	1
+RUDL	Smolensk		Russia	54.8458	31.9524	200	1
+RUDM	Mineralynye Vody		Russia	44.1100	43.0500	0	1
+RUDN	Nizhniy Novgorod		Russia	56.1900	43.8800	0	1
+RUDO	Orenburg		Russia	51.6300	55.0000	0	1
+RUDT	Shpakovskoe, Stavropoly		Russia	45.1137	42.1004	200	1
+RUDV	Gryazovets, Vologda		Russia	59.1850	39.8200	0	1
+RUDX	Arkhangelsk		Russia	64.5269	40.3025	200	1
+RUDZ	Kazan		Russia	55.5890	49.2383	200	1
+RUEK	Ekaterinburg		Russia	56.7516	60.7450	200	1
+RUKD	Pashkovskiy, Krasnodar		Russia	0.0000	0.0000	0	0
+RUKL	Kaluga		Russia	54.5488	36.3307	200	0
+RUKT	Moscow (Krilatskoe)		Russia	55.7526	37.3608	200	1
+RUMW	Mineralnye Vody		Russia	44.2088	43.0575	200	0
+RUPM	Perm		Russia	57.8969	55.9890	200	0
+RURD	Rostov-na-Donu		Russia	47.2468	39.7629	200	1
+RUSI	Sochi		Russia	43.5481	39.8513	200	0
+RUSM	Kurumoch		Russia	53.5092	50.0974	200	1
+RUSP	Pulkovo, Sankt-Peterburg		Russia	59.8003	30.2125	200	1
+RUTW	Tver		Russia	56.8144	35.9893	200	1
+RUVG	Volgograd		Russia	48.7869	44.2997	200	0
+RUWJ	Valday		Russia	57.9526	33.2283	200	1
+RS41	Fruska gora		Serbia	45.1570	19.8160	400	1
+RS42	Bajsa		Serbia	45.7860	19.6010	400	1
+RS43	Samos		Serbia	45.1890	20.7770	400	1
+RS44	Valjevo		Serbia	44.3740	19.9240	250	1
+RS45	Bukulja		Serbia	44.2980	20.5340	250	1
+RS46	Petrovac		Serbia	44.3260	21.3420	250	1
+RS47	Crni vrh		Serbia	44.1300	21.9700	250	1
+RS48	Uzice		Serbia	43.8870	19.8460	250	1
+RS49	Besnjaja		Serbia	43.9970	21.0530	250	1
+RS50	Sjenica		Serbia	43.2620	19.9780	250	1
+RS51	Krusevac		Serbia	43.6210	21.2590	250	1
+RS52	Nis		Serbia	43.4050	21.9520	250	1
+RS53	Kukavica		Serbia	42.7910	21.9520	250	1
+RSBGS	Beograd		Serbia	44.7720	20.4300	300	1
+RSBGX	Beograd		Serbia	44.7720	20.4300	300	1
+SQ41	Maly Javornik		Slovak Republic	48.2561	17.1531	240	1
+SQ51	Kojsovska hola		Slovak Republic	48.7826	20.9872	200	1
+LJ41	Lisca		Slovenia	46.0680	15.2850	250	1
+SP41	Autilla Pino (Palencia)		Spain	41.9969	-4.6014	240	1
+SP42	Torrejon de Velasco (Madrid)		Spain	40.1769	-3.7125	240	1
+SP43	Cullera (Valencia)		Spain	39.1775	-0.2497	240	1
+SP44	Fortuna (Murcia)		Spain	38.2656	-1.1886	240	1
+SP45	Corbera (Barcelona)		Spain	41.4094	1.8861	240	1
+SP46	Cerceda ( La Coruna)		Spain	43.1703	-8.5255	240	1
+SP47	(Zaragoza)		Spain	41.7341	-0.5459	240	1
+SP48	Aguión (Asturias)		Spain	43.4636	-6.3005	240	1
+SP49	Baquio (Vizcaya)		Spain	43.4040	-2.8410	240	1
+SP50	Sierra de Fuentes (Caceres)		Spain	39.4300	-6.2839	240	1
+SP51	Alhaurin el Grande (Sevilla)		Spain	36.6147	-4.6580	240	1
+SP52	Castillo las Guardas (Sevilla)		Spain	37.6890	-6.3330	240	1
+SP53	Nijar (Almeria)		Spain	36.8336	-2.0808	240	1
+SP54	Llucmajor (Baleares)		Spain	39.3808	2.7861	240	1
+SP60	Artenara (Gran Canaria)		Spain	28.0190	-15.6140	240	1
+SE40	Kiruna		Sweden	67.7088	20.6178	240	1
+SE41	Luleå		Sweden	65.4309	21.8650	240	1
+SE42	Östersund		Sweden	63.2951	14.7591	240	1
+SE43	Örnsköldsvik		Sweden	63.6395	18.4019	240	1
+SE44	Hudiksvall		Sweden	61.5771	16.7144	240	1
+SE45	Leksand		Sweden	60.7230	14.8776	240	1
+SE46	Stockholm-Arlanda		Sweden	59.6544	17.9463	240	1
+SE47	Ase		Sweden	57.3035	18.4001	240	1
+SE48	Vilebo		Sweden	58.1059	15.9363	240	1
+SE49	Vara		Sweden	58.2556	12.8260	240	1
+SE50	Ängelholm		Sweden	56.3675	12.8517	240	1
+SE51	Karlskrona		Sweden	56.2955	15.6103	240	1
+SW41	Albis		Switzerland	47.2850	8.5130	246	1
+SW42	La Dole		Switzerland	46.4260	6.1000	246	1
+SW43	Monte Lema		Switzerland	46.0420	8.8340	246	1
+UKBB	Kyiv, Boryspil		Ukraine	50.3456	30.8490	200	1
+UKDE	Zaporizhya		Ukraine	47.8669	35.2758	200	1
+UK43	Clee Hill		United Kingdom	52.3981	-2.5936	255	1
+UK44	Hameldon Hill		United Kingdom	53.7542	-2.2864	255	1
+UK45	Chenies		United Kingdom	51.6900	-0.5300	255	1
+UK47	Castor Bay		United Kingdom	54.5000	-6.3400	255	1
+UK48	Predannack		United Kingdom	50.0020	-5.2211	255	1
+UK49	Ingham		United Kingdom	53.3350	-0.5564	255	1
+UK50	Crugygorllwyn		United Kingdom	51.9794	-4.4433	255	1
+UK52	Jersey		United Kingdom	49.1800	-2.2200	255	1
+UK54	Hill Of Dudwick		United Kingdom	57.4317	-2.0347	255	1
+UK55	Druim a'Starraig		United Kingdom	58.2111	-6.1797	255	1
+UK56	Cobbacombe Cross		United Kingdom	50.9636	-3.4508	255	1
+UK58	Holehead		United Kingdom	56.0183	-4.2169	255	1
+UK59	Munduff Hill		United Kingdom	56.2144	-3.3092	255	1
+UK60	Thurnham		United Kingdom	51.2942	0.6064	255	1
+UK61	Dean Hill		United Kingdom	51.0297	-1.6531	255	1
+UK63	High Moorsley		United Kingdom	55.0000	-1.0000	255	1
+KABR	Aberdeen	SD	United States	45.4558	-98.4132	490	1
+KABX	Albuquerque	NM	United States	35.1498	-106.8240	490	1
+KAKQ	Norfolk/Richmond	VA	United States	36.9840	-77.0073	490	1
+KAMA	Amarillo	TX	United States	35.2335	-101.7092	490	1
+KAMX	Miami	FL	United States	25.6111	-80.4127	490	1
+KAPX	Gaylord	MI	United States	44.9071	-84.7198	490	1
+KARX	La Crosse	WI	United States	43.8228	-91.1916	490	1
+KATX	Seattle/Tacoma	WA	United States	48.1946	-122.4958	490	1
+KBBX	Beale AFB	CA	United States	39.4957	-121.6317	490	1
+KBGM	Binghamton	NY	United States	42.1997	-75.9847	490	1
+KBHX	Eureka	CA	United States	40.4987	-124.2919	490	1
+KBIS	Bismarck	ND	United States	46.7709	-100.7606	490	1
+KBLX	Billings	MT	United States	45.8538	-108.6068	490	1
+KBMX	Birmingham	AL	United States	33.1723	-86.7698	490	1
+KBOX	Boston	MA	United States	41.9559	-71.1370	490	1
+KBRO	Brownsville	TX	United States	25.9160	-97.4190	490	1
+KBUF	Buffalo	NY	United States	42.9488	-78.7369	490	1
+KBYX	Key West	FL	United States	24.5975	-81.7032	490	1
+KCAE	Columbia	SC	United States	33.9488	-81.1184	490	1
+KCBW	Loring AFB	ME	United States	46.0392	-67.8066	490	1
+KCBX	Boise	ID	United States	43.4902	-116.2360	490	1
+KCCX	State College	PA	United States	40.9229	-78.0039	490	1
+KCLE	Cleveland	OH	United States	41.4132	-81.8597	490	1
+KCLX	Charleston	SC	United States	32.6555	-81.0423	490	1
+KCRP	Corpus Christi	TX	United States	27.7840	-97.5112	490	1
+KCXX	Burlington	VT	United States	44.5110	-73.1664	490	1
+KCYS	Cheyenne	WY	United States	41.1519	-104.8060	490	1
+KDAX	Sacramento	CA	United States	38.5012	-121.6778	490	1
+KDDC	Dodge City	KS	United States	37.7608	-99.9688	490	1
+KDFX	Laughlin AFB	TX	United States	29.2731	-100.2802	490	1
+KDGX	Brandon/Jackson	MS	United States	32.2797	-89.9846	490	1
+KDLH	Duluth	MN	United States	46.8369	-92.2097	490	1
+KDMX	Des Moines	IA	United States	41.7312	-93.7229	490	1
+KDOX	Dover AFB	DE	United States	38.8258	-75.4401	490	1
+KDTX	Detroit/Pontiac	MI	United States	42.7000	-83.4718	490	1
+KDVN	Davenport	IA	United States	41.6116	-90.5810	490	1
+KDYX	Dyess AFB	TX	United States	32.5386	-99.2543	490	1
+KEAX	Kansas City	MO	United States	38.8102	-94.2645	490	1
+KEMX	Tucson	AZ	United States	31.8937	-110.6304	490	1
+KENX	Albany	NY	United States	42.5866	-74.0640	490	1
+KEOX	Fort Rucker	AL	United States	31.4606	-85.4592	490	1
+KEPZ	El Paso	TX	United States	31.8731	-106.6979	490	1
+KESX	Las Vegas	NV	United States	35.7013	-114.8918	490	1
+KEVX	Eglin AFB	FL	United States	30.5650	-85.9216	490	1
+KEWX	Austin/San Antonio	TX	United States	29.7040	-98.0285	490	1
+KEYX	Edwards AFB	CA	United States	35.0979	-117.5609	490	1
+KFCX	Roanoke	VA	United States	37.0242	-80.2737	490	1
+KFDR	Frederick	OK	United States	34.3620	-98.9767	490	1
+KFDX	Cannon AFB	NM	United States	34.6342	-103.6186	490	1
+KFFC	Atlanta	GA	United States	33.3636	-84.5659	490	1
+KFSD	Sioux Falls	SD	United States	43.5877	-96.7294	490	1
+KFSX	Flagstaff	AZ	United States	34.5744	-111.1984	490	1
+KFTG	Denver	CO	United States	39.7866	-104.5458	490	1
+KFWS	Dallas/Ft. Worth	TX	United States	32.5730	-97.3032	490	1
+KGGW	Glasgow	MT	United States	48.2065	-106.6253	490	1
+KGJX	Grand Junction	CO	United States	39.0620	-108.2137	490	1
+KGLD	Goodland	KS	United States	39.3668	-101.7004	490	1
+KGRB	Green Bay	WI	United States	44.4985	-88.1111	490	1
+KGRK	Fort Hood	TX	United States	30.7218	-97.3830	490	1
+KGRR	Grand Rapids	MI	United States	42.8939	-85.5449	490	1
+KGSP	Greer	SC	United States	34.8833	-82.2201	490	1
+KGWX	Columbus AFB	MS	United States	33.8968	-88.3294	490	1
+KGYX	Portland	ME	United States	43.8914	-70.2566	490	1
+KHDX	Holloman AFB	NM	United States	33.0769	-106.1201	490	1
+KHGX	Houston/Galveston	TX	United States	29.4719	-95.0789	490	1
+KHNX	San Joaquin Valley	CA	United States	36.3142	-119.6321	490	1
+KHPX	Fort Campbell	KY	United States	36.7369	-87.2854	490	1
+KHTX	Huntsville	AL	United States	34.9305	-86.0837	490	1
+KICT	Wichita	KS	United States	37.6546	-97.4431	490	1
+KICX	Cedar City	UT	United States	37.5932	-112.8638	490	1
+KILN	Wilmington	OH	United States	39.5083	-83.8177	490	1
+KILX	Lincoln	IL	United States	40.1505	-89.3368	490	1
+KIND	Indianapolis	IN	United States	39.7075	-86.2804	490	1
+KINX	Tulsa	OK	United States	36.1751	-95.5643	490	1
+KIWA	Phoenix	AZ	United States	33.2891	-111.6700	490	1
+KIWX	North Webster	IN	United States	41.3586	-85.7000	490	1
+KJAX	Jacksonville	FL	United States	30.4847	-81.7019	490	1
+KJGX	Robins AFB	GA	United States	32.6755	-83.3509	490	1
+KJKL	Jackson	KY	United States	37.5908	-83.3130	490	1
+KLBB	Lubbock	TX	United States	33.6541	-101.8141	490	1
+KLCH	Lake Charles	LA	United States	30.1254	-93.2161	490	1
+KLGX	Langley Hill	WA	United States	47.1168	-124.1063	490	1
+KLIX	New Orleans	LA	United States	30.3367	-89.8257	490	1
+KLNX	North Platte	NE	United States	41.9580	-100.5760	490	1
+KLOT	Chicago	IL	United States	41.6044	-88.0844	490	1
+KLRX	Elko	NV	United States	40.7397	-116.8026	490	1
+KLSX	St. Louis	MO	United States	38.6987	-90.6829	490	1
+KLTX	Wilmington	NC	United States	33.9892	-78.4291	490	1
+KLVX	Louisville	KY	United States	37.9753	-85.9438	490	1
+KLWX	Sterling	VA	United States	38.9754	-77.4778	490	1
+KLZK	Little Rock	AR	United States	34.8365	-92.2622	490	1
+KMAF	Midland/Odessa	TX	United States	31.9434	-102.1894	490	1
+KMAX	Medford	OR	United States	42.0811	-122.7173	490	1
+KMBX	Minot AFB	ND	United States	48.3930	-100.8644	490	1
+KMHX	Morehead City	NC	United States	34.7759	-76.8763	490	1
+KMKX	Milwaukee	WI	United States	42.9678	-88.5506	490	1
+KMLB	Melbourne	FL	United States	28.1132	-80.6541	490	1
+KMOB	Mobile	AL	United States	30.6795	-88.2398	490	1
+KMPX	Minneapolis/St. Paul	MN	United States	44.8488	-93.5655	490	1
+KMQT	Marquette	MI	United States	46.5311	-87.5487	490	1
+KMSX	Missoula	MT	United States	47.0413	-113.9864	490	1
+KMTX	Salt Lake City	UT	United States	41.2628	-112.4480	490	1
+KMUX	San Francisco	CA	United States	37.1552	-121.8985	490	1
+KMVX	Grand Forks (Mayville)	ND	United States	47.5279	-97.3257	490	1
+KMXX	Maxwell AFB	AL	United States	32.5367	-85.7898	490	1
+KNKX	San Diego	CA	United States	32.9190	-117.0418	490	1
+KNQA	Memphis	TN	United States	35.3448	-89.8735	490	1
+KOAX	Omaha	NE	United States	41.3203	-96.3668	490	1
+KOHX	Nashville	TN	United States	36.2472	-86.5625	490	1
+KOKX	New York City	NY	United States	40.8655	-72.8639	490	1
+KOTX	Spokane	WA	United States	47.6804	-117.6268	490	1
+KPAH	Paducah	KY	United States	37.0684	-88.7720	490	1
+KPBZ	Pittsburgh	PA	United States	40.5317	-80.2180	490	1
+KPDT	Pendleton	OR	United States	45.6906	-118.8529	490	1
+KPOE	Fort Polk	LA	United States	31.1557	-92.9763	490	1
+KPUX	Pueblo	CO	United States	38.4595	-104.1816	490	1
+KRAX	Raleigh/Durham	NC	United States	35.6655	-78.4898	490	1
+KRGX	Reno	NV	United States	39.7542	-119.4621	490	1
+KRIW	Riverton	WY	United States	43.0661	-108.4774	490	1
+KRLX	Charleston	WV	United States	38.3111	-81.7229	490	1
+KRTX	Portland	OR	United States	45.7150	-122.9651	490	1
+KSFX	Pocatello/Idaho Falls	ID	United States	43.1056	-112.6860	490	1
+KSGF	Springfield	MO	United States	37.2352	-93.4006	490	1
+KSHV	Shreveport	LA	United States	32.4508	-93.8413	490	1
+KSJT	San Angelo	TX	United States	31.3713	-100.4925	490	1
+KSOX	Santa Ana Mountains	CA	United States	33.8176	-117.6360	490	1
+KSRX	Fort Smith	AR	United States	35.2904	-94.3619	490	1
+KTBW	Tampa	FL	United States	27.7055	-82.4018	490	1
+KTFX	Great Falls	MT	United States	47.4595	-111.3855	490	1
+KTLH	Tallahassee	FL	United States	30.3976	-84.3289	490	1
+KTLX	Oklahoma City	OK	United States	35.3334	-97.2778	490	1
+KTWX	Topeka	KS	United States	38.9970	-96.2326	490	1
+KTYX	Montague	NY	United States	43.7556	-75.6800	490	1
+KUDX	Rapid City	SD	United States	44.1248	-102.8298	490	1
+KUEX	Grand Island/Hastings	NE	United States	40.3210	-98.4419	490	1
+KVAX	Moody AFB	GA	United States	30.8904	-83.0019	490	1
+KVBX	Vandenberg AFB	CA	United States	34.8383	-120.3978	490	1
+KVNX	Vance AFB	OK	United States	36.7406	-98.1279	490	1
+KVTX	Los Angeles	CA	United States	34.4116	-119.1796	490	1
+KVWX	Evansville	IN	United States	38.2604	-87.7247	490	1
+KYUX	Yuma	AZ	United States	32.4953	-114.6567	490	1
+PABC	Bethel	AK	United States	60.7920	-161.8765	490	1
+PACG	Sitka/Biorka Island	AK	United States	56.8521	-135.5524	490	1
+PAEC	Nome	AK	United States	64.5115	-165.2949	490	1
+PAHG	Kenai	AK	United States	60.6156	-151.2832	490	1
+PAIH	Middleton Island	AK	United States	59.4619	-146.3011	490	1
+PAKC	King Salmon	AK	United States	58.6795	-156.6293	490	1
+PAPD	Fairbanks/Pedro Dome	AK	United States	65.0351	-147.5014	490	1
+PGUA	Andersen AFB	GU	United States	13.4560	144.8111	490	1
+PHKI	Kauai	HI	United States	21.8939	-159.5525	490	1
+PHKM	Kohala	HI	United States	20.1255	-155.7781	490	1
+PHMO	Molokai	HI	United States	21.1328	-157.1803	490	1
+PHWA	South Shore	HI	United States	19.0950	-155.5689	490	1
+TADW	DC Andrews		United States	38.6900	-76.8400	490	1
+TATL	Atlanta		United States	33.6400	-84.2600	490	1
+TBNA	Nashville		United States	35.9700	-86.6600	490	1
+TBOS	Boston		United States	42.1500	-70.9300	490	1
+TBWI	Baltimore		United States	39.0900	-76.6300	490	1
+TCLT	Charlotte		United States	35.3300	-80.8800	490	1
+TCMH	Columbus		United States	40.0000	-82.7200	490	1
+TCVG	Cincinnati		United States	38.8900	-84.5800	490	1
+TDAY	Dayton		United States	40.0200	-84.1200	490	1
+TDCA	DC Natinal		United States	38.7500	-76.9600	490	1
+TDEN	Denver		United States	39.7200	-104.5300	490	1
+TDFW	Dallas Fort Worth		United States	33.0600	-96.9100	490	1
+TDTW	Detroit		United States	42.1100	-83.5100	490	1
+TEWR	Newark		United States	40.5900	-74.2700	490	1
+TFLL	Fort Lauderdale		United States	26.1200	-80.3300	490	1
+THOU	Houston Hobby		United States	29.5100	-95.2400	490	1
+TIAD	DC Dulles		United States	39.0800	-77.5200	490	1
+TICH	Wichita		United States	37.5000	-97.4300	490	1
+TIDS	Indianapolis		United States	39.6300	-86.4300	490	1
+TJFK	New York City - JFK		United States	40.5800	-73.8800	490	1
+TJUA	San Juan	PR	United States	18.1156	-66.0781	490	1
+TLAS	Las Vegas		United States	36.1400	-115.0000	490	1
+TLVE	Cleveland		United States	41.2900	-82.0000	490	1
+TMCI	Kansas City		United States	39.4900	-94.7400	490	1
+TMCO	Orlando		United States	28.3400	-81.3200	490	1
+TMDW	Chicago Midway		United States	41.6500	-87.7300	490	1
+TMEM	Memphis		United States	34.8900	-89.9900	490	1
+TMKE	Milwaukee		United States	42.8100	-88.0400	490	1
+TMSP	Minneapolis		United States	44.8700	-92.9300	490	1
+TMSY	New Orleans		United States	30.0200	-90.4000	490	1
+TOKC	Oklahoma City		United States	35.2700	-97.5100	490	1
+TORD	Chicago Ohare		United States	41.7900	-87.8500	490	1
+TPBI	West Palm Beach		United States	26.6800	-80.2700	490	1
+TPHL	Philadelphia		United States	39.9400	-75.0600	490	1
+TPHX	Phoenix		United States	33.4200	-112.1600	490	1
+TPIT	Pittsburg		United States	40.5000	-80.4800	490	1
+TRDU	Raleigh		United States	36.0000	-78.6900	490	1
+TSDF	Louisville		United States	38.0400	-85.6100	490	1
+TSJU	San Juan		United States	18.4700	-66.1700	490	1
+TSLC	Salt Lake City		United States	40.9600	-111.9300	490	1
+TSTL	Saint Louis		United States	38.8000	-90.4800	490	1
+TTPA	Tampa	FL	United States	27.8595	-82.5178	490	1
+TTUL	Tulsa		United States	36.0700	-95.8200	490	1

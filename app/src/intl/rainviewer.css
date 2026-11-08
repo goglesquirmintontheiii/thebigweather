@@ -1,0 +1,24 @@
+/* 0.8.3: RainViewer single-site radars (international, image-only) */
+.site-marker.intl-site.rv-site {
+  border-color: rgba(45, 212, 191, 0.75);
+  color: #d5fff8;
+  border-style: dashed;
+}
+.site-marker.intl-site.rv-site.selected {
+  background: #2dd4bf;
+  color: #042521;
+  border-color: #fff;
+  border-style: solid;
+}
+.site-marker.intl-site.rv-site.loading {
+  opacity: 0.6;
+  cursor: progress;
+}
+.sites-dots .site-marker.intl-site.rv-site:not(.selected) {
+  font-size: 0;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  background: rgba(45, 212, 191, 0.9);
+  border-style: solid;
+}

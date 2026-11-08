@@ -52,6 +52,18 @@ if (!process.env.TBW_SHOT || process.env.TBW_SHOT_MIGRATE) {
   }
 }
 
+// 0.8.3: started by an update: let the old instance exit first, or this one finds the lock held,
+// hands over to the dying instance and quits (the AppImage didn't reopen after updating)
+{
+  const RU0 = require("./repoupdate.cjs");
+  const w = Number(process.env[RU0.WAIT_PID_ENV]);
+  delete process.env[RU0.WAIT_PID_ENV];
+  if (w) {
+    const r = RU0.waitForExit({ pid: w });
+    if (r === "timeout") console.warn(`[stormiq] previous instance ${w} still running after update`);
+  }
+}
+
 if (!process.env.TBW_SHOT && !app.requestSingleInstanceLock()) {
   app.quit();
 }
@@ -1505,10 +1517,22 @@ async function updInstall() {
   quitting = true;
   await stopLocalServer().catch(() => {});
   stopped = true;
+  // 0.8.3: whatever starts the new version (us, electron-updater, the installer, the swap script)
+  // inherits this: the new instance waits for this process to exit before taking the lock
+  process.env[RU.WAIT_PID_ENV] = String(process.pid);
   setImmediate(() => {
     if (p.via === "updater") return updater.quitAndInstall(false, true);
     if (updKind === "appimage") {
-      app.relaunch({ execPath: process.env.APPIMAGE, args: process.argv.slice(1) });
+      // 0.8.3: app.relaunch isn't reliable for AppImages (execPath is inside the old mount and the
+      // new instance raced the lock): start the replaced file detached, then exit
+      const r = RU.appImageRelaunch({ appImage: process.env.APPIMAGE, argv: process.argv.slice(1), env: process.env, pid: process.pid });
+      try {
+        if (!r) throw new Error("APPIMAGE path unknown");
+        spawn(r.cmd, r.args, { detached: true, stdio: "ignore", env: r.env, cwd: path.dirname(r.cmd) }).unref();
+      } catch (e) {
+        console.error("[stormiq] relaunch after update:", e && e.message);
+        app.relaunch({ execPath: process.env.APPIMAGE, args: process.argv.slice(1) });
+      }
       return app.exit(0);
     }
     const run = updKind === "nsis" ? [updFile, ["--updated", "/S", "--force-run"]] : [process.env.ComSpec || "cmd.exe", ["/d", "/c", updFile]];

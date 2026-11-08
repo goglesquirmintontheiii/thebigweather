@@ -1,0 +1,17 @@
+{
+  "_note": "synthetic sample (the real data.rainviewer.com JSON could not be fetched: robots.txt); keys are read defensively",
+  "radar": {
+    "id": "JP0001",
+    "location": "Tokyo",
+    "latitude": 35.6,
+    "longitude": 139.8,
+    "max_range": 250,
+    "bounds": [[33.4, 137.0], [37.8, 142.6]]
+  },
+  "scans": [
+    { "time": 1794112800, "file": "20261108T044000_0_source.png" },
+    { "time": "2026-11-08T04:30:00Z", "filename": "20261108T043000_0_source.png" },
+    { "timestamp": 1794113400000, "image": "20261108T045000_0_source.png" },
+    { "time": 1794113400, "file": "20261108T045000_0_source.h5" }
+  ]
+}

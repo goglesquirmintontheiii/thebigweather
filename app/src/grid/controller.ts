@@ -127,7 +127,8 @@ async function fetchRaster(key: string, v: View): Promise<void> {
   if (existing) return existing;
   const p = (async () => {
     try {
-      const buf = await api.bin(`/api/grid/render?key=${encodeURIComponent(key)}&bbox=${v.bbox.join(",")}&w=${v.w}&h=${v.h}&sv=${lastHello.value?.version ?? ""}${gridExtraQ() /* data 0.8 */}`);
+      // 0.8.3: a render that hangs gives up (it held one of the 3 download slots and the loop with it)
+      const buf = await api.bin(`/api/grid/render?key=${encodeURIComponent(key)}&bbox=${v.bbox.join(",")}&w=${v.w}&h=${v.h}&sv=${lastHello.value?.version ?? ""}${gridExtraQ() /* data 0.8 */}`, AbortSignal.timeout(45_000));
       const r = parseRaster(buf, key);
       storeRaster(key, r, v.sig);
       if (view?.sig === v.sig) {
@@ -137,6 +138,7 @@ async function fetchRaster(key: string, v: View): Promise<void> {
       }
       push();
     } catch (e: any) {
+      if (e?.name === "TimeoutError" || e?.name === "AbortError") return; // 0.8.3: retried when the loop asks again
       const fs = gridFrames.value.slice();
       const i = fs.findIndex((f) => f.key === key);
       if (i >= 0) {
@@ -345,10 +347,13 @@ effect(() => {
 effect(() => {
   if (settings.value.weather.kind === "grid") {
     frameCount.value = gridFrames.value.length;
-    setFrameReady((i) => {
-      const f = gridFrames.value[i];
-      return !!f && rasters.has(f.key) && !f.error;
-    });
+    setFrameReady(
+      (i) => {
+        const f = gridFrames.value[i];
+        return !!f && rasters.has(f.key) && !f.error;
+      },
+      () => void refreshRasters(), // 0.8.3: the loop is waiting (frames evicted by panes, or a stuck download)
+    );
   }
 });
 

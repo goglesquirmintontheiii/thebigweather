@@ -22,6 +22,7 @@ mod hist;
 mod ml;
 mod hub;
 mod intlradar;
+mod rainviewer; // 0.8.3
 mod radar;
 mod recorder;
 mod s3;

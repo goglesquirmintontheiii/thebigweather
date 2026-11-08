@@ -119,7 +119,7 @@ export const intlBad = signal<Set<number>>(new Set());
 export const intlError = signal<string | null>(null);
 
 /** Regions shown in the layer picker, in order. */
-export const INTL_REGIONS = ["Canada", "Mexico", "Europe", "Asia", "Japan"] as const;
+export const INTL_REGIONS = ["Canada", "Mexico", "Europe", "Asia", "Japan", "Oceania", "World"] as const; // 0.8.3: RainViewer
 
 /** Region of a raster source or international grid layer id. */
 export function intlRegion(id: string, fallback = ""): string {
@@ -129,6 +129,8 @@ export function intlRegion(id: string, fallback = ""): string {
   if (id === "pagasa" || id.startsWith("cwa")) return "Asia";
   if (id.startsWith("smn")) return "Mexico";
   if (id.startsWith("eccc")) return "Canada";
+  if (id === "rainviewer" || id === "rainviewer_ir") return "World"; // 0.8.3
+  if (id.startsWith("rv_")) return fallback || "World"; // 0.8.3: RainViewer single radars carry their region
   return fallback;
 }
 
@@ -149,6 +151,7 @@ export const INTL_NAMES: Record<string, string> = {
   pagasa: "Philippines radar (PAGASA)",
   smn: "Mexico radars (SMN)",
   eccc: "Canada radars (ECCC)",
+  rainviewer: "World radar (RainViewer)", // 0.8.3
 };
 
 export function intlSource(id: string): IntlSource | undefined {
@@ -180,6 +183,8 @@ const RAIN_GENERIC: [string, string][] = [
   ["#b4006a", "heavy"],
 ];
 export function intlLegend(id: string, precip: Precip = "rain"): IntlLegend {
+  // 0.8.3: RainViewer single radars are the agencies' own images (their colours)
+  if (id.startsWith("rv_")) return { title: "Radar", units: "source colours", stops: RAIN_GENERIC };
   if (idPrefix(id) === "eccc") return precip === "snow" ? { title: "Snow rate", units: "cm/h", stops: RAIN_GENERIC } : { title: "Rain rate", units: "mm/h", stops: RAIN_GENERIC };
   if (id === "jma")
     return {
@@ -220,7 +225,10 @@ export function loadIntlList(force = false): Promise<void> {
         s.frames = (s.frames ?? []).slice().sort((a, b) => a.t - b.t);
         if (s.frames_snow) s.frames_snow = s.frames_snow.slice().sort((a, b) => a.t - b.t);
       }
-      intlSources.value = r.sources ?? [];
+      const list = r.sources ?? [];
+      // 0.8.3: single RainViewer radars are fetched one by one (not in the full list): keep them
+      for (const s of lazySources.values()) if (!list.some((x) => x.id === s.id)) list.push(s);
+      intlSources.value = list;
       intlErrors.value = r.errors ?? {};
     })
     .catch((e) => {
@@ -232,6 +240,30 @@ export function loadIntlList(force = false): Promise<void> {
     });
   return listP;
 }
+
+// ---------- 0.8.3: sources fetched on their own (RainViewer single radars) ----------
+
+/** id -> source fetched with `/api/intlradar?id=` (kept when the full list refreshes) */
+const lazySources = new Map<string, IntlSource>();
+/** Fetch one source by id and add (or refresh) it in `intlSources`. */
+export async function loadIntlSource(id: string): Promise<IntlSource> {
+  const r = await api.get<{ sources: IntlSource[]; errors?: Record<string, string> }>(`/api/intlradar?id=${encodeURIComponent(id)}`);
+  const s = (r.sources ?? []).find((x) => x.id === id);
+  if (!s) throw new Error(Object.values(r.errors ?? {})[0] ?? "No frames right now");
+  s.frames = (s.frames ?? []).slice().sort((a, b) => a.t - b.t);
+  lazySources.delete(id);
+  lazySources.set(id, s);
+  if (lazySources.size > 40) lazySources.delete(lazySources.keys().next().value!);
+  intlSources.value = [...intlSources.value.filter((x) => x.id !== id), s];
+  if (intlErrors.value[id]) {
+    const e = { ...intlErrors.value };
+    delete e[id];
+    intlErrors.value = e;
+  }
+  return s;
+}
+/** the map once attached (for modules adding their own markers) */
+export const intlMap = signal<MLMap | null>(null);
 
 // ---------- URLs ----------
 
@@ -511,6 +543,7 @@ const mapReady = signal(false);
 export function attachIntl(m: MLMap, beforeFn: () => string | undefined) {
   map = m;
   mapReady.value = true;
+  intlMap.value = m; // 0.8.3
   before = beforeFn;
   m.on("sourcedata", (e: any) => {
     if (typeof e.sourceId === "string" && e.sourceId.startsWith("intl-")) {
@@ -611,7 +644,12 @@ api.on("connected", () => {
 
 // new frames every few minutes
 setInterval(() => {
-  if (settings.value.weather.kind === "intl" && !playing.value && !histRange.value) loadIntlList(true);
+  if (settings.value.weather.kind === "intl" && !playing.value && !histRange.value) {
+    loadIntlList(true);
+    // 0.8.3: a single RainViewer radar on screen gets its new images too
+    const id = settings.value.weather.id;
+    if (lazySources.has(id)) loadIntlSource(id).catch(() => {});
+  }
 }, 3 * 60_000);
 
 /** Fly to an extent when the map is mostly elsewhere. */

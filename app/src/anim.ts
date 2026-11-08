@@ -3,6 +3,7 @@
 import { signal, effect, computed, batch } from "@preact/signals";
 import { thinEven } from "./timematch";
 import { settings, toast } from "./store";
+import { nextReady, loopStalled } from "./animcore"; // 0.8.3
 
 export const frameIndex = signal(0);
 export const playing = signal(false);
@@ -12,39 +13,85 @@ export const frameCount = signal(0);
 /** The active layer tells the loop which frames are ready to draw, so playback never shows a
  * blank frame (it skips ahead or waits instead of flickering). */
 let readyFn: (i: number) => boolean = () => true;
-export function setFrameReady(fn: (i: number) => boolean) {
+export function setFrameReady(fn: (i: number) => boolean, need?: (i: number) => void) {
   readyFn = fn;
+  needFn = need ?? (() => {}); // 0.8.3
 }
 
+/** 0.8.3: the active layer is asked to (re)load frames the loop is waiting for (frames evicted
+ * from the shared cache, or a download that hung, used to leave the loop parked on one frame). */
+let needFn: (i: number) => void = () => {};
+
 let timer: number | undefined;
+let lastTick = 0;
+let waitSince = 0;
+let lastNeed = 0;
+function schedule(ms: number) {
+  clearTimeout(timer);
+  timer = window.setTimeout(step, ms);
+}
+function safeReady(i: number): boolean {
+  try {
+    return readyFn(i);
+  } catch {
+    return false;
+  }
+}
 function step() {
+  lastTick = performance.now();
   const n = frameCount.value;
   if (!playing.value || n < 2) return;
   const s = playback();
-  let next = -1;
-  for (let k = 1; k <= n; k++) {
-    const j = (frameIndex.value + k) % n;
-    if (readyFn(j)) {
-      next = j;
-      break;
+  const cur = frameIndex.value;
+  // 0.8.3: a frame that isn't ready is skipped (never waited for); a throwing check counts as not ready
+  const next = nextReady(cur, n, readyFn);
+  if (next < 0) {
+    // nothing else ready yet: check again shortly, and after a while ask the layer for the frames
+    const now = performance.now();
+    if (!waitSince) waitSince = now;
+    if (now - waitSince > 1500 && now - lastNeed > 2000) {
+      lastNeed = now;
+      try {
+        needFn((cur + 1) % n);
+      } catch (e) {
+        console.warn("anim: frame request failed", e);
+      }
     }
-  }
-  if (next < 0 || next === frameIndex.value) {
-    // nothing else ready yet: check again shortly
-    timer = window.setTimeout(step, 120);
+    schedule(120);
     return;
   }
-  frameIndex.value = next;
+  waitSince = 0;
   // dwell on the newest ready frame
   let last = n - 1;
-  while (last > 0 && !readyFn(last)) last--;
-  timer = window.setTimeout(step, next === last ? s.dwellMs : 1000 / s.fps);
+  while (last > 0 && !safeReady(last)) last--;
+  // 0.8.3: schedule before switching: an effect that throws on the frame change can't stop the loop
+  schedule(next === last ? s.dwellMs : 1000 / s.fps);
+  try {
+    frameIndex.value = next;
+  } catch (e) {
+    console.warn("anim: frame change failed", e);
+  }
 }
 
 effect(() => {
   clearTimeout(timer);
-  if (playing.value) timer = window.setTimeout(step, 1000 / playback().fps);
+  waitSince = 0;
+  if (playing.value) {
+    lastTick = performance.now();
+    timer = window.setTimeout(step, 1000 / playback().fps);
+  }
 });
+
+// 0.8.3 watchdog: a playing loop whose timer chain broke (an exception, a dropped timer) restarts
+if (typeof window !== "undefined")
+  window.setInterval(() => {
+    if (!playing.peek() || frameCount.peek() < 2) return;
+    const s = playback();
+    if (loopStalled(performance.now(), lastTick, s.fps, s.dwellMs)) {
+      console.warn("anim: loop stalled, restarting");
+      schedule(0);
+    }
+  }, 1000);
 
 export function togglePlay() {
   if (frameCount.value < 2) {

@@ -1,0 +1,8 @@
+{
+  "_note": "synthetic radar list in the shape of RainViewer's weather-radar-database",
+  "radars": [
+    { "id": "JP0001", "location": "Tokyo", "country": "Japan", "latitude": 35.6, "longitude": 139.8, "max_range": 250 },
+    { "id": "KR005", "location": "Gwanaksan", "country": "South Korea", "latitude": 37.44, "longitude": 126.96 },
+    { "id": "../bad", "latitude": 1, "longitude": 2 }
+  ]
+}

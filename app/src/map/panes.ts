@@ -627,7 +627,7 @@ class PaneView {
     }
     if (cfg.weather.kind !== "grid" || !this.view) return;
     const v = this.view;
-    const buf = await api.bin(`/api/grid/render?key=${encodeURIComponent(f.key)}&bbox=${v.bbox.join(",")}&w=${v.w}&h=${v.h}&sv=${lastHello.value?.version ?? ""}`);
+    const buf = await api.bin(`/api/grid/render?key=${encodeURIComponent(f.key)}&bbox=${v.bbox.join(",")}&w=${v.w}&h=${v.h}&sv=${lastHello.value?.version ?? ""}`, AbortSignal.timeout(45_000)); // 0.8.3: a hung render can't park the pane
     if (this.dead || cfg !== this.cfg) return;
     const r = parseRaster(buf, f.key);
     const old = this.rasters.get(f.key);

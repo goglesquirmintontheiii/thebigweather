@@ -10,7 +10,12 @@ import { activeFrames, isForecast, loadProgress } from "../active";
 import { settings, update } from "../store";
 import { fmtTime } from "../util";
 import { SkipBack, SkipForward, CalendarClock, SlidersHorizontal, X } from "lucide-preact";
+import { WheelScrub } from "../animcore"; // 0.8.3
 import { RadarRecButton } from "./RadarRecButton"; // radar "record now" (cameras & recording)
+
+/** 0.8.3: wheel scrubbing state (one timeline) */
+const wheel = new WheelScrub();
+let wheelRaf = 0;
 
 /** "90" → "1.5 h" style label for a span in minutes. */
 export function spanLabel(m: number) {
@@ -95,7 +100,6 @@ export function Timeline() {
   const [pop, setPop] = useState<null | "frames">(null);
   const track = useRef<HTMLDivElement>(null);
   const drag = useRef(false);
-  const wheelAcc = useRef(0);
   const hp = histPicker.value;
   useEffect(() => void (hp && setPop(null)), [hp]); // loop and history settings: one popup at a time
   const hist = historyEnd.value;
@@ -153,11 +157,16 @@ export function Timeline() {
           onPointerCancel={() => (drag.current = false)}
           onWheel={(e) => {
             e.preventDefault();
-            wheelAcc.current += Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-            // one frame per notch (trackpads send many small deltas)
-            while (Math.abs(wheelAcc.current) >= 40) {
-              stepFrame(wheelAcc.current > 0 ? 1 : -1);
-              wheelAcc.current -= Math.sign(wheelAcc.current) * 40;
+            // 0.8.3: one frame per notch (trackpads send many small deltas); reversing drops what was
+            // gathered for the old direction, and steps are applied once per animation frame (a busy
+            // frame change used to queue events that kept scrolling the old way)
+            wheel.add(WheelScrub.delta(e), performance.now());
+            if (!wheelRaf) {
+              wheelRaf = requestAnimationFrame(() => {
+                wheelRaf = 0;
+                const d = wheel.take();
+                if (d) stepFrame(d);
+              });
             }
           }}
         >

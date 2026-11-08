@@ -40,6 +40,7 @@ const SOURCES: &[(&str, &str)] = &[
     ("pagasa", "Philippines PAGASA radar"),
     ("smn", "Mexico SMN radars"),
     ("eccc", "Canada single-site radars (ECCC)"),
+    ("rainviewer", "World radar composite (RainViewer)"), // 0.8.3
 ];
 
 const DATAMART: &str = "https://dd.weather.gc.ca/today/radar";
@@ -128,6 +129,8 @@ pub struct IntlRadar {
     inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     imgs: Mutex<(lru::LruCache<String, (Instant, Bytes, String)>, usize)>,
     img_cap: std::sync::atomic::AtomicUsize,
+    /// 0.8.3: RainViewer single-site radars and composite
+    pub rv: Arc<crate::rainviewer::RainViewer>,
 }
 
 /// Percent-encode a whole URL for use as a query value.
@@ -158,7 +161,7 @@ pub fn allowed(url: &str) -> bool {
     if auth.contains('@') || auth.contains(':') {
         return false;
     }
-    ALLOWED_HOSTS.iter().any(|h| auth.eq_ignore_ascii_case(h))
+    ALLOWED_HOSTS.iter().chain(crate::rainviewer::HOSTS).any(|h| auth.eq_ignore_ascii_case(h)) // 0.8.3: + RainViewer
 }
 
 fn iso(t: i64) -> String {
@@ -241,6 +244,7 @@ impl IntlRadar {
             health.register(&format!("intl-{id}"), name, "international radar (on demand)");
         }
         Arc::new(Self {
+            rv: crate::rainviewer::RainViewer::new(http.clone()), // 0.8.3
             http,
             health,
             lists: Mutex::new(HashMap::new()),
@@ -297,7 +301,7 @@ impl IntlRadar {
     pub async fn list(self: &Arc<Self>, id: Option<&str>) -> Result<Value> {
         let ids: Vec<&str> = match id {
             Some(i) => {
-                if !SOURCES.iter().any(|s| s.0 == i) && eccc_site(i).is_none() {
+                if !SOURCES.iter().any(|s| s.0 == i) && eccc_site(i).is_none() && !is_rv(i) {
                     bail!("unknown source {i} (not found)");
                 }
                 vec![i]
@@ -337,7 +341,7 @@ impl IntlRadar {
                 return Ok(v.clone());
             }
         }
-        let name = SOURCES.iter().find(|s| s.0 == id).map(|s| s.1).unwrap_or(if eccc_site(id).is_some() { "Canada single-site radars (ECCC)" } else { id });
+        let name = SOURCES.iter().find(|s| s.0 == id).map(|s| s.1).unwrap_or(if eccc_site(id).is_some() { "Canada single-site radars (ECCC)" } else if is_rv(id) { "RainViewer single-site radars" } else { id });
         let res = match id {
             "jma" => self.jma().await,
             "geomet_rain" => self.geomet("geomet_rain", "RADAR_1KM_RRAI", "Canada radar · rain (MSC GeoMet)").await,
@@ -347,9 +351,11 @@ impl IntlRadar {
             "smn" => self.smn().await,
             "eccc" => self.eccc(None).await,
             _ if eccc_site(id).is_some() => self.eccc(eccc_site(id)).await,
+            "rainviewer" => self.rv.composite().await, // 0.8.3
+            _ if is_rv(id) => self.rv.source(id).await, // 0.8.3
             _ => Err(anyhow!("unknown source")),
         };
-        let hid = if eccc_site(id).is_some() { "intl-eccc".to_string() } else { format!("intl-{id}") };
+        let hid = if eccc_site(id).is_some() { "intl-eccc".to_string() } else if is_rv(id) { "intl-rv".to_string() } else { format!("intl-{id}") };
         match &res {
             Ok(v) => {
                 let n = v.as_array().map(|a| a.len()).unwrap_or(1);
@@ -641,6 +647,11 @@ impl IntlRadar {
         self.trim_imgs();
         Ok((b, ct))
     }
+}
+
+/// 0.8.3: `rv_<id>`: a RainViewer single-site radar (listed on demand, not in the full list).
+fn is_rv(id: &str) -> bool {
+    id.strip_prefix(crate::rainviewer::PREFIX).map(crate::rainviewer::valid_id).unwrap_or(false)
 }
 
 /// `eccc_<site>` → the Canadian radar entry.

@@ -15,6 +15,7 @@ import { rasterValue } from "../grid/raster";
 import { attachGibs, rebuildGibs } from "../grid/gibs";
 /* ---------- intl & forecast tools ---------- */
 import { attachIntl, rebuildIntl } from "../intl/radar";
+import "../intl/rainviewer"; // 0.8.3: RainViewer radar sites
 import { attachParticles, type ParticleLayer } from "../grid/particles";
 import { siteRegion, siteShown, type AnySite } from "../intl/sites";
 import { attachSoundingMap } from "../sounding/maplayer";
