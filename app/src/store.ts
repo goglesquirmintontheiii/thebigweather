@@ -18,7 +18,7 @@ export interface SavedPoint {
   notify: boolean;
 }
 
-export type Basemap = "dark" | "light" | "road" | "darkroad" | "terrain" | "satellite" | "google" | "offline" | `custom:${string}`;
+export type Basemap = "dark" | "light" | "road" | "darkroad" | "terrain" | "satellite" | "google" | "offline" | `custom:${string}` | "faa_tac" | "faa_sec" | "faa_ifrlo" | "faa_ifrhi"; // 0.8.2: FAA charts
 
 /** A user-supplied raster tile source ({s} subdomains, {x} {y} {z}). */
 export interface CustomBasemap {
@@ -426,7 +426,7 @@ export interface Wf6Settings {
   quiet: { on: boolean; from: string; to: string };
   briefing: { voice: string; rate: number; times: string[]; point: string; /* radio/dash 0.8: TTS engine + offline voice */ engine?: "auto" | "system" | "offline"; offlineVoice?: string };
   kiosk: { workspaces: string[]; seconds: number; resume: number };
-  offline: { regions: OfflineRegion[]; prefer: boolean };
+  offline: { regions: OfflineRegion[]; prefer: boolean; /* 0.8.2: polygon areas per basemap */ areas?: import("./offline/cover").OfflineArea[] };
   plugins: PluginCfg[];
 }
 export const WF6_DEFAULTS: Wf6Settings = {

@@ -290,6 +290,13 @@ const LSR_LETTER: ExpressionSpecification = [
   "",
 ];
 
+/* 0.8.2 aviation: VFR-chart airspace colors (a touch brighter so they read on dark maps) */
+const AIRSPACE_BLUE = "#3d7bf2";
+const AIRSPACE_MAGENTA = "#c8379a";
+/** label halo: white on light maps / charts (as on VFR charts), dark otherwise */
+const airHalo = () => (["light", "road", "terrain"].includes(settings.value.basemap) || settings.value.basemap.startsWith("faa_") ? "#fff" : "rgba(5,7,10,.9)");
+const AIRSPACE_KIND: Record<string, string> = { B: "Class B", C: "Class C", D: "Class D", E: "Class E (surface)", MOA: "Military operations area", R: "Restricted area", P: "Prohibited area", W: "Warning area", A: "Alert area", DA: "Danger area" };
+
 const HAZARD_COLOR: ExpressionSpecification = [
   "case",
   ["in", "CONV", ["upcase", ["to-string", ["get", "hazard"]]]], "#ef4444",
@@ -834,6 +841,120 @@ export const OVERLAYS: OverlayDef[] = [
     }),
     note: "Aircraft within 250 nm of the map center (zoom in to 5+). Click a plane for its track. Data: airplanes.live / adsb.lol.",
   },
+  /* ---------- 0.8.2 aviation: airspace + airspace advisories ---------- */
+  {
+    id: "airspace",
+    name: "Airspace categories",
+    group: "Aviation",
+    refresh: 86400,
+    view: "bbox",
+    options: [
+      { key: "cls", label: "Class B/C/D/E", choices: [["on", "Show"], ["off", "Hide"]], def: "on" },
+      { key: "sua", label: "Special use", choices: [["on", "Show"], ["off", "Hide"]], def: "on" },
+    ],
+    style: { opacity: 0.9, size: 1, labels: true },
+    layers: (s, st) => {
+      const SUA: ExpressionSpecification = ["in", ["get", "k"], ["literal", ["MOA", "R", "P", "W", "A", "DA"]]];
+      const col: ExpressionSpecification = ["match", ["get", "k"], ["B", "D", "R", "P", "W", "DA"], AIRSPACE_BLUE, AIRSPACE_MAGENTA];
+      const lw = (w: number) => w * st.size;
+      const out: LayerSpecification[] = [
+        // faint fill so the inside of an area can be clicked
+        { id: `${s}-fill`, type: "fill", source: s, paint: { "fill-color": col, "fill-opacity": ["match", ["get", "k"], "P", 0.12 * st.opacity, 0.035 * st.opacity] } },
+        // special use: wide translucent band + thin edge (the chart's hatched border)
+        { id: `${s}-band`, type: "line", source: s, filter: SUA, paint: { "line-color": col, "line-width": lw(5), "line-opacity": 0.22 * st.opacity, "line-blur": 1 } },
+        { id: `${s}-sua`, type: "line", source: s, filter: SUA, paint: { "line-color": col, "line-width": lw(1), "line-opacity": st.opacity } },
+        // Class B / C solid, Class D / E dashed (as on VFR charts)
+        { id: `${s}-solid`, type: "line", source: s, filter: ["in", ["get", "k"], ["literal", ["B", "C"]]], paint: { "line-color": col, "line-width": ["interpolate", ["linear"], ["zoom"], 5, lw(1.4), 10, lw(2.6)], "line-opacity": st.opacity } },
+        { id: `${s}-dash`, type: "line", source: s, filter: ["in", ["get", "k"], ["literal", ["D", "E"]]], paint: { "line-color": col, "line-width": lw(1.6), "line-opacity": st.opacity, "line-dasharray": [3, 2] } },
+      ];
+      if (st.labels)
+        out.push(
+          {
+            id: `${s}-label`,
+            type: "symbol",
+            source: s,
+            filter: ["in", ["get", "k"], ["literal", ["B", "C", "D"]]],
+            minzoom: 6,
+            layout: { "text-field": ["get", "lbl"], "text-font": font, "text-size": 11, "text-line-height": 1.05, "symbol-placement": "point", "text-padding": 4 },
+            paint: { "text-color": col, "text-halo-color": airHalo(), "text-halo-width": 1.6 },
+          },
+          {
+            id: `${s}-sua-label`,
+            type: "symbol",
+            source: s,
+            filter: SUA,
+            minzoom: 6,
+            layout: { "text-field": ["step", ["zoom"], ["get", "name"], 8, ["get", "lbl"]], "text-font": font, "text-size": 10, "symbol-placement": "point", "text-padding": 6 },
+            paint: { "text-color": col, "text-halo-color": airHalo(), "text-halo-width": 1.5 },
+          },
+        );
+      return out;
+    },
+    click: (p) => {
+      const kind = AIRSPACE_KIND[p.k] ?? p.k;
+      const rows: [string, string][] = [
+        ["Floor", p.lo ?? "—"],
+        ["Ceiling", p.hi ?? "—"],
+      ];
+      if (p.sub) rows.unshift(["Type", p.sub]);
+      if (p.sector) rows.push(["Sector", p.sector]);
+      if (p.times || p.times_rmk) rows.push(["Times", [p.times === "H24" ? "Continuous (H24)" : p.times, p.times_rmk].filter(Boolean).join(" · ")]);
+      if (p.agency) rows.push(["Controlling agency", p.agency]);
+      if (p.city || p.state) rows.push(["Location", [p.city, p.state].filter(Boolean).join(", ")]);
+      return { title: p.name || kind, sub: [kind, p.ident].filter(Boolean).join(" · "), rows, text: p.rmk, color: ["B", "D", "R", "P", "W", "DA"].includes(p.k) ? AIRSPACE_BLUE : AIRSPACE_MAGENTA };
+    },
+    note: "US Class B, C, D and surface Class E airspace, plus special-use airspace (MOA, restricted, prohibited, warning, alert). Class C appears from zoom 5, D/E from zoom 7. Labels: ceiling over floor in hundreds of feet; [ceiling] for Class D. FAA AIS open data (updated every 56 days). Not for navigation.",
+  },
+  {
+    id: "airadv",
+    name: "Airspace advisories",
+    group: "Aviation",
+    refresh: 300,
+    options: [
+      { key: "tfr", label: "TFRs", choices: [["on", "Show"], ["off", "Hide"]], def: "on" },
+      { key: "cwa", label: "CWAs", choices: [["on", "Show"], ["off", "Hide"]], def: "on" },
+    ],
+    style: { opacity: 0.85, size: 1.8, labels: true },
+    layers: (s, st) => {
+      const col: ExpressionSpecification = ["case", ["==", ["get", "k"], "cwa"], "#f59e0b", ["match", ["upcase", ["to-string", ["get", "type"]]], ["SECURITY", "VIP"], "#ef4444", ["SPACE OPERATIONS"], "#a855f7", ["HAZARDS"], "#f97316", "#fb7185"]];
+      const out: LayerSpecification[] = [
+        { id: `${s}-fill`, type: "fill", source: s, filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": col, "fill-opacity": 0.14 * st.opacity } },
+        { id: `${s}-line`, type: "line", source: s, filter: ["==", ["get", "k"], "tfr"], paint: { "line-color": col, "line-width": st.size, "line-opacity": st.opacity } },
+        { id: `${s}-cwa`, type: "line", source: s, filter: ["==", ["get", "k"], "cwa"], paint: { "line-color": col, "line-width": st.size, "line-opacity": st.opacity, "line-dasharray": [4, 2] } },
+      ];
+      if (st.labels)
+        out.push({
+          id: `${s}-label`,
+          type: "symbol",
+          source: s,
+          minzoom: 5,
+          layout: { "text-field": ["case", ["==", ["get", "k"], "cwa"], ["concat", "CWA ", ["get", "cwsu"], " ", ["to-string", ["get", "seriesId"]], "\n", ["to-string", ["get", "hazard"]]], ["concat", "TFR ", ["get", "notam"]]], "text-font": font, "text-size": 10, "symbol-placement": "point" },
+          paint: halo,
+        });
+      return out;
+    },
+    click: (p) => {
+      if (p.k === "cwa") {
+        const alt = p.base != null || p.top != null ? `${p.base ? `${Number(p.base).toLocaleString()} ft` : "SFC"} – ${p.top ? `${Number(p.top).toLocaleString()} ft` : "—"}` : "—";
+        return { title: `CWA ${p.cwsu ?? ""} ${p.seriesId ?? ""} · ${p.hazard ?? ""}`, sub: [p.name, p.qualifier].filter(Boolean).join(" · "), rows: [["Valid", when(p.validTimeFrom)], ["Until", when(p.validTimeTo)], ["Altitude", alt]], text: p.cwaText, color: "#f59e0b" };
+      }
+      return {
+        title: `TFR ${p.notam ?? ""} · ${String(p.type ?? "").length > 4 ? String(p.type).toLowerCase().replace(/^./, (c: string) => c.toUpperCase()) : p.type ?? ""}`,
+        sub: p.title,
+        rows: [
+          ["Effective", p.from ? when(p.from) : "—"],
+          ["Until", p.to ? when(p.to) : p.from ? "Further notice" : "—"],
+          ["Altitude", p.alt || "—"],
+          ["Facility", [p.facility, p.state].filter(Boolean).join(" · ") || "—"],
+        ],
+        text: p.text,
+        link: p.url ? ["FAA TFR page", p.url] : undefined,
+        color: "#ef4444",
+      };
+    },
+    note: "Temporary flight restrictions (FAA tfr.faa.gov) and Center Weather Advisories (aviationweather.gov). SIGMETs (US + international) and G-AIRMETs have their own layers. Not for navigation — check NOTAMs before flight.",
+  },
+  /* ---------- end 0.8.2 ---------- */
 
   // ---------------- Cameras ----------------
   {

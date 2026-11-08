@@ -1,7 +1,9 @@
 import { settings, update, uid, toast, type CustomBasemap } from "../../store";
 import { BASEMAPS, customTiles, isDarkBasemap } from "../../map/basemaps";
 import { useState } from "preact/hooks";
-import { Plus, Trash2, Pencil, Check } from "lucide-preact";
+import { Plus, Trash2, Pencil, Check, CloudOff, HardDriveDownload } from "lucide-preact";
+import { openOfflineAreas } from "../OfflineAreas"; // 0.8.2
+import { downloadPolicy, areasOf } from "../../offline/areas"; // 0.8.2
 import { Toggle } from "./RadarPanel";
 
 /** Try one tile so a broken URL shows an error instead of an empty map. */
@@ -87,7 +89,12 @@ function CustomBasemaps() {
           <CustomForm key={c.id} init={c} done={() => setEdit(null)} />
         ) : (
           <div key={c.id} class={`custom-bm-row ${s.basemap === `custom:${c.id}` ? "on" : ""}`}>
-            <button class="custom-bm-name" onClick={() => update((x) => (x.basemap = `custom:${c.id}`))} title={customTiles(c)[0]}>
+            <button
+              class="custom-bm-name"
+              onClick={() => update((x) => (x.basemap = `custom:${c.id}`))}
+              onContextMenu={(e) => (e.preventDefault(), openOfflineAreas(`custom:${c.id}`))} // 0.8.2
+              title={`${customTiles(c)[0]}\nRight-click: download an area for offline use`}
+            >
               {c.name}
             </button>
             <span class="muted small">
@@ -122,7 +129,32 @@ const SWATCH: Record<string, string> = {
   satellite: "linear-gradient(135deg,#1d3b2a,#4a5a3a 50%,#2a3f5a)",
   google: "linear-gradient(135deg,#21402e,#56663f 50%,#2d4766)",
   offline: "linear-gradient(135deg,#0b1016,#151b23)",
+  /* 0.8.2: FAA charts */
+  faa_tac: "linear-gradient(135deg,#f3eedc,#c8379a 45%,#3d7bf2 60%,#f3eedc)",
+  faa_sec: "linear-gradient(135deg,#efe9d2,#b7c9a0 50%,#3d7bf2)",
+  faa_ifrlo: "linear-gradient(135deg,#ffffff,#2f8f7f 50%,#ffffff)",
+  faa_ifrhi: "linear-gradient(135deg,#ffffff,#3b6aa8 50%,#ffffff)",
 };
+
+/** 0.8.2: a basemap button's offline mark (saved areas, or why it can't be saved) */
+function OffMark({ id }: { id: string }) {
+  const pol = downloadPolicy(id);
+  const n = areasOf(id).length;
+  if (n)
+    return (
+      <span class="bm-off" title={`${n} offline area${n > 1 ? "s" : ""} — right-click to manage`}>
+        <HardDriveDownload size={11} />
+        {n}
+      </span>
+    );
+  if (!pol.ok && id !== "offline")
+    return (
+      <span class="bm-off no" title={`Can't download: ${pol.reason}`}>
+        <CloudOff size={11} />
+      </span>
+    );
+  return null;
+}
 
 export function MapPanel() {
   const s = settings.value;
@@ -134,12 +166,21 @@ export function MapPanel() {
         <label class="lbl">Basemap</label>
         <div class="basemaps">
           {BASEMAPS.map((b) => (
-            <button key={b.id} class={`bm ${s.basemap === b.id ? "on" : ""}`} onClick={() => update((x) => (x.basemap = b.id))}>
+            <button
+              key={b.id}
+              class={`bm ${s.basemap === b.id ? "on" : ""}`}
+              onClick={() => update((x) => (x.basemap = b.id))}
+              // 0.8.2: right-click → offline areas of this basemap
+              onContextMenu={(e) => (e.preventDefault(), openOfflineAreas(b.id))}
+              title={downloadPolicy(b.id).ok ? "Right-click: download an area for offline use" : `Can't download: ${downloadPolicy(b.id).reason}`}
+            >
               <span class="sw" style={{ background: SWATCH[b.id] }} />
               <span>{b.name}</span>
+              <OffMark id={b.id} />
             </button>
           ))}
         </div>
+        <div class="muted small bm-hint">Right-click a basemap to download an area for offline use.</div>
         {["dark", "light", "road"].includes(s.basemap) && (
           <div class="row">
             <span>Map tiles</span>
