@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "name": "Stormiq plugins",
+  "plugins": [
+    {
+      "path": "hail-legend",
+      "id": "hail-legend",
+      "name": "Hail size quick legend",
+      "version": "1.0.0",
+      "summary": "Hail sizes as everyday objects, plus the hail estimates of storms in view.",
+      "sha256": {
+        "plugin.json": "c164a065234ac93e5dd4db7da7d7e76e8d49df28348a4c20b2d833e462d2bcb5",
+        "main.js": "770c393fced3caa9b4439ec53dfbdb339ac349a6bdd1776827b52409e1a82b93"
+      }
+    },
+    {
+      "path": "storm-eta-chime",
+      "id": "storm-eta-chime",
+      "name": "Storm ETA chime",
+      "version": "1.0.0",
+      "summary": "Plays a chime when a tracked storm is due at one of your saved points.",
+      "sha256": {
+        "plugin.json": "74f6a26c71fa293585aa96e54a8a99626cd610af4690a78cc0a51bc90442832d",
+        "main.js": "d62144d30b7ae08b3607367a644b0822119d3fc4783cc1f1d2f2c6e21cc3ea87"
+      }
+    }
+  ]
+}

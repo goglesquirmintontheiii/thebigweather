@@ -1,0 +1,18 @@
+{
+  "id": "storm-eta-chime",
+  "name": "Storm ETA chime",
+  "version": "1.0.0",
+  "author": "Stormiq",
+  "summary": "Plays a chime when a tracked storm is due at one of your saved points.",
+  "description": "README.md",
+  "icon": "icon.png",
+  "banner": "banner.png",
+  "screenshots": [
+    { "src": "screenshots/panel.png", "caption": "The panel lists the next storm for each saved point." },
+    { "src": "screenshots/toast.png", "caption": "A chime and a toast when a storm is close." }
+  ],
+  "entry": "main.js",
+  "permissions": ["server", "settings", "audio", "panel"],
+  "minAppVersion": "0.6.0",
+  "tags": ["alerts", "storms", "sound"]
+}

@@ -1,0 +1,125 @@
+/* 0.8.2 dev-only feedback capture */
+.devcap-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  cursor: crosshair;
+  user-select: none;
+}
+.devcap-busy {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  cursor: progress;
+}
+.devcap-hint {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: rgba(10, 14, 20, 0.92);
+  border: 1px solid #f472b6;
+  color: #fce7f3;
+  font-size: 12.5px;
+  pointer-events: none;
+}
+.devcap-box {
+  position: fixed;
+  outline: 2px solid #f472b6;
+  outline-offset: 1px;
+  background: rgba(244, 114, 182, 0.12);
+  pointer-events: none;
+  border-radius: 3px;
+}
+.devcap-tip {
+  position: fixed;
+  max-width: 260px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: #f472b6;
+  color: #1a0611;
+  font: 600 11.5px/18px system-ui, sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.devcap-area {
+  position: fixed;
+  border: 2px dashed #f472b6;
+  background: rgba(244, 114, 182, 0.1);
+  pointer-events: none;
+}
+.devcap-area span {
+  position: absolute;
+  right: 0;
+  bottom: -20px;
+  font: 600 11px/16px system-ui, sans-serif;
+  color: #fce7f3;
+  background: rgba(10, 14, 20, 0.85);
+  padding: 0 5px;
+  border-radius: 4px;
+}
+.devcap-back {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.devcap-dlg {
+  width: min(420px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(14, 18, 24, 0.98);
+  border: 1px solid rgba(244, 114, 182, 0.55);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  color: var(--text);
+}
+.devcap-dlg-h {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.devcap-dlg-h .small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.devcap-prev {
+  max-width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+  align-self: center;
+  border-radius: 6px;
+  border: 1px solid var(--line-2);
+}
+.devcap-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.devcap-dlg textarea {
+  width: 100%;
+  resize: vertical;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+}
+.devcap-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.devcap-btns .muted {
+  flex: 1;
+}

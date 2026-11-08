@@ -1,0 +1,8 @@
+# plugin files are checksummed in registry.json: keep the bytes identical on every OS
+*.js text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.png binary
+*.jpg binary
+*.webp binary

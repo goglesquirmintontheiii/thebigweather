@@ -418,6 +418,22 @@ ipcMain.handle("capture-buf", async (_e, rect) => {
   return img.toPNG();
 });
 // ---------- end workflow ----------
+// 0.8.2: TEMPORARY dev-only feedback capture (src/devcapture): a downscaled PNG of part of the
+// sender's window (longer side ≤ 1280 px; the renderer re-encodes it as WebP) and clipboard text
+ipcMain.handle("devcap-shot", async (e, rect) => {
+  const wc = e.sender;
+  if (!wc || wc.isDestroyed() || !rect || !(rect.width > 0) || !(rect.height > 0)) return null;
+  let img = await wc.capturePage({ x: Math.max(0, rect.x | 0), y: Math.max(0, rect.y | 0), width: rect.width | 0, height: rect.height | 0 });
+  const sz = img.getSize();
+  const m = Math.max(sz.width, sz.height);
+  if (m > 1280) img = img.resize({ width: Math.round((sz.width * 1280) / m), height: Math.round((sz.height * 1280) / m), quality: "good" });
+  return img.toPNG();
+});
+ipcMain.handle("devcap-copy", (_e, text) => {
+  require("electron").clipboard.writeText(String(text || ""));
+  return true;
+});
+// ---------- end 0.8.2 ----------
 // ---------- shake/stats/server 0.6: client (app computer) stats ----------
 const tbwOs = require("os");
 let tbwLastCpu = null;

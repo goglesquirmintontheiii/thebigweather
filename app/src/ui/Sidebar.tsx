@@ -48,6 +48,9 @@ import { LayoutDashboard, ChartGantt } from "lucide-preact";
 import { dashOpen } from "./Dashboard";
 import { timelineOpen } from "./AlertTimeline";
 /* end radio/dash 0.8 */
+import { Puzzle } from "lucide-preact"; // 0.8.2
+import { PluginsPanel } from "../plugins/PluginsPanel"; // 0.8.2
+import { updates as pluginUpdates } from "../plugins/market"; // 0.8.2
 
 const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "radar", icon: Radar, label: "Radar" },
@@ -66,6 +69,7 @@ const MORE: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "record", icon: CircleDot, label: "Recordings" },
   { id: "files", icon: FolderOpen, label: "Files & backup" },
   { id: "workspaces", icon: Bookmark, label: "Workspaces" }, // workflow
+  { id: "plugins", icon: Puzzle, label: "Plugins" }, // 0.8.2
   // route / rules / widgets / placefiles: in the toolbar "…" menu (keeps the rail short)
 ];
 
@@ -108,7 +112,9 @@ const RAIL: RailEntry[] = [
         ? () => (nowPlaying.value || players.value.length > 0) && <span class="dot online" />
         : id === "record"
           ? () => recs.value.some((r) => r.status === "recording") && <span class="dot rec" />
-          : undefined,
+          : id === "plugins"
+            ? () => pluginUpdates.value.length > 0 && <span class="dot online" title="Plugin updates" /> // 0.8.2
+            : undefined,
   })),
   { id: "hist", icon: History, label: "Historical Storms", on: () => histStormsOpen.value, click: () => (histStormsOpen.value = !histStormsOpen.value) }, // history 0.6
   { id: "ml", icon: BrainCircuit, label: "Detection models", on: () => mlOpen.value, click: () => (mlOpen.value = !mlOpen.value), extra: () => activeJobs.value.length > 0 && <span class="dot online" title="Training in progress" /> }, // detection models
@@ -238,10 +244,10 @@ function RailMenu({ order, move }: { order: string[]; move: (id: string, d: numb
 }
 /* ---------- end 0.8.1 ---------- */
 
-const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */, route: "Route weather", rules: "Notification rules", widgets: "Desktop widgets" /* workflow 0.6 */, placefiles: "Placefiles" /* radar 0.6 */ };
+const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */, route: "Route weather", rules: "Notification rules", widgets: "Desktop widgets" /* workflow 0.6 */, placefiles: "Placefiles" /* radar 0.6 */, plugins: "Plugins" /* 0.8.2 */ };
 
 // share viewers: no owner-only panels (the server refuses their writes anyway)
-const OWNER_ONLY = new Set(["settings", "record", "files", "workspaces", "rules", "widgets", "placefiles"]);
+const OWNER_ONLY = new Set(["settings", "record", "files", "workspaces", "rules", "widgets", "placefiles", "plugins" /* 0.8.2 */]);
 
 export function SidePanel() {
   const p = openPanel.value;
@@ -272,6 +278,7 @@ export function SidePanel() {
         {p === "route" && <RoutePanel /> /* workflow 0.6 */}
         {p === "rules" && <RulesPanel /> /* workflow 0.6 */}
         {p === "widgets" && <WidgetsPanel /> /* workflow 0.6 */}
+        {p === "plugins" && <PluginsPanel /> /* 0.8.2 */}
       </div>
     </aside>
   );

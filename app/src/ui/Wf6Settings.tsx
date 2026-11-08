@@ -3,14 +3,14 @@
 
 import { useEffect, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
-import { Download, Trash2, RefreshCw, Square, MapPin, FolderOpen, Link, ClipboardPaste, Upload, AlertTriangle, Crop } from "lucide-preact";
-import { settings, update, toast } from "../store";
+import { Download, Trash2, RefreshCw, Square, MapPin, FolderOpen, Link, ClipboardPaste, Upload, AlertTriangle, Crop, Puzzle /* 0.8.2 */ } from "lucide-preact";
+import { settings, update, toast, openPanel } from "../store"; // 0.8.2: openPanel
 import { Toggle } from "./panels/RadarPanel";
 import { mapRef, mapClickHooks } from "../map/mapview";
 import { setGeo, removeGeo } from "../map/wf6map";
 import { countTiles, currentTemplates, estimateBytes, downloadRegion, deleteRegion, dlProgress, cancelDownload, storeUsage } from "../offline/tiles";
 import { fmtBytes, fmtTime } from "../util";
-import { pluginStatus, addPlugin, removePlugin, reloadPlugin, pluginFolder, getCode, setCode } from "../plugins/host";
+import { getCode, setCode } from "../plugins/host"; // 0.8.2: plugin UI moved to plugins/PluginsPanel.tsx
 import { enterKiosk } from "../kiosk";
 
 // ---------- look ----------
@@ -223,95 +223,17 @@ export function OfflineSection() {
 }
 
 // ---------- plugins ----------
+// 0.8.2: plugins moved to their own rail tab (src/plugins/PluginsPanel.tsx); this points there
 export function PluginsSection() {
-  const list = settings.value.wf6.plugins;
-  const st = pluginStatus.value;
-  const [url, setUrl] = useState("");
-  const [paste, setPaste] = useState<string | null>(null);
-  const [folder, setFolder] = useState<{ dir: string; files: { name: string; code: string }[] } | null>(null);
-  useEffect(() => {
-    pluginFolder().then(setFolder);
-  }, []);
-  const fromFile = () => {
-    const i = document.createElement("input");
-    i.type = "file";
-    i.accept = ".js,.mjs,text/javascript";
-    i.onchange = async () => {
-      const f = i.files?.[0];
-      if (f) await addPlugin(f.name, `file:${f.name}`, await f.text());
-    };
-    i.click();
-  };
-  const fromUrl = async () => {
-    try {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      await addPlugin(url.split("/").pop() || "plugin", `url:${url}`, await r.text());
-      setUrl("");
-    } catch (e: any) {
-      toast(`Couldn't load: ${e.message}`, "error");
-    }
-  };
   return (
     <section>
       <label class="lbl">Plugins</label>
-      <div class="plg-warn">
-        <AlertTriangle size={14} />
-        <span>Plugins are JavaScript that runs inside the app with full access to it, your settings and the server. Only add code you wrote or trust.</span>
-      </div>
       <div class="row">
-        <button class="btn sm ghost" onClick={fromFile}>
-          <Upload size={13} /> Load .js file
-        </button>
-        <button class="btn sm ghost" onClick={() => setPaste(paste === null ? "" : null)}>
-          <ClipboardPaste size={13} /> Paste code
+        <span class="muted small">Plugins and the marketplace are in the Plugins tab.</span>
+        <button class="btn sm ghost" onClick={() => (openPanel.value = "plugins")}>
+          <Puzzle size={13} /> Open Plugins
         </button>
       </div>
-      <div class="row">
-        <input placeholder="https://…/plugin.js" value={url} onInput={(e) => setUrl((e.target as HTMLInputElement).value)} />
-        <button class="btn sm ghost" disabled={!/^https?:\/\//.test(url)} onClick={fromUrl}>
-          <Link size={13} /> Add
-        </button>
-      </div>
-      {paste !== null && (
-        <>
-          <textarea class="plg-code" rows={7} placeholder={"tbw.toast('hello');\n// or: export default function (tbw) { … }"} value={paste} onInput={(e) => setPaste((e.target as HTMLTextAreaElement).value)} />
-          <button class="btn sm" disabled={!paste.trim()} onClick={() => addPlugin(`Pasted ${list.length + 1}`, "paste", paste!).then(() => setPaste(null))}>
-            Add plugin
-          </button>
-        </>
-      )}
-      {folder && (
-        <div class="muted small">
-          <FolderOpen size={12} /> Plugin folder: {folder.dir}
-          {folder.files
-            .filter((f) => !list.some((p) => p.src === `folder:${f.name}`))
-            .map((f) => (
-              <button key={f.name} class="chip" onClick={() => addPlugin(f.name, `folder:${f.name}`, f.code)}>
-                + {f.name}
-              </button>
-            ))}
-        </div>
-      )}
-      {list.map((p) => (
-        <div key={p.id} class={`plg-row ${st[p.id]?.error ? "err" : st[p.id]?.running ? "run" : ""}`}>
-          <span>
-            <b>{p.name}</b>
-            <small>{st[p.id]?.error ? `Error: ${st[p.id].error}` : st[p.id]?.running ? "Running" : p.on ? "Starting…" : "Disabled"} · {p.src.replace(/^(\w+):/, "$1 · ")}</small>
-          </span>
-          <label class="toggle mini" title="Enabled">
-            <input type="checkbox" checked={p.on} onChange={(e) => update((s) => (s.wf6.plugins.find((x) => x.id === p.id)!.on = (e.target as HTMLInputElement).checked))} />
-            <i />
-          </label>
-          <button class="icon-btn" title="Reload" onClick={() => reloadPlugin(p).catch((e) => toast(e.message, "error"))}>
-            <RefreshCw size={13} />
-          </button>
-          <button class="icon-btn danger" title="Remove" onClick={() => removePlugin(p.id)}>
-            <Trash2 size={13} />
-          </button>
-        </div>
-      ))}
-      <div class="muted small">API: tbw.map, addGeoJSONLayer, addSource, addPanel, onFrame, onAlert, on, toast, fetchServer, settings — see docs/PLUGINS.md.</div>
     </section>
   );
 }

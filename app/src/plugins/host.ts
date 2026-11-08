@@ -55,7 +55,11 @@ function makeApi(cfg: PluginCfg, run: Running) {
   };
   return Object.freeze({
     version: API_VERSION,
-    plugin: { id: cfg.id, name: cfg.name },
+    plugin: { id: cfg.id, name: cfg.name, version: cfg.market?.version, base: cfg.market?.base }, // 0.8.2: marketplace plugins know their folder URL
+    /** 0.8.2: URL of a file in a marketplace plugin's folder (sounds, images …), or null */
+    asset(rel: string) {
+      return cfg.market ? new URL(String(rel).replace(/^\/+/, ""), cfg.market.base).href : null;
+    },
     get map() {
       return map();
     },
@@ -218,6 +222,11 @@ export async function reloadPlugin(cfg: PluginCfg) {
   }
   if (cfg.on) await start(cfg);
 }
+/** 0.8.2: run a plugin's stored code again (after a marketplace update) */
+export async function restartPlugin(cfg: PluginCfg) {
+  failed.delete(cfg.id);
+  if (cfg.on) await start(cfg);
+}
 export async function removePlugin(id: string) {
   stop(id);
   await idbDel(codeKey(id));
@@ -243,4 +252,7 @@ export function startPlugins() {
     }),
   );
   (window as any).__tbwPlugins = { running, start, stop };
+  // 0.8.2: marketplace plugins installed → look for updates once, a little after start (rail dot)
+  if (settings.peek().wf6.plugins.some((p) => p.market))
+    setTimeout(() => import("./market").then((m) => (m.loadInstalledMeta(), m.refreshMarket())).catch(() => {}), 20_000);
 }
