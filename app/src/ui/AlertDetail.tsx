@@ -4,17 +4,21 @@ import { details, type DetailItem } from "../store";
 import { alerts } from "../alerts";
 import { fmtTime } from "../util";
 import { zoomToGeometry, alertTypeMenu } from "./panels/AlertsPanel"; // 0.8.2: alertTypeMenu
-import { X, Maximize2, ChevronLeft, ChevronRight, ExternalLink } from "lucide-preact";
-import { useEffect } from "preact/hooks";
+import { Maximize2, ChevronLeft, ChevronRight, ExternalLink } from "lucide-preact";
+import { useEffect, useLayoutEffect } from "preact/hooks";
+import { WinButtons, IN_OS_WIN, POP_WIN, isMin, isMax, minimize, unminimize, toggleMax, forget, canPop, popWindow, onBarDbl } from "./winframe"; // 0.8.3
 import { History } from "lucide-preact"; // history 0.6
 import { beforeAfter } from "../histsearch"; // history 0.6
 import { useState } from "preact/hooks"; // p7
 import { ReplayPopover } from "./HistStorms"; // p7: replay window popover
 
-function AlertBody({ id, nav }: { id: string; nav: any }) {
+/** 0.8.3: the info panel's window frame (title bar with the window buttons) */
+type Frame = { cls: string; bar: any };
+
+function AlertBody({ id, nav, fr }: { id: string; nav: any; fr: Frame }) {
   const a = alerts.value.get(id);
   const [replay, setReplay] = useState(false); // p7 (before the early return: stable hook order)
-  if (!a) return <OvlBody p={{ title: "Alert expired", rows: [] }} nav={nav} />;
+  if (!a) return <OvlBody p={{ title: "Alert expired", rows: [] }} nav={nav} fr={fr} />;
   const p = a.properties;
   const fl = p.flags ?? {};
   const facts: [string, string][] = [];
@@ -25,7 +29,8 @@ function AlertBody({ id, nav }: { id: string; nav: any }) {
   if (fl.max_hail) facts.push(["Max hail", `${fl.max_hail} in`]);
   if (fl.max_wind) facts.push(["Max wind", fl.max_wind]);
   return (
-    <div class="alert-detail glass" style={{ "--c": p.color }}>
+    <div class={`alert-detail glass${fr.cls}`} style={{ "--c": p.color }}>
+      {fr.bar}
       {/* 0.8.2: right-click → layer options for this type */}
       <div
         class="ad-head"
@@ -50,9 +55,6 @@ function AlertBody({ id, nav }: { id: string; nav: any }) {
         {replay && <ReplayPopover a={a} onClose={() => setReplay(false)} />}
         <button class="icon-btn" title="Zoom to" onClick={() => zoomToGeometry(a.geometry)}>
           <Maximize2 size={15} />
-        </button>
-        <button class="icon-btn" title="Close (Esc)" onClick={() => (details.value = null)}>
-          <X size={16} />
         </button>
       </div>
       {facts.length > 0 && (
@@ -92,9 +94,10 @@ function AlertBody({ id, nav }: { id: string; nav: any }) {
   );
 }
 
-function OvlBody({ p, nav }: { p: any; nav: any }) {
+function OvlBody({ p, nav, fr }: { p: any; nav: any; fr: Frame }) {
   return (
-    <div class="alert-detail glass" style={{ "--c": p.color ?? "#94a3b8" }}>
+    <div class={`alert-detail glass${fr.cls}`} style={{ "--c": p.color ?? "#94a3b8" }}>
+      {fr.bar}
       <div class="ad-head">
         <span class="bar" />
         <div>
@@ -102,9 +105,6 @@ function OvlBody({ p, nav }: { p: any; nav: any }) {
           {p.sub && <div class="muted small">{p.sub}</div>}
           {nav}
         </div>
-        <button class="icon-btn" title="Close (Esc)" onClick={() => (details.value = null)}>
-          <X size={16} />
-        </button>
       </div>
       {p.rows?.length > 0 && (
         <div class="facts wide">
@@ -135,8 +135,12 @@ function label(it: DetailItem) {
   return it.p.title;
 }
 
+/** 0.8.3: window id of the info panel (it can pop out, minimize, maximize) */
+export const AD_ID = "a:detail";
+
 export function AlertDetail() {
   const d = details.value;
+  const os = IN_OS_WIN && POP_WIN === AD_ID;
   useEffect(() => {
     if (!d || d.items.length < 2) return;
     const key = (e: KeyboardEvent) => {
@@ -149,10 +153,30 @@ export function AlertDetail() {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [d?.items.length]);
+  // 0.8.3: a newly clicked alert brings a minimized panel back
+  useEffect(() => {
+    if (d && !os && isMin(AD_ID)) unminimize(AD_ID);
+  }, [d]);
+  useLayoutEffect(() => {
+    if (!d && !os) forget(AD_ID);
+  }, [!d]);
   if (!d || !d.items.length) return null;
   const i = Math.min(d.i, d.items.length - 1);
   const it = d.items[i];
   const n = d.items.length;
+  /* 0.8.3: window title bar (close · minimize · maximize · pop out), like every other window */
+  const close = () => (details.value = null);
+  const max = !os && isMax(AD_ID);
+  const zoom = () => toggleMax(AD_ID);
+  const fr: Frame = {
+    cls: `${!os && isMin(AD_ID) ? " wf-minimized" : ""}${max ? " wf-max" : ""}${os ? " wf-osframe" : ""}`,
+    bar: (
+      <div class="ad-wbar wf-bar" onDblClick={os ? undefined : (onBarDbl(zoom) as any)}>
+        <WinButtons os={os} onClose={close} onMin={() => minimize(AD_ID, label(it), undefined, close)} onZoom={zoom} zoomed={max} onPop={!os && canPop(AD_ID) ? () => popWindow(AD_ID) : undefined} />
+        <span class="ad-wtitle">{it.kind === "alert" ? "Alert" : "Details"}</span>
+      </div>
+    ),
+  };
   const nav =
     n > 1 ? (
       <div class="ad-nav" title={d.items.map((x, k) => `${k + 1}. ${label(x)}`).join("\n")}>
@@ -167,7 +191,7 @@ export function AlertDetail() {
         </button>
       </div>
     ) : null;
-  return it.kind === "alert" ? <AlertBody id={it.id} nav={nav} /> : <OvlBody p={it.p} nav={nav} />;
+  return it.kind === "alert" ? <AlertBody id={it.id} nav={nav} fr={fr} /> : <OvlBody p={it.p} nav={nav} fr={fr} />;
 }
 
 function step(dir: number) {

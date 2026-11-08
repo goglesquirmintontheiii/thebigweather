@@ -11,7 +11,7 @@ import { gridLayers, selectWeather, activeLabel, GIBS } from "../weather";
 import { SwipeDivider, swipeGeom, type SwipeMode } from "./CompareSwipe"; // data 0.6
 import { noLevel3 } from "../intl/sites";
 import { fmtTime } from "../util";
-import { AppWindow, Move, Clock, Layers, ExternalLink, SquarePlus, Pencil, Link2, Link2Off, ScanEye, RefreshCw } from "lucide-preact";
+import { ArrowDownLeft /* 0.8.3 */, AppWindow, Move, Clock, Layers, ExternalLink, SquarePlus, Pencil, Link2, Link2Off, ScanEye, RefreshCw } from "lucide-preact";
 import { popout, popoutSpec } from "../popout";
 import { mapRef } from "../map/mapview";
 import { myKind, myLink, peerList, setMyLink, setPeerLink, linkMap } from "../linkwin";
@@ -514,6 +514,10 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
             <LinkControls onLayers={(x, y) => setMenu({ x, y })} />
             <span class="lk8-icons">
               <MlToggle idx={idx} what="This window" />
+              {/* 0.8.3: back into the main window as a pane (or drag this window onto it) */}
+              <button class="lk8 pane-out" title="Dock back (or drag this window onto the main window)" aria-label="Dock back" onClick={() => window.dispatchEvent(new Event("tbw-dock-pane")) /* WinDrop.tsx */}>
+                <ArrowDownLeft size={11} />
+              </button>
             </span>
           </>
         ) : (
@@ -521,7 +525,7 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
             {!swipe && <LinkToggles lk={lk} set={(l) => setPaneLink(idx, l)} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
             {swipe && <LinkToggles lk={{ ...lk, pos: true }} set={(l) => setPaneLink(idx, { ...l, pos: true })} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
             <MlToggle idx={idx} what={`Pane ${idx + 1}`} />
-            <button class="lk8 pane-out" title="Pop this pane out into its own window" aria-label={`Pop out pane ${idx + 1}`} onClick={() => popOutPane(idx)}>
+            <button class="lk8 pane-out" title="Pop out" /* 0.8.3 */ aria-label={`Pop out pane ${idx + 1}`} onClick={() => popOutPane(idx)}>
               <ExternalLink size={11} />
             </button>
           </span>
