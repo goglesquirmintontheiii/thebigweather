@@ -35,7 +35,7 @@ function AlertText({ p }: { p: any }) {
     setBusy(true);
     setErr("");
     try {
-      const r: TrRes = await api.send("POST", "/api/alerts/translate", { parts: [p.areaDesc ?? "", body, p.instruction ?? ""], from: lang === "auto" ? "" : lang, engine });
+      const r: TrRes = await api.send("POST", "/api/alerts/translate", { parts: [p.areaDesc ?? "", body, p.instruction ?? "", p.event ?? ""], from: lang === "auto" ? "" : lang, engine });
       trCache.set(ck, r);
       setRes(r);
       setOn(true);
@@ -48,6 +48,7 @@ function AlertText({ p }: { p: any }) {
   const t = on && res?.parts ? res.parts : null;
   return (
     <>
+      {t?.[3] && t[3] !== p.event && <p class="hl">{t[3]}</p>}
       <p class="area">{t?.[0] || p.areaDesc}</p>
       {lang && (
         <div class="ad-tr">

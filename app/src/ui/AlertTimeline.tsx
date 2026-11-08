@@ -439,7 +439,7 @@ function Body() {
                       <button key={it.key} class={`atl-pt ${sel?.key === it.key ? "sel" : ""}`} style={{ left: `${x0 - 5}px`, top: `${top + 3}px`, background: it.color }} title={`${it.title} · ${new Date(it.t0).toLocaleString()}`} onClick={() => setSel(it)} />
                     ) : (
                       <button key={it.key} class={`atl-bar ${sel?.key === it.key ? "sel" : ""} ${it.src === "live" && it.t1 > now ? "active" : ""}`} style={{ left: `${x0}px`, width: `${w}px`, top: `${top}px`, background: it.color }} title={`${it.title}${it.sub ? ` · ${it.sub}` : ""}`} onClick={() => setSel(it)}>
-                        {w > 60 && <span>{it.sub && it.type === it.title ? it.sub : it.title}</span>}
+                        {w > 60 && <span>{it.type === it.title ? it.props.areaDesc || it.sub || it.title : it.title}</span>}
                       </button>
                     );
                   })}

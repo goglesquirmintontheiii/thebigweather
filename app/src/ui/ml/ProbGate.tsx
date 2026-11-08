@@ -86,7 +86,7 @@ function LtgLegend() {
   const fc = ovlData(LTG);
   const ages: number[] = (fc?.features ?? []).map((f: any) => Math.max(0, Math.min(1, (+f.properties?.age || 0) / span)));
   const m = span / 60;
-  const fmt = (v: number) => (v <= 0.001 ? "now" : `${Math.round(v * m * 10) / 10} min`);
+  const fmt = (v: number) => (v <= 0.001 ? "now" : `${m >= 10 ? Math.round(v * m) : Math.round(v * m * 10) / 10}m`);
   return <GateBar layer={LTG} title="Lightning · age" probs={ages} unit="flashes" grad={LTG_GRAD} fmt={fmt} ticks={ltgTicks(span)} what="the flash ages" tips={["Hide newer flashes", "Hide older flashes"]} />;
 }
 
