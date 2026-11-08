@@ -2,15 +2,22 @@
 // the point, nearby storms with ETA, a 12-hour mini meteogram, a radar thumbnail (newest MRMS
 // composite rendered around the point, with county/state lines, warnings and storm tracks), air
 // quality and pollen, plus a summary card to save as PNG, copy, or print.
+// 0.8.2: the cards are widgets on a grid: pencil → drag to move, resize, add/remove, per-widget point
+// and options, rename, more dashboards (settings.dashboards; layout maths in dashgrid.ts).
 
 import { signal } from "@preact/signals";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { LayoutDashboard, MapPin, RefreshCw, ImageDown, Printer, ClipboardCopy, TriangleAlert, CloudLightning, Wind, Droplets, Gauge, Navigation, Locate } from "lucide-preact";
-import { settings, toast, openPanel } from "../store";
+import { settings, toast, openPanel, update } from "../store";
 import { alerts } from "../alerts";
 import { mapRef } from "../map/mapview";
 import { pointInGeometry, distance, bearing, compass, speedFactor } from "../util";
-import { stormCellsNow, cellEtaTo, mrmsFrames, rasterFor, spcLevel, SPC_NAME, fmtMi, hhmm, type Cell } from "../wf6data";
+import { stormCellsNow, cellEtaTo, mrmsFrames, rasterFor, spcLevel, SPC_NAME, fmtMi, hhmm, nearestStrike, cached, type Cell } from "../wf6data";
+/* 0.8.2: editable layouts, several dashboards, more widgets */
+import { Pencil, Plus, Copy, Trash2, Settings2, X, Check, RotateCcw, FileImage, CalendarDays, Zap, Waves, BrainCircuit } from "lucide-preact";
+import { normState, defaultDash, place, compact, addWidget, setCols, cellAt, uid, WIDGETS, WTYPES, type Dash, type DashState, type DWidget, type WType } from "./dashgrid";
+import { detections } from "../ml/client";
+import "./tb082.css";
 import { cellFlags } from "../overlays/stormcells";
 import { CenterModal } from "./CenterModal";
 import { LineChart, type LSeries } from "./Meteogram";
@@ -540,6 +547,412 @@ function Storms({ d }: { d: DashData }) {
   );
 }
 
+// ---------- 0.8.2: more widgets (forecast days, lightning, river gauges, model detections, summary card) ----------
+
+function useAsync<T>(fn: (() => Promise<T>) | null, deps: any[], refreshMs = 0): { v?: T; err?: string; busy: boolean } {
+  const [st, setSt] = useState<{ v?: T; err?: string; busy: boolean }>({ busy: true });
+  useEffect(() => {
+    if (!fn) return;
+    let dead = false;
+    const run = () =>
+      fn()
+        .then((v) => !dead && setSt({ v, busy: false }))
+        .catch((e) => !dead && setSt({ err: String(e?.message ?? e), busy: false }));
+    setSt({ busy: true });
+    run();
+    const t = refreshMs ? window.setInterval(run, refreshMs) : 0;
+    return () => {
+      dead = true;
+      clearInterval(t);
+    };
+  }, deps);
+  return st;
+}
+
+function Days({ pt, n }: { pt: Pt; n: number }) {
+  const r = useAsync(
+    () => getJson(`https://api.open-meteo.com/v1/forecast?latitude=${pt.lat.toFixed(4)}&longitude=${pt.lon.toFixed(4)}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_gusts_10m_max&wind_speed_unit=ms&timezone=auto&forecast_days=7&timeformat=unixtime`, 1800_000),
+    [pt.id, pt.lat, pt.lon],
+    30 * 60_000,
+  );
+  const dd = r.v?.daily;
+  if (!dd?.time) return <div class="muted small">{r.err ? `Forecast unavailable (${r.err})` : "Loading…"}</div>;
+  return (
+    <div class="dash-days">
+      {dd.time.slice(0, n).map((t: number, i: number) => (
+        <div key={t} class="dash-day" title={`Gusts ${fW(dd.wind_gusts_10m_max?.[i])}`}>
+          <span class="muted">{i === 0 ? "Today" : new Date(t * 1000).toLocaleDateString(undefined, { weekday: "short", timeZone: r.v.timezone })}</span>
+          <b>
+            {fT(dd.temperature_2m_max?.[i])} / <span class="muted">{fT(dd.temperature_2m_min?.[i])}</span>
+          </b>
+          <span>{WMO[dd.weather_code?.[i]] ?? ""}</span>
+          <span class="muted">{dd.precipitation_probability_max?.[i] != null ? `${dd.precipitation_probability_max[i]}% precip.` : ""}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Lightning({ pt, minutes }: { pt: Pt; minutes: number }) {
+  const r = useAsync(() => nearestStrike(pt.lat, pt.lon, minutes, 300_000), [pt.id, pt.lat, pt.lon, minutes], 60_000);
+  if (r.busy && r.v === undefined) return <div class="muted small">Loading…</div>;
+  if (r.err) return <div class="muted small">Lightning unavailable ({r.err})</div>;
+  const s = r.v;
+  if (!s) return <div class="muted small">No lightning within 300 km in the last {minutes} min (GOES GLM).</div>;
+  return (
+    <div>
+      <div class="dash-big" style={{ color: s.dist < 16_000 ? "#f87171" : s.dist < 48_000 ? "#fbbf24" : undefined }}>
+        {fmtMi(s.dist)} <small class="muted">{compass(s.brg)}</small>
+      </div>
+      <div class="muted small">
+        Nearest flash {Math.max(0, Math.round(s.age / 60_000))} min ago · {s.count} within 300 km · last {minutes} min
+      </div>
+    </div>
+  );
+}
+
+const GAUGE_RANK: Record<string, number> = { major: 5, moderate: 4, minor: 3, action: 2, no_flooding: 1 };
+const GAUGE_COL: Record<string, string> = { major: "#a855f7", moderate: "#ef4444", minor: "#f97316", action: "#facc15", no_flooding: "#22c55e" };
+function Gauges({ pt, km, all }: { pt: Pt; km: number; all: boolean }) {
+  const r = useAsync(() => cached<any>("/api/ovl/gauges", 600_000), [], 15 * 60_000);
+  const list = useMemo(() => {
+    const out: { p: any; d: number }[] = [];
+    for (const f of r.v?.features ?? []) {
+      const c = f.geometry?.coordinates;
+      if (!c) continue;
+      const d = distance(pt.lat, pt.lon, c[1], c[0]);
+      if (d > km * 1000) continue;
+      if (!all && (GAUGE_RANK[f.properties?.cat] ?? 0) < 2) continue;
+      out.push({ p: f.properties ?? {}, d });
+    }
+    return out.sort((a, b) => (GAUGE_RANK[b.p.cat] ?? 0) - (GAUGE_RANK[a.p.cat] ?? 0) || a.d - b.d).slice(0, 8);
+  }, [r.v, pt.lat, pt.lon, km, all]);
+  if (!r.v) return <div class="muted small">{r.err ? `River gauges unavailable (${r.err})` : "Loading…"}</div>;
+  if (!list.length) return <div class="muted small">{all ? `No river gauges within ${km} km.` : `No gauges at action stage or above within ${km} km.`}</div>;
+  return (
+    <div class="dash-list">
+      {list.map(({ p, d }) => (
+        <div key={p.id} title={`${p.id}${p.stage != null ? ` · stage ${p.stage} ${p.unit ?? ""}` : ""}`}>
+          <span>{p.name ?? p.id}</span>
+          <b style={{ color: GAUGE_COL[p.cat] ?? "#9ca3af" }}>{String(p.cat ?? "—").replace(/_/g, " ")}</b>
+          <span class="muted">{fmtMi(d)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Detections({ pt, km }: { pt: Pt; km: number }) {
+  const list = detections.value
+    .filter((x) => !x.test)
+    .map((x) => ({ x, d: distance(pt.lat, pt.lon, x.lat, x.lon) }))
+    .filter((r) => r.d <= km * 1000)
+    .sort((a, b) => b.x.prob - a.x.prob || a.d - b.d)
+    .slice(0, 8);
+  if (!list.length) return <div class="muted small">No model detections within {km} km (detection models must be running).</div>;
+  return (
+    <div class="dash-list">
+      {list.map(({ x, d }) => (
+        <div key={x.key} title={`${x.model_name} · ${x.site} · ${hhmm(x.t)}`}>
+          <span>
+            {x.model_name} <span class="muted">{x.target}</span>
+          </span>
+          <b style={{ color: x.level === "high" ? "#f87171" : x.level === "med" ? "#fbbf24" : "#9ca3af" }}>{x.value != null ? x.value.toFixed(0) : `${Math.round(x.prob * 100)}%`}</b>
+          <span class="muted">{fmtMi(d)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SummaryPreview({ pt, d, warn }: { pt: Pt; d: DashData; warn: any[] }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    let dead = false;
+    radarThumb(pt, 360, d.cells ?? [], warn)
+      .catch(() => null)
+      .then((r) => !dead && setUrl(summaryCanvas(pt, d, warn, r?.canvas ?? null).toDataURL("image/png")));
+    return () => {
+      dead = true;
+    };
+  }, [pt.id, d.t, warn.length]);
+  return url ? <img class="dash-sumimg" src={url} alt={`Summary card for ${pt.name}`} /> : <div class="muted small">Rendering…</div>;
+}
+
+// ---------- 0.8.2: one widget ----------
+
+const DATA_TYPES = new Set<WType>(["cur", "radar", "storms", "meteo", "aq", "summary"]);
+
+function Widget({ w, pt, sel, nonce, onRadar }: { w: DWidget; pt: Pt; sel: Pt; nonce: number; onRadar: (id: string, c: HTMLCanvasElement | null) => void }) {
+  const d = useDash(DATA_TYPES.has(w.type) ? pt : null, nonce);
+  const warn = w.type === "warn" || w.type === "radar" || w.type === "summary" ? warningsAt(pt) : [];
+  const other = pt.id !== sel.id ? <small class="muted">· {pt.name}</small> : null;
+  const head = (def: any, icon?: any) => (
+    <h3>
+      {icon}
+      {w.title || def}
+      {other}
+    </h3>
+  );
+  const load = <div class="muted small">Loading…</div>;
+  const o = w.opt ?? {};
+  switch (w.type) {
+    case "cur":
+      return (
+        <>
+          {head("Now")}
+          {d ? <Current d={d} /> : load}
+          {d?.spc && d.spc.level >= 0 && (
+            <div class={`dash-spc l${d.spc.level}`}>
+              SPC day 1: <b>{SPC_NAME[d.spc.level]}</b>
+              {d.spc.level >= 1 ? ` (${d.spc.level} of 5)` : ""}
+            </div>
+          )}
+        </>
+      );
+    case "warn":
+      return (
+        <>
+          <h3>
+            <TriangleAlert size={14} /> {w.title || "Alerts here"} <small class="muted">{warn.length}</small>
+            {other}
+          </h3>
+          {!warn.length && <div class="muted small">No watches, warnings or advisories cover this point.</div>}
+          {warn.slice(0, 6).map((a) => {
+            const p = a.properties;
+            const until = p.ends ?? p.expires;
+            return (
+              <div key={p.id} class="dash-warn" style={{ borderLeftColor: p.color }}>
+                <b style={{ color: p.color }}>{p.event}</b>
+                {p.tag && <span class="same-tag">{p.tag}</span>}
+                <span class="muted small">{until ? `until ${hhmm(Date.parse(until))}` : ""}</span>
+                <div class="muted small dash-warn-h">{p.headline ?? p.areaDesc}</div>
+              </div>
+            );
+          })}
+        </>
+      );
+    case "radar":
+      return (
+        <>
+          {head("Radar")}
+          {d ? <RadarThumb pt={pt} cells={d.cells ?? []} warn={warn} onCanvas={(c) => onRadar(pt.id, c)} /> : load}
+        </>
+      );
+    case "storms":
+      return (
+        <>
+          {head("Nearby storms", <CloudLightning size={14} />)}
+          {d ? <Storms d={d} /> : load}
+        </>
+      );
+    case "meteo":
+      return (
+        <>
+          {(w.title || other) && head("Next 12 hours")}
+          {d ? <Meteo12 d={d} /> : load}
+        </>
+      );
+    case "aq":
+      return (
+        <>
+          {head("Air quality & pollen")}
+          {d ? <AirPollen d={d} pt={pt} /> : load}
+        </>
+      );
+    case "summary":
+      return (
+        <>
+          {head("Summary card", <FileImage size={14} />)}
+          {d ? <SummaryPreview pt={pt} d={d} warn={warn} /> : load}
+        </>
+      );
+    case "days":
+      return (
+        <>
+          {head("Forecast", <CalendarDays size={14} />)}
+          <Days pt={pt} n={o.days ?? 5} />
+        </>
+      );
+    case "ltg":
+      return (
+        <>
+          {head("Lightning", <Zap size={14} />)}
+          <Lightning pt={pt} minutes={o.minutes ?? 15} />
+        </>
+      );
+    case "gauges":
+      return (
+        <>
+          {head("River gauges", <Waves size={14} />)}
+          <Gauges pt={pt} km={o.km ?? 50} all={o.only === "all"} />
+        </>
+      );
+    case "ml":
+      return (
+        <>
+          {head("Model detections", <BrainCircuit size={14} />)}
+          <Detections pt={pt} km={o.km ?? 100} />
+        </>
+      );
+  }
+  return null;
+}
+
+/** per-widget options (edit mode) */
+const OPTS: Partial<Record<WType, { key: string; label: string; choices: [any, string][]; def: any }[]>> = {
+  days: [{ key: "days", label: "Days", choices: [[3, "3"], [5, "5"], [7, "7"]], def: 5 }],
+  ltg: [{ key: "minutes", label: "Window", choices: [[5, "5 min"], [15, "15 min"], [30, "30 min"], [60, "60 min"]], def: 15 }],
+  gauges: [
+    { key: "km", label: "Within", choices: [[25, "25 km"], [50, "50 km"], [100, "100 km"], [200, "200 km"]], def: 50 },
+    { key: "only", label: "Show", choices: [["flood", "Action stage & flooding"], ["all", "All gauges"]], def: "flood" },
+  ],
+  ml: [{ key: "km", label: "Within", choices: [[50, "50 km"], [100, "100 km"], [200, "200 km"]], def: 100 }],
+};
+
+function WidgetOpts({ w, pts, set, onClose }: { w: DWidget; pts: Pt[]; set: (w: DWidget) => void; onClose: () => void }) {
+  return (
+    <div class="dash-wopts glass" onPointerDown={(e) => e.stopPropagation()}>
+      <label>
+        <span class="muted">Title</span>
+        <input value={w.title ?? ""} placeholder={WIDGETS[w.type].name} onInput={(e) => set({ ...w, title: (e.target as HTMLInputElement).value || undefined })} />
+      </label>
+      <label>
+        <span class="muted">Point</span>
+        <select value={w.pt ?? ""} onChange={(e) => set({ ...w, pt: (e.target as HTMLSelectElement).value || undefined })}>
+          <option value="">Selected tab</option>
+          {pts.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {(OPTS[w.type] ?? []).map((o) => (
+        <label key={o.key}>
+          <span class="muted">{o.label}</span>
+          <select value={String(w.opt?.[o.key] ?? o.def)} onChange={(e) => set({ ...w, opt: { ...(w.opt ?? {}), [o.key]: o.choices.find(([v]) => String(v) === (e.target as HTMLSelectElement).value)![0] } })}>
+            {o.choices.map(([v, l]) => (
+              <option key={String(v)} value={String(v)}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
+      ))}
+      <button class="btn sm" onClick={onClose}>
+        <Check size={13} /> Done
+      </button>
+    </div>
+  );
+}
+
+// ---------- 0.8.2: the grid (view + drag-and-drop editor) ----------
+
+function DashGrid({ dash, editing, sel, all, nonce, onRadar, onChange }: { dash: Dash; editing: boolean; sel: Pt; all: Pt[]; nonce: number; onRadar: (id: string, c: HTMLCanvasElement | null) => void; onChange: (ws: DWidget[]) => void }) {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [live, setLive] = useState<DWidget[] | null>(null);
+  const [dragId, setDragId] = useState("");
+  const [optsFor, setOptsFor] = useState("");
+  const ws = live ?? dash.widgets;
+  const cols = dash.cols;
+  const ptOf = (w: DWidget) => (w.pt ? all.find((p) => p.id === w.pt) : null) ?? sel;
+  const start = (e: PointerEvent, w: DWidget, mode: "move" | "size") => {
+    if (!editing || e.button !== 0) return;
+    if (mode === "move" && (e.target as HTMLElement).closest(".dash-wtools,.dash-wopts,.dash-resize,input,select,button")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const g = gridRef.current!;
+    const r = g.getBoundingClientRect();
+    const cs = getComputedStyle(g);
+    const gap = parseFloat(cs.columnGap) || 12;
+    const rows = cs.gridTemplateRows
+      .split(/\s+/)
+      .map(parseFloat)
+      .filter((x) => Number.isFinite(x));
+    const at = (ev: PointerEvent) => cellAt(ev.clientX - r.left, ev.clientY - r.top, cols, r.width, gap, rows);
+    const c0 = at(e);
+    const dx = c0.x - w.x, dy = c0.y - w.y;
+    let latest = dash.widgets;
+    setDragId(w.id);
+    setOptsFor("");
+    const move = (ev: PointerEvent) => {
+      const c = at(ev);
+      latest = mode === "move" ? place(dash.widgets, w.id, c.x - dx, Math.max(0, c.y - dy), w.w, w.h, cols) : place(dash.widgets, w.id, w.x, w.y, Math.max(1, c.x - w.x + 1), Math.max(1, c.y - w.y + 1), cols);
+      setLive(latest);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setDragId("");
+      setLive(null);
+      if (latest !== dash.widgets) onChange(latest);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const key = (e: KeyboardEvent, w: DWidget) => {
+    if (!editing || (e.target as HTMLElement) !== e.currentTarget) return;
+    const d: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+    if (d[e.key]) {
+      e.preventDefault();
+      const [ax, ay] = d[e.key];
+      onChange(e.shiftKey ? place(dash.widgets, w.id, w.x, w.y, Math.max(1, w.w + ax), Math.max(1, w.h + ay), cols) : place(dash.widgets, w.id, w.x + ax, Math.max(0, w.y + ay), w.w, w.h, cols));
+    } else if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      onChange(compact(dash.widgets.filter((x) => x.id !== w.id)));
+    }
+  };
+  return (
+    <div ref={gridRef} class={`dash-grid d82 ${editing ? "editing" : ""}`} style={{ "--dash-cols": cols } as any}>
+      {ws.map((w) => (
+        <section
+          key={w.id}
+          class={`dash-card dash-c-${w.type} ${w.type === "warn" && warningsAt(ptOf(w)).length ? "hot" : ""} ${dragId === w.id ? "dragging" : ""} ${optsFor === w.id ? "opts-open" : ""}`}
+          style={{ gridColumn: `${w.x + 1} / span ${w.w}`, gridRow: `${w.y + 1} / span ${w.h}` }}
+          tabIndex={editing ? 0 : undefined}
+          aria-label={editing ? `${w.title || WIDGETS[w.type].name}: arrows move, Shift+arrows resize, Delete removes` : undefined}
+          onPointerDown={(e) => start(e as any, w, "move")}
+          onKeyDown={(e) => key(e as any, w)}
+        >
+          <div class="dash-card-body">
+            <Widget w={w} pt={ptOf(w)} sel={sel} nonce={nonce} onRadar={onRadar} />
+          </div>
+          {editing && (
+            <>
+              <div class="dash-wtools">
+                <button class="icon-btn" title="Widget settings" onClick={() => setOptsFor(optsFor === w.id ? "" : w.id)}>
+                  <Settings2 size={13} />
+                </button>
+                <button
+                  class="icon-btn"
+                  title="Duplicate widget"
+                  onClick={() => {
+                    const id = uid();
+                    const ws2 = addWidget(dash, w.type, id).widgets.map((x) => (x.id === id ? { ...x, pt: w.pt, opt: w.opt, title: w.title } : x));
+                    const n = ws2.find((x) => x.id === id)!;
+                    onChange(place(ws2, id, n.x, n.y, w.w, w.h, cols));
+                  }}
+                >
+                  <Copy size={13} />
+                </button>
+                <button class="icon-btn" title="Remove widget" onClick={() => onChange(compact(dash.widgets.filter((x) => x.id !== w.id)))}>
+                  <X size={13} />
+                </button>
+              </div>
+              {optsFor === w.id && <WidgetOpts w={w} pts={all} set={(nw) => onChange(dash.widgets.map((x) => (x.id === w.id ? nw : x)))} onClose={() => setOptsFor("")} />}
+              <div class="dash-resize" title="Drag to resize" onPointerDown={(e) => start(e as any, w, "size")} />
+            </>
+          )}
+        </section>
+      ))}
+      {!ws.length && <div class="dash-empty muted">{editing ? "Add widgets from the bar above." : "This dashboard is empty: click the pencil to add widgets."}</div>}
+    </div>
+  );
+}
+
+// ---------- window ----------
+
 export function Dashboard() {
   if (!dashOpen.value) return null;
   return <DashBody />;
@@ -554,15 +967,43 @@ function DashBody() {
   const sel = all.find((p) => p.id === dashPoint.value) ?? all[0];
   const [nonce, setNonce] = useState(0);
   const d = useDash(sel, nonce);
-  const radar = useRef<HTMLCanvasElement | null>(null);
+  /* 0.8.2: dashboards; `draft` = the edit-mode copy (Done saves it, Cancel drops it) */
+  const saved = useMemo(() => normState(s.dashboards), [s.dashboards]);
+  const [draft, setDraft] = useState<DashState | null>(null);
+  const st = draft ?? saved;
+  const dash = st.list.find((x) => x.id === st.active) ?? st.list[0];
+  const editing = !!draft;
+  const setDash = (fn: (d: Dash) => Dash) => draft && setDraft({ ...draft, list: draft.list.map((x) => (x.id === dash.id ? fn(x) : x)) });
+  const switchTo = (id: string) => (draft ? setDraft({ ...draft, active: id }) : update((x) => (x.dashboards = { ...normState(x.dashboards), active: id })));
+  const done = () => {
+    if (draft) update((x) => (x.dashboards = normState(draft)));
+    setDraft(null);
+  };
+  const newDash = (copy: boolean) => {
+    if (!draft) return;
+    const id = uid();
+    const n: Dash = copy ? { ...structuredClone(dash), id, name: `${dash.name} copy` } : { id, name: `Dashboard ${draft.list.length + 1}`, cols: 3, widgets: [] };
+    setDraft({ list: [...draft.list, n], active: id });
+  };
+  const delDash = () => {
+    if (!draft || draft.list.length < 2 || !confirm(`Delete “${dash.name}”?`)) return;
+    const list = draft.list.filter((x) => x.id !== dash.id);
+    setDraft({ list, active: list[0].id });
+  };
+  const radars = useRef(new Map<string, HTMLCanvasElement>());
+  const onRadar = (id: string, cv: HTMLCanvasElement | null) => (cv ? radars.current.set(id, cv) : radars.current.delete(id));
   const warn = warningsAt(sel);
-  const card = () => (d ? summaryCanvas(sel, d, warn, radar.current) : null);
-  const savePng = () => {
-    const cv = card();
+  const card = async () => {
+    if (!d) return null;
+    const r = radars.current.get(sel.id) ?? (await radarThumb(sel, 360, d.cells ?? [], warn).catch(() => null))?.canvas ?? null;
+    return summaryCanvas(sel, d, warn, r);
+  };
+  const savePng = async () => {
+    const cv = await card();
     cv?.toBlob((b) => b && saveBlob(b, `${sel.name.replace(/[^\w.-]+/g, "_")}_${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}.png`), "image/png");
   };
-  const copyPng = () => {
-    const cv = card();
+  const copyPng = async () => {
+    const cv = await card();
     cv?.toBlob(async (b) => {
       try {
         await navigator.clipboard.write([new ClipboardItem({ "image/png": b! })]);
@@ -572,8 +1013,8 @@ function DashBody() {
       }
     }, "image/png");
   };
-  const print = () => {
-    const cv = card();
+  const print = async () => {
+    const cv = await card();
     if (!cv) return;
     const img = document.createElement("img");
     img.className = "dash-print-img";
@@ -588,28 +1029,55 @@ function DashBody() {
     window.addEventListener("afterprint", done);
     img.onload = () => setTimeout(() => window.print(), 50);
   };
+  const title = editing ? (
+    <input class="dash-name-in" value={dash.name} aria-label="Dashboard name" onInput={(e) => setDash((x) => ({ ...x, name: (e.target as HTMLInputElement).value }))} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+  ) : st.list.length > 1 ? (
+    <select class="dash-switch" value={dash.id} aria-label="Dashboard" title="Switch dashboard" onChange={(e) => switchTo((e.target as HTMLSelectElement).value)}>
+      {st.list.map((x) => (
+        <option key={x.id} value={x.id}>
+          {x.name}
+        </option>
+      ))}
+    </select>
+  ) : (
+    dash.name
+  );
   return (
     <CenterModal
       cls="dash"
       icon={<LayoutDashboard size={19} />}
-      title="My dashboard"
+      title={title}
       sub={`${sel.name} · ${sel.lat.toFixed(3)}, ${sel.lon.toFixed(3)}${d ? ` · updated ${hhmm(d.t)}` : ""}`}
-      onClose={() => (dashOpen.value = false)}
+      onClose={() => ((dashOpen.value = false), setDraft(null))}
       actions={
-        <>
-          <button class="icon-btn" title="Refresh" onClick={() => setNonce((n) => n + 1)}>
-            <RefreshCw size={15} />
-          </button>
-          <button class="btn sm ghost" disabled={!d} title="Save the summary card as PNG" onClick={savePng}>
-            <ImageDown size={13} /> Save PNG
-          </button>
-          <button class="icon-btn" disabled={!d} title="Copy the summary card image" onClick={copyPng}>
-            <ClipboardCopy size={15} />
-          </button>
-          <button class="icon-btn" disabled={!d} title="Print the summary card" onClick={print}>
-            <Printer size={15} />
-          </button>
-        </>
+        editing ? (
+          <>
+            <button class="btn sm ghost" onClick={() => setDraft(null)} title="Drop the changes">
+              Cancel
+            </button>
+            <button class="btn sm" onClick={done} title="Save the layout">
+              <Check size={13} /> Done
+            </button>
+          </>
+        ) : (
+          <>
+            <button class="icon-btn" title="Edit dashboard: layout, widgets, name, more dashboards" aria-label="Edit dashboard" onClick={() => setDraft(structuredClone(saved))}>
+              <Pencil size={15} />
+            </button>
+            <button class="icon-btn" title="Refresh" onClick={() => setNonce((n) => n + 1)}>
+              <RefreshCw size={15} />
+            </button>
+            <button class="btn sm ghost" disabled={!d} title="Save the summary card as PNG" onClick={savePng}>
+              <ImageDown size={13} /> Save PNG
+            </button>
+            <button class="icon-btn" disabled={!d} title="Copy the summary card image" onClick={copyPng}>
+              <ClipboardCopy size={15} />
+            </button>
+            <button class="icon-btn" disabled={!d} title="Print the summary card" onClick={print}>
+              <Printer size={15} />
+            </button>
+          </>
+        )
       }
     >
       <div class="dash-tabs" role="tablist">
@@ -625,51 +1093,51 @@ function DashBody() {
           </button>
         )}
       </div>
-      <div class="dash-grid">
-        <section class="dash-card dash-c-cur">
-          <h3>Now</h3>
-          {d ? <Current d={d} /> : <div class="muted small">Loading…</div>}
-          {d?.spc && d.spc.level >= 0 && (
-            <div class={`dash-spc l${d.spc.level}`}>
-              SPC day 1: <b>{SPC_NAME[d.spc.level]}</b>
-              {d.spc.level >= 1 ? ` (${d.spc.level} of 5)` : ""}
-            </div>
+      {editing && (
+        <div class="dash-edbar" role="toolbar" aria-label="Dashboard editor">
+          <span class="muted">Add:</span>
+          <div class="dash-palette">
+            {WTYPES.map((t) => (
+              <button key={t} class="btn sm ghost" onClick={() => setDash((x) => addWidget(x, t, uid()))}>
+                <Plus size={12} /> {WIDGETS[t].name}
+              </button>
+            ))}
+          </div>
+          <span class="sp" />
+          <label class="row" style={{ gap: 6 }}>
+            <span class="muted">Columns</span>
+            <select value={dash.cols} onChange={(e) => setDash((x) => setCols(x, +(e.target as HTMLSelectElement).value))}>
+              {[1, 2, 3, 4, 5, 6].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+          {st.list.length > 1 && (
+            <select value={dash.id} aria-label="Dashboard" onChange={(e) => switchTo((e.target as HTMLSelectElement).value)}>
+              {st.list.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.name}
+                </option>
+              ))}
+            </select>
           )}
-        </section>
-        <section class={`dash-card dash-c-warn ${warn.length ? "hot" : ""}`}>
-          <h3>
-            <TriangleAlert size={14} /> Alerts here <small class="muted">{warn.length}</small>
-          </h3>
-          {!warn.length && <div class="muted small">No watches, warnings or advisories cover this point.</div>}
-          {warn.slice(0, 6).map((a) => {
-            const p = a.properties;
-            const until = p.ends ?? p.expires;
-            return (
-              <div key={p.id} class="dash-warn" style={{ borderLeftColor: p.color }}>
-                <b style={{ color: p.color }}>{p.event}</b>
-                {p.tag && <span class="same-tag">{p.tag}</span>}
-                <span class="muted small">{until ? `until ${hhmm(Date.parse(until))}` : ""}</span>
-                <div class="muted small dash-warn-h">{p.headline ?? p.areaDesc}</div>
-              </div>
-            );
-          })}
-        </section>
-        <section class="dash-card dash-c-radar">
-          <h3>Radar</h3>
-          {d ? <RadarThumb pt={sel} cells={d.cells ?? []} warn={warn} onCanvas={(c) => (radar.current = c)} /> : <div class="muted small">Loading…</div>}
-        </section>
-        <section class="dash-card dash-c-storms">
-          <h3>
-            <CloudLightning size={14} /> Nearby storms
-          </h3>
-          {d ? <Storms d={d} /> : <div class="muted small">Loading…</div>}
-        </section>
-        <section class="dash-card dash-c-meteo">{d ? <Meteo12 d={d} /> : <div class="muted small">Loading…</div>}</section>
-        <section class="dash-card dash-c-aq">
-          <h3>Air quality & pollen</h3>
-          {d ? <AirPollen d={d} pt={sel} /> : <div class="muted small">Loading…</div>}
-        </section>
-      </div>
+          <button class="btn sm ghost" title="New empty dashboard" onClick={() => newDash(false)}>
+            <Plus size={12} /> New
+          </button>
+          <button class="btn sm ghost" title="Duplicate this dashboard" onClick={() => newDash(true)}>
+            <Copy size={12} /> Duplicate
+          </button>
+          <button class="btn sm ghost" title="Back to the standard layout" onClick={() => setDash((x) => ({ ...x, cols: 3, widgets: defaultDash().widgets }))}>
+            <RotateCcw size={12} /> Reset
+          </button>
+          <button class="btn sm ghost" title="Delete this dashboard" disabled={st.list.length < 2} onClick={delDash}>
+            <Trash2 size={12} /> Delete
+          </button>
+        </div>
+      )}
+      <DashGrid dash={dash} editing={editing} sel={sel} all={all} nonce={nonce} onRadar={onRadar} onChange={(ws) => setDash((x) => ({ ...x, widgets: ws }))} />
     </CenterModal>
   );
 }

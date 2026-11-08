@@ -172,7 +172,7 @@ export function ShortcutsDialog() {
                 </div>
               ))}
               <div class="keys-row">
-                <span>Value under cursor (hold)</span>
+                <span>Data inspector (hold)</span> {/* 0.8.2: renamed */}
                 <Kbd combo="Shift" />
               </div>
             </div>

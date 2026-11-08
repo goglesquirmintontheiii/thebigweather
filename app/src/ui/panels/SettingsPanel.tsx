@@ -12,6 +12,7 @@ import { LookSection, KioskSection, OfflineSection, PluginsSection } from "../Wf
 import { AccessibilitySection } from "../../a11y/A11yUI"; // panes/palette/a11y 0.8
 import { PaneLayoutsSection } from "../PaneLayoutEditor"; // panes/palette/a11y 0.8
 import { PerfSection } from "../PerfSettings"; // 0.8.1 perf
+import { MidiSection } from "../../midi/MidiSection"; // 0.8.2
 
 const KEY_LABELS: Record<string, string> = {
   google_maps: "Google Map Tiles",
@@ -153,6 +154,7 @@ export function SettingsPanel() {
       <PerfSection /> {/* 0.8.1 perf */}
       <AccessibilitySection /> {/* panes/palette/a11y 0.8 */}
       <PaneLayoutsSection /> {/* panes/palette/a11y 0.8 */}
+      <MidiSection /> {/* 0.8.2 */}
       {/* workflow 0.6 */}
       <KioskSection />
       <OfflineSection />
