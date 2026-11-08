@@ -38,7 +38,17 @@ import { winAware } from "./winframe"; // 0.8.2 integration: minimized → resto
 import { BUILTIN_LAYOUTS, openPaneWindow, defaultCfg, layoutName } from "./Panes";
 import { jumpToSetting } from "../a11y/jump";
 import { A11Y_DEFAULTS, a11y } from "../a11y/a11y";
-import { Search, CornerDownLeft, Command, Layers, CloudSun, PanelLeft, Settings as Cog, MapPin, Radar, Bookmark, Navigation, History, X } from "lucide-preact";
+import { Search, CornerDownLeft, Command, Layers, CloudSun, PanelLeft, Settings as Cog, MapPin, Radar, Bookmark, Navigation, History, X, Puzzle } from "lucide-preact";
+/* 0.8.3: every catalog product + plugins */
+import { weatherEntries, pluginEntries, scoreEntry, type WxAct, type PlgAct } from "./paletteCore";
+import { l3Products, currentSite } from "../radar/controller";
+import { gridComposites } from "../weather";
+import { groupOf, allIdOf, groupName, loadIntlList } from "../intl/radar";
+import { noLevel3 } from "../intl/sites";
+import { applyComposite } from "./LayerPicker";
+import { pluginPanels, pluginLayers, pluginCommands, pluginSettings, pluginStatus, closedPanels, showPluginPanel, togglePluginLayer, runPluginCommand, setPluginSetting } from "../plugins/host";
+import { market, installedMeta, loadInstalledMeta, refreshMarket, setEnabled } from "../plugins/market";
+import { pluginDetail, pluginsTab } from "../plugins/PluginsPanel";
 
 export const paletteOpen = signal(false);
 const paletteQuery = signal("");
@@ -47,7 +57,7 @@ export function openPalette(q = "") {
   paletteOpen.value = true;
 }
 
-type Cat = "command" | "layer" | "weather" | "panel" | "setting" | "place" | "site" | "point" | "workspace";
+type Cat = "command" | "layer" | "weather" | "panel" | "setting" | "place" | "site" | "point" | "workspace" | "plugin" /* 0.8.3 */;
 const CATS: { id: Cat | "all"; name: string; icon: any }[] = [
   { id: "all", name: "All", icon: Search },
   { id: "command", name: "Commands", icon: Command },
@@ -59,6 +69,7 @@ const CATS: { id: Cat | "all"; name: string; icon: any }[] = [
   { id: "site", name: "Radars", icon: Radar },
   { id: "point", name: "My points", icon: MapPin },
   { id: "workspace", name: "Workspaces", icon: Bookmark },
+  { id: "plugin", name: "Plugins", icon: Puzzle }, // 0.8.3
 ];
 const CAT_NAME = Object.fromEntries(CATS.map((c) => [c.id, c.name])) as Record<string, string>;
 
@@ -74,41 +85,7 @@ interface PItem {
   run: () => void;
 }
 
-/* ---------- fuzzy match ---------- */
-const isWordStart = (s: string, i: number) => i === 0 || /[\s\-_/·(.,:]/.test(s[i - 1]);
-function fuzzy(q: string, s: string): number {
-  s = s.toLowerCase();
-  let total = 0;
-  for (const w of q.split(/\s+/).filter(Boolean)) {
-    const i = s.indexOf(w);
-    if (i >= 0) {
-      total += 60 + w.length * 4 - Math.min(i, 30) + (isWordStart(s, i) ? 30 : 0) + (i === 0 ? 20 : 0);
-      continue;
-    }
-    let si = 0, score = 0, last = -2;
-    for (const ch of w) {
-      const j = s.indexOf(ch, si);
-      if (j < 0) return -1;
-      score += j === last + 1 ? 5 : isWordStart(s, j) ? 4 : 0.5;
-      last = j;
-      si = j + 1;
-    }
-    total += score;
-  }
-  return total;
-}
-
-/** keywords: every word must appear as a substring (no loose subsequences) */
-function sub(q: string, s: string): number {
-  s = s.toLowerCase();
-  let t = 0;
-  for (const w of q.split(/\s+/).filter(Boolean)) {
-    const i = s.indexOf(w);
-    if (i < 0) return -1;
-    t += 20 + w.length * 3 + (isWordStart(s, i) ? 15 : 0);
-  }
-  return t;
-}
+/* ---------- fuzzy match: 0.8.3 moved to paletteCore.ts (scoreEntry) ---------- */
 
 /* ---------- recents ---------- */
 const RKEY = "tbw.palette.recent";
@@ -182,6 +159,77 @@ function settingDefs(): SetDef[] {
 }
 const ANCHOR: Record<string, string> = { "Pane layouts": "pane-layouts", Accessibility: "a11y" };
 
+/* ---------- 0.8.3: catalog + plugin entries ---------- */
+function wxOn(a: WxAct): boolean {
+  const s = settings.value;
+  const w = s.weather;
+  if (a.t === "radar") return w.kind === "radar" && s.radar.source === a.src && s.radar.product === a.product;
+  if (a.t === "comp") return false;
+  return w.kind === a.t && (w as any).id === a.id;
+}
+function runWx(a: WxAct) {
+  if (a.t === "radar")
+    return update((x) => {
+      x.weather = { kind: "radar" };
+      x.radar.source = a.src;
+      x.radar.product = a.product;
+    });
+  if (a.t === "grid") return selectWeather({ kind: "grid", id: a.id });
+  if (a.t === "gibs") return selectWeather({ kind: "gibs", id: a.id });
+  if (a.t === "intl") return selectIntl(a.id);
+  if (!applyComposite(a.id)) toast("That composite isn't available on this server", "warn");
+}
+function pluginItems() {
+  const list = settings.value.wf6.plugins;
+  const meta = installedMeta.value;
+  const st = pluginStatus.value;
+  const closed = closedPanels.value;
+  return pluginEntries({
+    plugins: list.map((p) => {
+      const m = meta[p.id]?.manifest ?? market.value.items.find((it) => it.manifest && p.market?.pid === it.manifest.id)?.manifest;
+      return { id: p.id, name: p.name, on: p.on, running: !!st[p.id]?.running, summary: m?.summary, tags: m?.tags, commands: m?.commands };
+    }),
+    market: market.value.items.filter((it) => it.manifest).map((it) => ({ key: it.key, id: it.manifest!.id, name: it.manifest!.name, summary: it.manifest!.summary, tags: it.manifest!.tags })),
+    panels: pluginPanels.value.map((p) => ({ pid: p.pid, id: p.id, title: p.title, kw: p.kw, open: !closed.has(p.id) })),
+    layers: pluginLayers.value.map((l) => ({ pid: l.pid, id: l.id, title: l.title, kw: l.kw, visible: l.visible })),
+    commands: pluginCommands.value,
+    settings: pluginSettings.value.map((x) => {
+      let value: any;
+      try {
+        value = x.get();
+      } catch {
+        value = undefined;
+      }
+      return { pid: x.pid, id: x.id, title: x.title, kw: x.kw, options: x.options, value };
+    }),
+  });
+}
+function showPluginDetail(d: { id?: string; key?: string }) {
+  pluginsTab.value = d.id ? "installed" : "market";
+  openPanel.value = "plugins";
+  pluginDetail.value = d;
+}
+function runPlg(a: PlgAct) {
+  const name = () => settings.peek().wf6.plugins.find((p) => p.id === (a as any).pid)?.name ?? "Plugin";
+  switch (a.t) {
+    case "open":
+      return showPluginDetail({ id: a.pid });
+    case "market":
+      return showPluginDetail({ key: a.key });
+    case "toggle":
+      setEnabled(a.pid, a.on);
+      return toast(`${name()} ${a.on ? "enabled" : "disabled"}`, "info", 1500);
+    case "panel":
+      return winAware(`f:plg:${a.id}`, () => showPluginPanel(a.id))(); // minimized → restore
+    case "layer":
+      return togglePluginLayer(a.pid, a.id);
+    case "cmd":
+      return void runPluginCommand(a.pid, a.id).catch((e) => toast(`${name()}: ${e.message}`, "error"));
+    case "set":
+      return setPluginSetting(a.pid, a.id, a.value);
+  }
+}
+
 /** 0.8.2: exported for MIDI mappings (midi/), which reuse these commands */
 export type { PItem, Cat };
 export function buildItems(): PItem[] {
@@ -222,25 +270,20 @@ export function buildItems(): PItem[] {
   cmd("saver", "Bandwidth saver", () => update((x) => (x.saver = !x.saver)), undefined, "data", !!s.saver);
   // layers (overlays + base layers)
   for (const l of allLayers()) out.push({ id: `layer:${l.id}`, cat: "layer", label: l.name, hint: l.group, kw: `${l.group} overlay`, on: isLayerOn(l.id), run: () => toggleLayer(l.id) });
-  // weather layers
-  for (const m of L2_MOMENTS)
-    out.push({
-      id: `wx:r:${m.id}`,
-      cat: "weather",
-      label: `Radar · ${m.name}`,
-      hint: `Level II · ${s.radar.site}`,
-      kw: `${m.id} nexrad`,
-      on: s.weather.kind === "radar" && s.radar.source === "L2" && s.radar.product === m.id,
-      run: () =>
-        update((x) => {
-          x.weather = { kind: "radar" };
-          x.radar.source = "L2";
-          x.radar.product = m.id;
-        }),
-    });
-  for (const l of gridLayers.value) out.push({ id: `wx:g:${l.id}`, cat: "weather", label: l.name, hint: l.group, kw: `${l.group} ${l.id}`, on: s.weather.kind === "grid" && s.weather.id === l.id, run: () => selectWeather({ kind: "grid", id: l.id }) });
-  for (const g of GIBS) out.push({ id: `wx:s:${g.id}`, cat: "weather", label: g.name, hint: `${g.group} · imagery`, kw: "satellite goes", on: s.weather.kind === "gibs" && s.weather.id === g.id, run: () => selectWeather({ kind: "gibs", id: g.id }) });
-  for (const x of intlSources.value) out.push({ id: `wx:i:${x.id}`, cat: "weather", label: x.name, hint: `World radar · ${x.region}`, kw: `${x.country ?? ""} international radar`, on: s.weather.kind === "intl" && s.weather.id === x.id, run: () => selectIntl(x.id) });
+  // weather layers — 0.8.3: generated from every catalog (Level II / III, grid catalog, GIBS + EUMETSAT imagery, world radars, composites)
+  const tdwr = currentSite.value?.type === "TDWR";
+  const wx = weatherEntries({
+    site: s.radar.site,
+    l2: L2_MOMENTS,
+    l3: noLevel3(currentSite.value) ? [] : l3Products.value.filter((p) => !!p.tdwr === tdwr),
+    grid: gridLayers.value,
+    gibs: GIBS,
+    intl: intlSources.value.map((x) => ({ id: x.id, name: x.name, region: x.region, country: x.country, allId: groupOf(x) ? allIdOf(x) : undefined, allName: groupOf(x) ? groupName(allIdOf(x)) : undefined })),
+    composites: gridComposites.value.filter((c) => gridLayers.value.some((d) => d.id === c.fill)),
+  });
+  for (const e of wx) out.push({ id: e.id, cat: "weather", label: e.label, hint: e.hint, kw: e.kw, on: wxOn(e.act), run: () => runWx(e.act) });
+  // plugins (0.8.3): each plugin, marketplace plugins, and the panels / layers / commands / settings they add
+  for (const e of pluginItems()) out.push({ id: e.id, cat: e.cat, label: e.label, hint: e.hint, kw: e.kw, on: e.on, run: () => runPlg(e.act) });
   // panels
   const P: [string, string, () => void, string?][] = [
     ["radar", "Radar", panel("radar")],
@@ -302,11 +345,18 @@ function Palette() {
   const inRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const back = useRef<HTMLElement | null>(document.activeElement as HTMLElement | null);
-  const all = useMemo(buildItems, [settings.value, gridLayers.value, sites.value, intlSources.value]);
+  const all = useMemo(buildItems, [settings.value, gridLayers.value, sites.value, intlSources.value, l3Products.value, gridComposites.value, market.value, installedMeta.value, pluginPanels.value, pluginLayers.value, pluginCommands.value, pluginSettings.value, closedPanels.value, pluginStatus.value]);
   useEffect(() => {
+    // 0.8.3: make sure lazily loaded lists are searchable (world radars, installed plugin manifests, marketplace once)
+    loadIntlList().catch(() => {});
+    if (settings.peek().wf6.plugins.some((p) => p.market) && !Object.keys(installedMeta.peek()).length) loadInstalledMeta().catch(() => {});
     inRef.current?.focus();
     return () => back.current?.isConnected && back.current.focus({ preventScroll: true });
   }, []);
+  // 0.8.3: marketplace plugins become searchable once the user searches (one registry download per session)
+  useEffect(() => {
+    if ((cat === "plugin" || q.trim().length >= 3) && !market.peek().at && !market.peek().loading) refreshMarket().catch(() => {});
+  }, [q.trim().length >= 3, cat]);
   // places: geocode after a pause
   useEffect(() => {
     const t = q.trim();
@@ -352,10 +402,7 @@ function Palette() {
         out.push({ it, score: 40 });
         continue;
       }
-      let sc = fuzzy(query, it.label);
-      const kw = sub(query, `${it.kw ?? ""} ${CAT_NAME[it.cat]}`);
-      if (sc < 0 && kw >= 0) sc = kw * 0.5;
-      else if (sc >= 0 && kw > 0) sc += kw * 0.15;
+      let sc = scoreEntry(query, it, CAT_NAME[it.cat]); // 0.8.3: label + keywords + hint
       if (sc < 0) continue;
       if (rec.includes(it.id)) sc += 25;
       if (it.cat === "command" || it.cat === "panel") sc += 6;
@@ -502,6 +549,8 @@ function previewOf(it: PItem): string {
       return `Fly to ${it.label}`;
     case "workspace":
       return `Load workspace “${it.label}”`;
+    case "plugin": // 0.8.3
+      return it.hint?.startsWith("Marketplace") ? `${it.label} · see details and install` : it.label.startsWith("Enable ") || it.label.startsWith("Disable ") ? it.label : `Show ${it.label} in Plugins`;
     default:
       return it.hint ? `${it.label} · ${it.hint}` : it.label;
   }

@@ -122,10 +122,31 @@ export default async function (tbw) {
     render();
   }
 
-  tbw.addPanel("Storm ETA chime", (e) => {
-    el = e;
-    render();
-    return () => (el = null);
+  // the panel also gets a sidebar button and a command palette entry (Stormiq 0.8.3+)
+  const panel = tbw.addPanel(
+    "Storm ETA chime",
+    (e) => {
+      el = e;
+      render();
+      return () => (el = null);
+    },
+    { keywords: "storm eta chime sound alarm" },
+  );
+  // command palette (Ctrl+K) entries — the ids match "commands" in plugin.json (older apps don't have these calls)
+  tbw.addCommand?.({ id: "open", title: "Open panel", keywords: "show eta", run: () => panel.show?.() });
+  tbw.addCommand?.({ id: "test", title: "Play test chime", keywords: "sound try", run: chime });
+  tbw.addCommand?.({ id: "check", title: "Check storms now", keywords: "refresh eta", run: check });
+  tbw.addSetting?.({
+    id: "minutes",
+    title: "Storm ETA chime within",
+    keywords: "minutes warning time",
+    options: [5, 10, 15, 20, 30, 45, 60].map((m) => ({ label: `${m} min`, value: m })),
+    get: () => minutes,
+    set: (v) => {
+      minutes = Number(v) || 15;
+      localStorage.setItem(KEY, String(minutes));
+      render();
+    },
   });
   check();
   const timer = setInterval(check, 120000);

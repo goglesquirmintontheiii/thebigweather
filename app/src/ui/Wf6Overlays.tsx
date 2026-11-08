@@ -10,6 +10,7 @@ import { briefing, briefingBusy, runBriefing, speak, stopSpeaking } from "../bri
 import { kiosk, kioskPaused, exitKiosk } from "../kiosk";
 import { flashOn } from "../rules/engine";
 import { pluginPanels, type PluginPanel } from "../plugins/host";
+import { isPanelOpen, setPanelOpen, panelRaise } from "../plugins/host"; // 0.8.3 plugins
 import { alerts, sortedAlerts } from "../alerts";
 import { fmtTime, pointInGeometry } from "../util";
 import { hhmm } from "../wf6data";
@@ -135,8 +136,17 @@ function KioskClock() {
   );
 }
 
+// 0.8.3 plugins: open / closed state lives in the plugin host, so the rail button and the command
+// palette can open a closed panel again (the body mounts fresh, calling the plugin's render again)
 function PluginPanelView({ p, i }: { p: PluginPanel; i: number }) {
+  return isPanelOpen(p.id) ? <PluginPanelBody p={p} i={i} /> : null;
+}
+function PluginPanelBody({ p, i }: { p: PluginPanel; i: number }) {
   const ref = useRef<HTMLDivElement>(null);
+  const r = panelRaise.value; // bring forward when opened from the rail / palette
+  useEffect(() => {
+    if (r?.id === p.id) ref.current?.closest(".fpanel")?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  }, [r]);
   useEffect(() => {
     const el = ref.current!;
     let cleanup: any;
@@ -154,10 +164,9 @@ function PluginPanelView({ p, i }: { p: PluginPanel; i: number }) {
       el.innerHTML = "";
     };
   }, [p]);
-  const [open, setOpen] = useState(true);
-  if (!open) return null;
   return (
     <FloatPanel
+      wid={`f:plg:${p.id}` /* 0.8.3 plugins: one window id per panel */}
       title={
         <>
           <Puzzle size={13} /> {p.title}
@@ -167,7 +176,7 @@ function PluginPanelView({ p, i }: { p: PluginPanel; i: number }) {
       y={300 + i * 30}
       w={300}
       cls="plg-panel"
-      onClose={() => setOpen(false)}
+      onClose={() => setPanelOpen(p.id, false)}
     >
       <div ref={ref} class="plg-body" />
     </FloatPanel>

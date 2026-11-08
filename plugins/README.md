@@ -16,6 +16,8 @@ This folder is the app's plugin marketplace. The **Plugins** tab in the app's si
    - `main.js` — the plugin code (one file, see [docs/PLUGINS.md](../docs/PLUGINS.md) for the `tbw` / `stormiq` API)
    - `README.md` — the description shown in the app (markdown)
    - `icon.png` (square, 256×256), `banner.png` (4:1, e.g. 1200×300), `screenshots/*.png` (16:9)
+   - optional `card.webp` — the background of the plugin's card in the list (4:1, e.g. 720×180, under 80 KB;
+     keep the left side calm, the app darkens it for the text)
 3. Run `node tools/plugins-registry.mjs`. It checks the manifest and files and rewrites
    `registry.json` with the new plugin and its checksums.
 4. Commit and push to `main`. The plugin shows up in everyone's Marketplace tab (press ↻ to refresh).
@@ -54,12 +56,14 @@ If `ref` is a full commit hash, `--remote` also pins checksums, so the files can
   "description": "README.md",
   "icon": "icon.png",
   "banner": "banner.png",
+  "card": { "background": "card.webp" },
   "screenshots": ["screenshots/one.png", { "src": "screenshots/two.png", "caption": "Optional caption" }],
   "entry": "main.js",
   "permissions": ["server", "settings", "audio", "panel"],
   "minAppVersion": "0.8.2",
   "homepage": "https://github.com/you/your-plugin",
-  "tags": ["alerts"]
+  "tags": ["alerts"],
+  "commands": [{ "id": "test", "title": "Play test chime", "keywords": "sound" }]
 }
 ```
 
@@ -70,6 +74,8 @@ If `ref` is a full commit hash, `--remote` also pins checksums, so the files can
 | `icon`, `banner`, `screenshots` | Files in the plugin folder (PNG / JPEG / WebP). |
 | `permissions` | What the plugin uses, shown before install: `map`, `panel`, `alerts`, `server`, `settings`, `audio`, `network`, `notifications`. Informational — plugins aren't sandboxed. |
 | `minAppVersion` | The app refuses to install on older versions. |
+| `card.background` | 0.8.3: image behind the plugin's card in the Plugins list — a file in the folder (`.png .jpg .webp .gif .svg`, kept offline when ≤ 256 KB; aim for < 80 KB) or an `https://` link. A dark gradient is drawn over its left side so the text stays readable. |
+| `commands` | 0.8.3: command palette (Ctrl+K) entries `{ id, title, keywords? }`, listed even while the plugin is disabled (running one enables it). The code runs them with `tbw.addCommand({ id, title, run })`. |
 
 Inside the plugin, `tbw.plugin.base` is the plugin folder's URL and `tbw.asset("sound.mp3")` gives the
 URL of a file in it.

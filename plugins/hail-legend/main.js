@@ -25,6 +25,8 @@ export function objectFor(inches) {
 export default async function (tbw) {
   let el = null;
   let cells = [];
+  const KEY = "hail-legend.inview";
+  let showInView = localStorage.getItem(KEY) !== "0";
   const mm = () => tbw.settings().units?.distance === "km";
 
   function render() {
@@ -48,7 +50,7 @@ export default async function (tbw) {
     note.style.cssText = "font-size:11px;color:#8b97a6;margin:6px 0 4px";
     note.textContent = "1″ (quarter) and up is severe; 2″ (hen egg) and up is significant.";
     el.append(note);
-    if (cells.length) {
+    if (cells.length && showInView) {
       const h = document.createElement("div");
       h.style.cssText = "font-size:12px;font-weight:600;margin-top:4px";
       h.textContent = "Hail in view";
@@ -85,10 +87,29 @@ export default async function (tbw) {
     inView();
   }
 
-  tbw.addPanel("Hail size legend", (e) => {
-    el = e;
-    render();
-    return () => (el = null);
+  // the panel also gets a sidebar button and a command palette entry (Stormiq 0.8.3+)
+  const panel = tbw.addPanel(
+    "Hail size legend",
+    (e) => {
+      el = e;
+      render();
+      return () => (el = null);
+    },
+    { keywords: "hail size legend inches mm" },
+  );
+  // command palette (Ctrl+K) entries — the ids match "commands" in plugin.json (older apps don't have these calls)
+  tbw.addCommand?.({ id: "open", title: "Open legend", keywords: "show sizes", run: () => panel.show?.() });
+  tbw.addCommand?.({ id: "refresh", title: "Refresh hail in view", keywords: "update storms", run: refresh });
+  tbw.addSetting?.({
+    id: "inview",
+    title: "Hail legend: list hail in view",
+    keywords: "storms cells estimates",
+    get: () => showInView,
+    set: (v) => {
+      showInView = !!v;
+      localStorage.setItem(KEY, showInView ? "1" : "0");
+      render();
+    },
   });
   tbw.on("moveend", inView);
   refresh();
