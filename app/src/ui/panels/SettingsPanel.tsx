@@ -248,10 +248,33 @@ export function SettingsPanel() {
       <DevCaptureSetting /> {/* 0.8.2: TEMPORARY dev-only feedback capture (Settings → Advanced) */}
       <section>
         <label class="lbl">About</label>
+        <AboutBrand />
         <div class="muted small">
-          TheBigWeather. Map data © OpenStreetMap contributors, CARTO, Esri, OpenFreeMap. Radar data: NOAA NEXRAD/TDWR via AWS Open Data. Alerts: NWS.
+          Map data © OpenStreetMap contributors, CARTO, Esri, OpenFreeMap. Radar data: NOAA NEXRAD/TDWR via AWS Open Data. Alerts: NWS.
         </div>
       </section>
+    </div>
+  );
+}
+
+/* ---------- 0.8.2: Stormiq (formerly TheBigWeather) ---------- */
+function AboutBrand() {
+  const [ver, setVer] = useState<string | null>(null);
+  useEffect(() => {
+    Promise.resolve((window as any).tbw?.info?.())
+      .then((i: any) => setVer(i?.version ?? null))
+      .catch(() => {});
+  }, []);
+  const srv = lastHello.value?.version;
+  return (
+    <div class="brand-about">
+      <img class="brand-logo" src="icon.png" alt="" />
+      <div>
+        <b>Stormiq</b>
+        <span class="muted small">{ver ? ` ${ver}` : ""}</span>
+        <div class="brand-tag">A Swiss army knife for the sky.</div>
+        <div class="muted small">Formerly TheBigWeather{srv && srv !== ver ? ` · server ${srv}` : ""}</div>
+      </div>
     </div>
   );
 }

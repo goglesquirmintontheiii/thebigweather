@@ -468,7 +468,7 @@ export async function exportModel(m: Model): Promise<string | null> {
     const { buf, name } = await mlBin(m.ep, `/api/ml/models/${encodeURIComponent(m.id)}/export`);
     if (!buf.byteLength) throw new Error("the server sent an empty file");
     const file = name || `${safeName(m.name)}.tbwmodel`;
-    // saveio: Electron IPC (Downloads/TheBigWeather) or a browser download; anchors must be in the DOM for some browsers
+    // saveio: Electron IPC (Downloads/Stormiq) or a browser download; anchors must be in the DOM for some browsers
     const tbw: any = (window as any).tbw;
     let path: string | null = null;
     if (tbw?.saveFile) path = await tbw.saveFile(file, buf);

@@ -272,7 +272,7 @@ function ServerProcRows({ s }: { s: any }) {
   const rssPct = s.proc_rss && s.mem_total ? (s.proc_rss / s.mem_total) * 100 : 0;
   return (
     <>
-      <div class="srow" data-tip={`TheBigWeather server process\n${s.proc_cpu != null ? `${s.proc_cpu.toFixed(1)}% of the whole machine${s.proc_cpu_cores != null ? `\n${(s.proc_cpu_cores / 100).toFixed(2)} cores busy (${s.proc_cpu_cores.toFixed(0)}% of one core)` : ""}` : "CPU not reported"}`}>
+      <div class="srow" data-tip={`Stormiq server process\n${s.proc_cpu != null ? `${s.proc_cpu.toFixed(1)}% of the whole machine${s.proc_cpu_cores != null ? `\n${(s.proc_cpu_cores / 100).toFixed(2)} cores busy (${s.proc_cpu_cores.toFixed(0)}% of one core)` : ""}` : "CPU not reported"}`}>
         <span>CPU</span>
         <Bar v={s.proc_cpu ?? 0} />
         <b>{s.proc_cpu != null ? `${s.proc_cpu.toFixed(0)}%` : "—"}</b>
@@ -321,7 +321,7 @@ function AppRows({ c }: { c: ClientStats }) {
     <>
       {ipc && (
         <>
-          <div class="srow" data-tip={`TheBigWeather app, all processes\n${c.app_cpu.toFixed(1)}% of the whole machine (${c.cores} threads)`}>
+          <div class="srow" data-tip={`Stormiq app, all processes\n${c.app_cpu.toFixed(1)}% of the whole machine (${c.cores} threads)`}>
             <span>CPU</span>
             <Bar v={c.app_cpu} />
             <b>{c.app_cpu.toFixed(c.app_cpu < 10 ? 1 : 0)}%</b>

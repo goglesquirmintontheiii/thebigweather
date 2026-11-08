@@ -724,7 +724,7 @@ export function PaneButton() {
                 onClick={() => {
                   const m = mapRef.value;
                   const c = m?.getCenter();
-                  popout({ kind: "map", title: "TheBigWeather · map", width: 1100, height: 750, data: { view: { center: c ? [c.lng, c.lat] : settings.value.view.center, zoom: m?.getZoom() ?? 6 }, panes: { layout: "1", sync: true, list: [] } } });
+                  popout({ kind: "map", title: "Stormiq · map", width: 1100, height: 750, data: { view: { center: c ? [c.lng, c.lat] : settings.value.view.center, zoom: m?.getZoom() ?? 6 }, panes: { layout: "1", sync: true, list: [] } } });
                 }}
               >
                 <AppWindow size={14} /> Map window

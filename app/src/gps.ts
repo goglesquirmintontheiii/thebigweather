@@ -99,7 +99,7 @@ export function toGpx(t: Track) {
   const esc = (s: string) => s.replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]!);
   const pts = t.pts.map((p) => `      <trkpt lat="${p[1]}" lon="${p[0]}"><time>${new Date(p[2]).toISOString()}</time>${p[3] != null ? `<hdop>${(p[3] / 5).toFixed(1)}</hdop>` : ""}</trkpt>`).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="TheBigWeather" xmlns="http://www.topografix.com/GPX/1/1">
+<gpx version="1.1" creator="Stormiq" xmlns="http://www.topografix.com/GPX/1/1">
   <metadata><name>${esc(t.name)}</name><time>${new Date(t.start).toISOString()}</time></metadata>
   <trk>
     <name>${esc(t.name)}</name>

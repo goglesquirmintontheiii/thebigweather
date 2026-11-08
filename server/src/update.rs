@@ -48,7 +48,7 @@ fn api_base() -> String {
     std::env::var("TBW_UPDATE_API_BASE").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "https://api.github.com".into()).trim_end_matches('/').to_string()
 }
 fn ua() -> String {
-    format!("TheBigWeather-server/{}", crate::api::VERSION)
+    format!("Stormiq-server/{}", crate::api::VERSION)
 }
 
 // ---------- versions ----------

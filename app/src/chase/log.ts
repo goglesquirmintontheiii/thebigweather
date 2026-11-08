@@ -176,7 +176,7 @@ export async function exportLog(id: string) {
     files[name] = new Uint8Array(await b.arrayBuffer());
     index.push({ file: name, time: new Date(i.t).toISOString(), lat: i.lat, lon: i.lon, kind: i.kind });
   }
-  files["log.json"] = strToU8(JSON.stringify({ name: l.name, start: new Date(l.start).toISOString(), end: new Date(l.end).toISOString(), points: l.pts.map((p) => ({ lon: p[0], lat: p[1], time: new Date(p[2]).toISOString(), acc_m: p[3] })), notes: l.notes.map((n) => ({ ...n, time: new Date(n.t).toISOString() })), images: index, app: "TheBigWeather" }, null, 1));
+  files["log.json"] = strToU8(JSON.stringify({ name: l.name, start: new Date(l.start).toISOString(), end: new Date(l.end).toISOString(), points: l.pts.map((p) => ({ lon: p[0], lat: p[1], time: new Date(p[2]).toISOString(), acc_m: p[3] })), notes: l.notes.map((n) => ({ ...n, time: new Date(n.t).toISOString() })), images: index, app: "Stormiq" }, null, 1));
   const zip = zipSync(files, { level: 0 });
   const f = await saveFile(`${safe(l.name)}_${stamp()}.zip`, zip, "application/zip");
   if (f) toast(`Saved ${f}`);

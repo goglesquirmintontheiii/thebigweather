@@ -11,7 +11,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
-const USER_AGENT: &str = concat!("TheBigWeather/", env!("CARGO_PKG_VERSION"), " (placefile proxy)");
+const USER_AGENT: &str = concat!("Stormiq/", env!("CARGO_PKG_VERSION"), " (placefile proxy)");
 const CACHE_BYTES: usize = 48 * 1024 * 1024;
 
 /// Fetched placefiles / icon sheets: url → (fresh until, body, content type).

@@ -1,5 +1,5 @@
 // Screen recording (toolbar): records the app window to WebM. In Electron the chunks are streamed
-// to Downloads/TheBigWeather through IPC (no big blob in memory); in a browser the user picks
+// to Downloads/Stormiq through IPC (no big blob in memory); in a browser the user picks
 // what to share and the file downloads when stopped.
 
 import { signal } from "@preact/signals";
@@ -63,7 +63,7 @@ export async function toggleScreenRec() {
     } else if (chunks.length) {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(new Blob(chunks, { type: "video/webm" }));
-      a.download = `TheBigWeather-${ts}.webm`;
+      a.download = `Stormiq-${ts}.webm`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
     }

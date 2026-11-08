@@ -1,7 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { ServerEditor } from "./panels/SettingsPanel";
 import { update, uid } from "../store";
-import { Radar, Monitor } from "lucide-preact";
+import { Monitor } from "lucide-preact";
 import { BuiltinServerButton } from "../share/DesktopSettings"; // Phase 6
 
 const LOCAL = ["http://127.0.0.1:8787", "http://localhost:8787"];
@@ -46,9 +46,9 @@ export function ConnectDialog() {
     <div class="modal-back">
       <div class="modal glass">
         <div class="brand">
-          <Radar size={28} />
+          <img class="brand-logo" src="icon.png" alt="" />
           <div>
-            <h1>TheBigWeather</h1>
+            <h1>Stormiq</h1>
             <p class="muted">Connect to your server to begin.</p>
           </div>
         </div>

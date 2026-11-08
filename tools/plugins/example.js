@@ -1,4 +1,4 @@
-// Example TheBigWeather plugin: "Nearest METAR temperature at cursor".
+// Example Stormiq plugin: "Nearest METAR temperature at cursor".
 // Shows the temperature, wind and distance of the METAR station nearest to the mouse in a small
 // panel, and draws a ring around that station. Load it from Settings → Plugins → Load .js file.
 

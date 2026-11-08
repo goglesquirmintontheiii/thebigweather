@@ -79,7 +79,7 @@
   {
     "id": "digitraffic", "name": "Digitraffic weathercams", "region": "Finland", "format": "geojson",
     "urls": ["https://tie.digitraffic.fi/api/weathercam/v1/stations"],
-    "headers": {"Digitraffic-User": "TheBigWeather/self-hosted"},
+    "headers": {"Digitraffic-User": "Stormiq/self-hosted"},
     "fields": {"id": "id", "name": "name", "preset": "presets.0.id"},
     "img_template": "https://weathercam.digitraffic.fi/{preset}.jpg", "refresh": 600,
     "attribution": "Fintraffic / digitraffic.fi · CC BY 4.0"

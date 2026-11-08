@@ -7,6 +7,7 @@
 
 import { effect, signal } from "@preact/signals";
 import { settings, update } from "./store";
+import "./ui/brand082.css"; // 0.8.2: Stormiq brand colours (logo, rail indicator)
 
 function shade(hex: string, f: number): string {
   const n = parseInt(hex.replace("#", "").slice(0, 6), 16);
@@ -92,7 +93,7 @@ function scan() {
         // MapLibre's own control styles and explicit light-theme rules are left alone
         if (sel.includes("data-theme") || (sel.includes("maplibregl") && !sel.includes(".app"))) continue;
         // things drawn on the map itself (markers, labels) and switch knobs keep their colours
-        if (/marker|toggle i|ks-|wf6-flash|me-marker|site-|point-/.test(sel)) continue;
+        if (/marker|toggle i|ks-|wf6-flash|me-marker|site-|point-|brand/.test(sel)) continue; // 0.8.2: brand
         const st = r.style;
         for (let i = 0; i < st.length; i++) {
           const prop = st[i];
@@ -152,6 +153,8 @@ effect(() => {
   r.setProperty("--accent", acc);
   r.setProperty("--accent-2", shade(acc, 0.8));
   r.setProperty("--accent-soft", rgba(acc, 0.18));
+  // 0.8.2: the default accent (never changed by the user) shows the Stormiq yellow on the rail
+  root.classList.toggle("brand-accent", acc.toLowerCase() === "#3fb7ff");
   if (document.readyState === "complete") retintSheets(acc, light);
   else window.addEventListener("load", () => retintSheets(acc, light), { once: true });
   const op = Math.max(0.5, Math.min(1, t.panelOpacity));

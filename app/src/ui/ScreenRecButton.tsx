@@ -14,7 +14,7 @@ export function ScreenRecButton() {
     return () => clearInterval(t);
   }, [start]);
   return (
-    <button class={`tb ${start ? "srec-on" : ""}`} title={start ? "Stop screen recording" : "Record the screen (saved to Downloads/TheBigWeather)"} onClick={toggleScreenRec}>
+    <button class={`tb ${start ? "srec-on" : ""}`} title={start ? "Stop screen recording" : "Record the screen (saved to Downloads/Stormiq)"} onClick={toggleScreenRec}>
       {start ? <Square size={15} /> : <Video size={19} />}
       {start && (
         <span class="srec-badge">

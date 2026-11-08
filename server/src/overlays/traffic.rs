@@ -488,7 +488,7 @@ async fn registry(o: &Arc<Overlays>) -> Arc<Vec<Feed>> {
 }
 
 async fn digitraffic_get(o: &Overlays, url: &str) -> Result<Value> {
-    let r = o.http.get(url).header("Digitraffic-User", "TheBigWeather/self-hosted").timeout(Duration::from_secs(45)).send().await?;
+    let r = o.http.get(url).header("Digitraffic-User", "Stormiq/self-hosted").timeout(Duration::from_secs(45)).send().await?;
     if !r.status().is_success() {
         bail!("HTTP {} from tie.digitraffic.fi", r.status());
     }

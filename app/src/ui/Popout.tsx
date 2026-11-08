@@ -17,7 +17,7 @@ import { PopWin } from "./winreg"; // 0.8.2
 
 export function PopoutApp({ spec }: { spec: PopoutSpec }) {
   useEffect(() => {
-    document.title = spec.title ?? "TheBigWeather";
+    document.title = spec.title ?? "Stormiq";
     api.configure(activeServer.value);
     if (spec.kind === "radio" && spec.data) playStream(spec.data);
   }, []);

@@ -242,7 +242,7 @@ impl Default for ServerCfg {
             data_dir: PathBuf::from("data"),
             public_url: String::new(),
             web_dir: PathBuf::from("web"),
-            name: "TheBigWeather".into(),
+            name: "Stormiq".into(),
             local_no_auth: true,
             metar_url: "https://aviationweather.gov/data/cache/metars.cache.csv.gz".into(),
         }
@@ -274,7 +274,7 @@ impl Default for AlertsCfg {
             enabled: true,
             poll_secs: 0,
             url: "https://api.weather.gov/alerts/active?status=actual".into(),
-            user_agent: "TheBigWeather/0.1 (self-hosted weather app)".into(),
+            user_agent: DEFAULT_USER_AGENT.into(),
             canada: true,        // 0.8.2
             international: true, // 0.8.2
         }
@@ -294,8 +294,27 @@ impl Default for Config {
     }
 }
 
+/// NWS User-Agent when none is configured (NWS asks for a contact; start.sh adds the email).
+pub const DEFAULT_USER_AGENT: &str = "Stormiq/0.1 (self-hosted weather app)";
+
+impl Config {
+    /// 0.8.2: TheBigWeather → Stormiq. Values that are still the old defaults (server name, NWS
+    /// User-Agent) read as the new ones; anything the user changed is kept. In memory only — the
+    /// file changes when settings are next saved.
+    pub fn rebrand_defaults(&mut self) {
+        match self.server.name.as_str() {
+            "TheBigWeather" => self.server.name = "Stormiq".into(),
+            "TheBigWeather ML worker" => self.server.name = "Stormiq ML worker".into(),
+            _ => {}
+        }
+        if self.alerts.user_agent == "TheBigWeather/0.1 (self-hosted weather app)" {
+            self.alerts.user_agent = DEFAULT_USER_AGENT.into();
+        }
+    }
+}
+
 /// Commented template written on first run; values are then filled in from `Config`.
-pub const TEMPLATE: &str = r#"# TheBigWeather server config.
+pub const TEMPLATE: &str = r#"# Stormiq server config.
 # Edit and restart, or change settings from the app (Settings -> Server settings on this computer).
 # Comments and layout here are kept when the app saves changes.
 
@@ -311,7 +330,7 @@ public_url = ""
 # Built desktop UI served at / for browser access. (restart)
 web_dir = "web"
 # Name shown in the app's server list
-name = "TheBigWeather"
+name = "Stormiq"
 # Apps on this same machine need no token (never applied to proxied requests)
 local_no_auth = true
 # Latest METARs (aviationweather.gov bulk cache). (restart)
@@ -359,7 +378,7 @@ enabled = true
 poll_secs = 0
 url = "https://api.weather.gov/alerts/active?status=actual"
 # NWS asks for a contact in the User-Agent.
-user_agent = "TheBigWeather/0.1 (self-hosted weather app)"
+user_agent = "Stormiq/0.1 (self-hosted weather app)"
 # Canada alerts (ECCC), fetched while an app has them on
 canada = true
 # International alerts (MeteoAlarm, national CAP feeds), fetched only while an app looks there
@@ -439,6 +458,7 @@ impl Config {
         }
         let s = std::fs::read_to_string(path)?;
         let mut c: Config = toml::from_str(&s)?;
+        c.rebrand_defaults();
         if c.server.token.trim().is_empty() {
             c.server.token = new_token();
             c.save(path)?;
@@ -596,6 +616,27 @@ pub fn detect_profile(cfg: &Config) -> Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rebrand_defaults_082() {
+        let mut c = Config::default();
+        assert_eq!(c.server.name, "Stormiq");
+        assert!(TEMPLATE.contains("name = \"Stormiq\"") && TEMPLATE.contains(DEFAULT_USER_AGENT));
+        c.server.name = "TheBigWeather".into();
+        c.alerts.user_agent = "TheBigWeather/0.1 (self-hosted weather app)".into();
+        c.rebrand_defaults();
+        assert_eq!(c.server.name, "Stormiq");
+        assert_eq!(c.alerts.user_agent, DEFAULT_USER_AGENT);
+        c.server.name = "TheBigWeather ML worker".into();
+        c.rebrand_defaults();
+        assert_eq!(c.server.name, "Stormiq ML worker");
+        // anything the user set is kept
+        c.server.name = "Garage wx".into();
+        c.alerts.user_agent = "TheBigWeather/0.8.1 (me@example.com)".into();
+        c.rebrand_defaults();
+        assert_eq!(c.server.name, "Garage wx");
+        assert_eq!(c.alerts.user_agent, "TheBigWeather/0.8.1 (me@example.com)");
+    }
 
     #[test]
     fn memory_defaults() {

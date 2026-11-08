@@ -143,7 +143,7 @@ pub async fn tide_predictions(o: &Overlays, station: &str) -> Result<Value> {
     }
     let begin = chrono::Utc::now().format("%Y%m%d %H:%M").to_string().replace(' ', "%20");
     let url = format!(
-        "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=thebigweather&begin_date={begin}&range=48&datum=MLLW&station={station}&time_zone=gmt&units=metric&interval=hilo&format=json"
+        "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?product=predictions&application=stormiq&begin_date={begin}&range=48&datum=MLLW&station={station}&time_zone=gmt&units=metric&interval=hilo&format=json"
     );
     let v = o.get_json(&url).await?;
     if let Some(e) = v.get("error") {

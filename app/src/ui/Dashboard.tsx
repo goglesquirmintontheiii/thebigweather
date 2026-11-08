@@ -406,7 +406,7 @@ function summaryCanvas(pt: Pt, d: DashData, warn: any[], radar: HTMLCanvasElemen
   }
   g.fillStyle = "#6b7280";
   g.font = font(11);
-  g.fillText("TheBigWeather · Open-Meteo, NWS, MRMS · not for protection of life or property", 28, H - 10);
+  g.fillText("Stormiq · Open-Meteo, NWS, MRMS · not for protection of life or property", 28, H - 10);
   return cv;
 }
 

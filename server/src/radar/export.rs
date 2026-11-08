@@ -54,7 +54,7 @@ pub fn sweep_nc(v: &Volume, s: &Sweep, m: Moment, name: &str) -> Result<Vec<u8>>
         ("version", "1.4"),
         ("title", &format!("{} {name}", v.site)),
         ("instrument_name", &v.site),
-        ("source", "TheBigWeather"),
+        ("source", "Stormiq"),
         ("time_coverage_start", &iso(t0)),
         ("time_coverage_end", &iso(rads.iter().map(|(r, _)| r.time_ms).max().unwrap_or(t0))),
     ] {

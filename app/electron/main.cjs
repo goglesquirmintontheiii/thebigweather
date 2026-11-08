@@ -1,4 +1,4 @@
-// Electron shell for TheBigWeather.
+// Electron shell for Stormiq (formerly TheBigWeather).
 const { app, BrowserWindow, ipcMain, shell, screen, nativeTheme, protocol, net, session, desktopCapturer, Tray, Menu, nativeImage, dialog } = require("electron");
 const { pathToFileURL } = require("node:url");
 const path = require("node:path");
@@ -28,6 +28,28 @@ app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 if (process.env.TBW_SOFTWARE_GL) {
   app.commandLine.appendSwitch("use-gl", "angle");
   app.commandLine.appendSwitch("use-angle", "swiftshader");
+}
+
+// 0.8.2: renamed TheBigWeather → Stormiq. userData follows productName, so move the old folder
+// (settings, localStorage/IndexedDB, crash guard, plugins, tiles) before anything opens it — the
+// single-instance lock below already creates files there.
+const RN = require("./rename.cjs");
+if (!process.env.TBW_SHOT || process.env.TBW_SHOT_MIGRATE) {
+  try {
+    const appData = app.getPath("appData");
+    const newDir = app.getPath("userData");
+    if (path.resolve(newDir) === path.resolve(path.join(appData, RN.NEW_NAME))) {
+      const r = RN.migrateUserData({ oldDir: path.join(appData, RN.OLD_NAME), newDir, log: (m) => console.log(`[stormiq] ${m}`) });
+      if (r.method) {
+        try {
+          fs.mkdirSync(newDir, { recursive: true });
+          fs.appendFileSync(path.join(newDir, "errors.log"), `${new Date().toISOString()} renamed to Stormiq: settings ${r.method === "rename" ? "moved" : "copied"} from ${path.join(appData, RN.OLD_NAME)}\n`);
+        } catch {}
+      }
+    }
+  } catch (e) {
+    console.error("[stormiq] userData migration:", e && e.message);
+  }
 }
 
 if (!process.env.TBW_SHOT && !app.requestSingleInstanceLock()) {
@@ -124,7 +146,7 @@ function mainGone(d) {
   dialog
     .showMessageBox(alive(win) ? win : undefined, {
       type: "error",
-      title: "TheBigWeather",
+      title: "Stormiq",
       message: "The map window stopped",
       detail: `Reason: ${d.reason}${d.exitCode ? ` (code ${d.exitCode})` : ""}.${loop ? " It stopped right after starting again — safe mode opens one map without satellite or 3D." : ""}`,
       buttons: ["Reload", "Reload in safe mode", "Quit"],
@@ -166,8 +188,8 @@ app.on("browser-window-created", (_e, w) => {
     dialog
       .showMessageBox(w, {
         type: "warning",
-        title: "TheBigWeather",
-        message: "TheBigWeather isn't responding",
+        title: "Stormiq",
+        message: "Stormiq isn't responding",
         detail: "The map is busy or stuck. Wait, or reload it.",
         buttons: main ? ["Wait", "Reload", "Reload in safe mode"] : ["Wait", "Reload"],
         defaultId: 0,
@@ -232,7 +254,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     backgroundColor: "#07090c",
-    title: "TheBigWeather",
+    title: "Stormiq",
     autoHideMenuBar: true,
     show: !process.env.TBW_SHOT_HIDDEN && !startHidden(),
     icon: ICON,
@@ -274,7 +296,7 @@ function createWindow() {
       e.preventDefault();
       self.hide();
       if (!desktop.trayHintShown && process.platform === "win32" && tray.displayBalloon) {
-        tray.displayBalloon({ title: "TheBigWeather", content: "Still running in the tray. Right-click the icon to quit.", iconType: "info" });
+        tray.displayBalloon({ title: "Stormiq", content: "Still running in the tray. Right-click the icon to quit.", iconType: "info" });
         setDesktop({ trayHintShown: true });
       }
     }
@@ -311,7 +333,7 @@ function createWindow() {
 ipcMain.handle("capture", async () => {
   if (!alive(win)) return null; // 0.8.1
   const img = await win.webContents.capturePage();
-  const dir = path.join(app.getPath("pictures"), "TheBigWeather");
+  const dir = path.join(app.getPath("pictures"), "Stormiq");
   fs.mkdirSync(dir, { recursive: true });
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const file = path.join(dir, `TBW_${ts}.png`);
@@ -319,11 +341,11 @@ ipcMain.handle("capture", async () => {
   return file;
 });
 
-// downloads (recording exports): saved to ~/Downloads/TheBigWeather without a dialog
+// downloads (recording exports): saved to ~/Downloads/Stormiq without a dialog
 const pendingDownloads = new Map();
 ipcMain.handle("download", async (_e, url, name) => {
   if (!alive(win) || !/^https?:\/\//.test(url)) return null; // 0.8.1
-  const dir = path.join(app.getPath("downloads"), "TheBigWeather");
+  const dir = path.join(app.getPath("downloads"), "Stormiq");
   fs.mkdirSync(dir, { recursive: true });
   return new Promise((resolve) => {
     pendingDownloads.set(url, { file: path.join(dir, name || "download"), resolve });
@@ -386,7 +408,7 @@ ipcMain.handle("popout", (_e, spec) => {
     minWidth: frameless ? 240 : undefined,
     minHeight: frameless ? 120 : undefined,
     frame: !frameless,
-    title: spec.title || "TheBigWeather",
+    title: spec.title || "Stormiq",
     backgroundColor: "#07090c",
     autoHideMenuBar: true,
     icon: ICON,
@@ -432,13 +454,13 @@ ipcMain.handle("win-ctl", (e, a) => {
   return alive(w) && w.isMaximized();
 });
 
-// ---------- screen recording (toolbar): the renderer streams WebM chunks, saved to Downloads/TheBigWeather ----------
+// ---------- screen recording (toolbar): the renderer streams WebM chunks, saved to Downloads/Stormiq ----------
 const screenRecs = new Map();
 ipcMain.handle("screenrec-open", () => {
-  const dir = path.join(app.getPath("downloads"), "TheBigWeather");
+  const dir = path.join(app.getPath("downloads"), "Stormiq");
   fs.mkdirSync(dir, { recursive: true });
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const file = path.join(dir, `TheBigWeather-${ts}.webm`);
+  const file = path.join(dir, `Stormiq-${ts}.webm`);
   const id = String(Date.now()) + Math.random().toString(36).slice(2, 6);
   screenRecs.set(id, { file, fd: fs.openSync(file, "w") });
   return { id, file };
@@ -478,7 +500,7 @@ function setupDisplayMedia() {
       .getSources({ types: ["window", "screen"], thumbnailSize: { width: 0, height: 0 } })
       .then((srcs) => {
         const want = win && !win.isDestroyed() ? win.getMediaSourceId() : "";
-        const pick = srcs.find((s) => s.id === want) || srcs.find((s) => s.name === "TheBigWeather") || srcs.find((s) => s.id.startsWith("screen:")) || srcs[0];
+        const pick = srcs.find((s) => s.id === want) || srcs.find((s) => s.name === "Stormiq" || s.name === "TheBigWeather") || srcs.find((s) => s.id.startsWith("screen:")) || srcs[0];
         if (process.env.TBW_LOG_CONSOLE) console.log(`[screenrec] sources=${srcs.length} want=${want} pick=${pick ? pick.id : "none"}`);
         reply(pick ? { video: pick } : {});
       })
@@ -486,9 +508,9 @@ function setupDisplayMedia() {
   });
 }
 
-// ---------- workflow: save files (loop export, workspaces, GPX) to Downloads/TheBigWeather; window frame grabs ----------
+// ---------- workflow: save files (loop export, workspaces, GPX) to Downloads/Stormiq; window frame grabs ----------
 ipcMain.handle("save-file", (_e, name, buf) => {
-  const dir = path.join(app.getPath("downloads"), "TheBigWeather");
+  const dir = path.join(app.getPath("downloads"), "Stormiq");
   fs.mkdirSync(dir, { recursive: true });
   const safe = String(name || "file").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 120);
   const file = path.join(dir, safe);
@@ -633,7 +655,7 @@ ipcMain.handle("wf6-widget-open", (_e, cfg) => {
     hasShadow: false,
     skipTaskbar: true,
     alwaysOnTop: cfg.onTop !== false,
-    title: cfg.title || "TheBigWeather widget",
+    title: cfg.title || "Stormiq widget",
     backgroundColor: "#00000000",
     show: false,
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, backgroundThrottling: true },
@@ -827,12 +849,13 @@ function startHidden() {
 function applyAutoStart(on) {
   if (process.platform === "linux") {
     const dir = path.join(app.getPath("appData"), "autostart");
-    const file = path.join(dir, "thebigweather.desktop");
+    const file = path.join(dir, RN.AUTOSTART_FILE);
     try {
+      for (const o of RN.OLD_AUTOSTART_FILES) fs.rmSync(path.join(dir, o), { force: true }); // 0.8.2: renamed
       if (on) {
         const exe = process.env.APPIMAGE || process.execPath;
         fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(file, `[Desktop Entry]\nType=Application\nName=TheBigWeather\nExec="${exe}" --hidden\nIcon=thebigweather\nX-GNOME-Autostart-enabled=true\n`);
+        fs.writeFileSync(file, `[Desktop Entry]\nType=Application\nName=Stormiq\nExec="${exe}" --hidden\nIcon=stormiq\nX-GNOME-Autostart-enabled=true\n`);
       } else fs.rmSync(file, { force: true });
     } catch (err) {
       console.error("autostart", err.message);
@@ -863,9 +886,12 @@ let trayText = "";
 let baseTrayImg = null;
 function trayImage(count) {
   if (!baseTrayImg) {
-    baseTrayImg = nativeImage.createFromPath(ICON);
+    // 0.8.2: pre-sized tray icons (crisp at 16 / 22 px); the big icon as a fallback
+    const sz = process.platform === "win32" ? 16 : 22;
+    baseTrayImg = nativeImage.createFromPath(path.join(__dirname, "..", "build", sz === 16 ? "tray-16.png" : "tray-24.png"));
+    if (baseTrayImg.isEmpty()) baseTrayImg = nativeImage.createFromPath(ICON);
     if (baseTrayImg.isEmpty()) return baseTrayImg;
-    baseTrayImg = baseTrayImg.resize({ width: process.platform === "win32" ? 16 : 22, height: process.platform === "win32" ? 16 : 22, quality: "best" });
+    if (baseTrayImg.getSize().width !== sz) baseTrayImg = baseTrayImg.resize({ width: sz, height: sz, quality: "best" });
   }
   if (!count || baseTrayImg.isEmpty()) return baseTrayImg;
   // red dot in the corner when warnings cover a saved point
@@ -896,7 +922,7 @@ function showMain() {
 function rebuildTrayMenu() {
   if (!tray) return;
   const menu = Menu.buildFromTemplate([
-    { label: "Show TheBigWeather", click: showMain },
+    { label: "Show Stormiq", click: showMain },
     { label: "Mini radar widget", click: openMiniRadar },
     { type: "separator" },
     {
@@ -929,7 +955,7 @@ function setupTray() {
     tray = null;
     return;
   }
-  tray.setToolTip("TheBigWeather");
+  tray.setToolTip("Stormiq");
   tray.on("click", () => (alive(win) && win.isVisible() && win.isFocused() ? win.hide() : showMain())); // 0.8.1
   rebuildTrayMenu();
 }
@@ -939,7 +965,7 @@ ipcMain.handle("tray-update", (_e, info) => {
   if (count !== trayCount && tray) tray.setImage(trayImage(count));
   trayCount = count;
   trayText = text;
-  if (tray) tray.setToolTip(count ? `TheBigWeather · ${count} warning${count > 1 ? "s" : ""}${text ? "\n" + text : ""}` : "TheBigWeather");
+  if (tray) tray.setToolTip(count ? `Stormiq · ${count} warning${count > 1 ? "s" : ""}${text ? "\n" + text : ""}` : "Stormiq");
   if (process.platform === "linux") app.setBadgeCount(count);
   if (process.platform === "win32" && win && !win.isDestroyed()) win.setOverlayIcon(count ? trayImage(count) : null, count ? `${count} warnings` : "");
   return true;
@@ -950,7 +976,7 @@ function openMiniRadar() {
   mini = new BrowserWindow({
     width: 420,
     height: 380,
-    title: "TheBigWeather · mini radar",
+    title: "Stormiq · mini radar",
     alwaysOnTop: true,
     backgroundColor: "#07090c",
     autoHideMenuBar: true,
@@ -1258,6 +1284,8 @@ function phase6Ready() {
   openFilesFromArgv(process.argv);
   // keep the OS login item in sync with the saved setting (e.g. after reinstall)
   if (desktop.autoStart && process.platform !== "linux") applyAutoStart(true);
+  // 0.8.2: Linux autostart entry renamed thebigweather.desktop → stormiq.desktop
+  if (process.platform === "linux" && RN.OLD_AUTOSTART_FILES.some((o) => fs.existsSync(path.join(app.getPath("appData"), "autostart", o)))) applyAutoStart(!!desktop.autoStart);
 }
 // ---------- end Phase 6 ----------
 
@@ -1302,7 +1330,7 @@ function updNotes(n) {
 function updNotify(v) {
   try {
     const { Notification } = require("electron");
-    if (Notification.isSupported()) new Notification({ title: "TheBigWeather update ready", body: `Version ${v} is downloaded. Restart the app to update.`, silent: true }).show();
+    if (Notification.isSupported()) new Notification({ title: "Stormiq update ready", body: `Version ${v} is downloaded. Restart the app to update.`, silent: true }).show();
   } catch {}
 }
 function setupUpdater() {
@@ -1317,7 +1345,7 @@ function setupUpdater() {
   // files of versions already installed
   try {
     for (const f of fs.readdirSync(updDir())) {
-      const v = /TheBigWeather-(.+?)-(?:x86_64\.AppImage|setup\.exe|portable\.exe)$/.exec(f)?.[1];
+      const v = /(?:Stormiq|TheBigWeather)-(.+?)-(?:x86_64\.AppImage|setup\.exe|portable\.exe)$/.exec(f)?.[1];
       if (!v || RU.cmpVersion(v, upd.current) <= 0) fs.rmSync(path.join(updDir(), f), { force: true });
     }
   } catch {}
@@ -1359,14 +1387,16 @@ async function updReleaseVersion() {
   }
 }
 /** A release asset as a one-part entry (portable .exe / no electron-updater): sizes from the API, hash from SHA256SUMS. */
-async function updReleaseEntry(name) {
+async function updReleaseEntry(kind, version) {
   const rel = JSON.parse(await RU.getText(updFetch, `https://api.github.com/repos/${RU.REPO}/releases/latest`, { headers: { Accept: "application/vnd.github+json" } }));
+  // 0.8.2: Stormiq-<v>-… first, then the pre-rename TheBigWeather-<v>-… name
+  const name = RU.pickAssetName(kind, version, (n) => (rel.assets || []).some((x) => x.name === n)) || RU.appAssetName(kind, version);
   const a = (rel.assets || []).find((x) => x.name === name);
   const s = (rel.assets || []).find((x) => x.name === "SHA256SUMS");
   if (!a || !s) throw new Error(`the release has no ${name}`);
   const sha256 = RU.parseSums(await RU.getText(updFetch, s.browser_download_url))[name];
   if (!sha256) throw new Error(`SHA256SUMS has no ${name}`);
-  return { entry: { size: a.size, sha256, parts: [{ url: a.browser_download_url, size: a.size, sha256 }] }, notes: updNotes(rel.body), date: rel.published_at || "" };
+  return { name, entry: { size: a.size, sha256, parts: [{ url: a.browser_download_url, size: a.size, sha256 }] }, notes: updNotes(rel.body), date: rel.published_at || "" };
 }
 async function updCheck() {
   if (!upd.supported || updBusy) return { ...upd };
@@ -1387,7 +1417,6 @@ async function updCheck() {
       updSet({ state: "latest", version: upd.current, source: "" });
       return { ...upd };
     }
-    const name = RU.appAssetName(updKind, pick.version);
     if (pick.source === "release" && updater) {
       const r = await updater.checkForUpdates();
       const i = r && r.updateInfo;
@@ -1398,11 +1427,13 @@ async function updCheck() {
       updPending = { source: "release", version: i.version, via: "updater" };
       updSet({ state: "available", version: i.version, notes: updNotes(i.releaseNotes), date: i.releaseDate || "", source: "release", progress: 0 });
     } else if (pick.source === "release") {
-      const r = await updReleaseEntry(name);
-      updPending = { source: "release", version: pick.version, name, entry: r.entry, base: "" };
+      const r = await updReleaseEntry(updKind, pick.version);
+      updPending = { source: "release", version: pick.version, name: r.name, entry: r.entry, base: "" };
       updSet({ state: "available", version: pick.version, notes: r.notes, date: r.date, source: "release", progress: 0 });
     } else {
       const m = repo.manifest;
+      // 0.8.2: Stormiq-<v>-… first, then the pre-rename name
+      const name = RU.pickAssetName(updKind, m.version, (n) => !!m.files[n]) || RU.appAssetName(updKind, m.version);
       const entry = m.files[name];
       if (!entry) throw new Error(`build ${m.version} has no ${name}`);
       updPending = { source: "repo", version: m.version, name, entry, base: repo.base };

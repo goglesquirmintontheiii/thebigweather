@@ -449,7 +449,7 @@ function ModelDetail({ m }: { m: Model }) {
           <button class="btn sm ghost" title="Continue training with more events / rounds (works for imported models too)" onClick={() => (continueFor.value = m)}>
             <FastForward size={13} /> Train further…
           </button>
-          <button class="btn sm ghost" disabled={ex?.busy} title={(window as any).tbw?.saveFile ? "Save as a .tbwmodel file in Downloads/TheBigWeather" : "Download as a .tbwmodel file"} onClick={() => exportModel(m)}>
+          <button class="btn sm ghost" disabled={ex?.busy} title={(window as any).tbw?.saveFile ? "Save as a .tbwmodel file in Downloads/Stormiq" : "Download as a .tbwmodel file"} onClick={() => exportModel(m)}>
             <Download size={13} /> {ex?.busy ? "Exporting…" : "Export"}
           </button>
           <button

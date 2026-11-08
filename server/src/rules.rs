@@ -160,10 +160,10 @@ pub async fn webhook_test(State(st): St, headers: HeaderMap, Json(v): Json<Value
     };
     let payload = v.get("payload").cloned().unwrap_or_else(|| {
         json!({
-            "source": "TheBigWeather",
+            "source": "Stormiq",
             "test": true,
             "rule": "Webhook test",
-            "text": "Test notification from TheBigWeather",
+            "text": "Test notification from Stormiq",
             "time": chrono::Utc::now().to_rfc3339(),
         })
     });
@@ -172,7 +172,7 @@ pub async fn webhook_test(State(st): St, headers: HeaderMap, Json(v): Json<Value
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
         .resolve(&host, addr)
-        .user_agent(format!("TheBigWeather/{}", crate::api::VERSION))
+        .user_agent(format!("Stormiq/{}", crate::api::VERSION))
         .build()
     {
         Ok(c) => c,

@@ -84,7 +84,7 @@ pub async fn export(gs: &GridService, q: &HashMap<String, String>) -> Result<Exp
                 let dx = nc.dim("lon", nx);
                 nc.atts.push(("Conventions".into(), text("CF-1.8")));
                 nc.atts.push(("title".into(), text(&name)));
-                nc.atts.push(("source".into(), text(&format!("TheBigWeather layer {lid}"))));
+                nc.atts.push(("source".into(), text(&format!("Stormiq layer {lid}"))));
                 nc.atts.push(("valid_time".into(), text(&chrono::DateTime::from_timestamp_millis(grid.valid_ms).map(|t| t.to_rfc3339()).unwrap_or_default())));
                 nc.atts.push(("reference_time".into(), text(&chrono::DateTime::from_timestamp_millis(grid.ref_ms).map(|t| t.to_rfc3339()).unwrap_or_default())));
                 nc.var("lat", &[dy], vec![("units", text("degrees_north")), ("standard_name", text("latitude"))], Data::F64((0..ny).map(|j| s + j as f64 * dlat).collect()));

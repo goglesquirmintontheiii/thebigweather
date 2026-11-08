@@ -1,9 +1,9 @@
 {
   "name": "thebigweather",
-  "productName": "TheBigWeather",
-  "version": "0.8.1",
+  "productName": "Stormiq",
+  "version": "0.8.2",
   "description": "Radar and weather workstation",
-  "author": "TheBigWeather",
+  "author": "Stormiq",
   "license": "UNLICENSED",
   "private": true,
   "main": "electron/main.cjs",
@@ -45,8 +45,8 @@
   },
   "build": {
     "appId": "app.thebigweather.desktop",
-    "productName": "TheBigWeather",
-    "artifactName": "TheBigWeather-${version}-${arch}.${ext}",
+    "productName": "Stormiq",
+    "artifactName": "Stormiq-${version}-${arch}.${ext}",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -55,6 +55,7 @@
       "dist/**",
       "electron/**",
       "build/icon.png",
+      "build/tray-*.png",
       "package.json"
     ],
     "asar": true,
@@ -70,7 +71,7 @@
       "category": "Science",
       "icon": "build/icon.png",
       "synopsis": "Radar and weather workstation",
-      "executableName": "thebigweather",
+      "executableName": "stormiq",
       "syncDesktopName": true,
       "extraResources": [
         {
@@ -80,7 +81,7 @@
       ]
     },
     "appImage": {
-      "artifactName": "TheBigWeather-${version}-x86_64.AppImage"
+      "artifactName": "Stormiq-${version}-x86_64.AppImage"
     },
     "publish": [
       {
@@ -100,8 +101,8 @@
       },
       {
         "ext": "tbwws",
-        "name": "TheBigWeather workspace",
-        "description": "TheBigWeather workspace",
+        "name": "Stormiq workspace",
+        "description": "Stormiq workspace",
         "role": "Editor",
         "mimeType": "application/x-tbw-workspace"
       },
@@ -128,8 +129,8 @@
           ]
         }
       ],
-      "icon": "build/icon.png",
-      "executableName": "TheBigWeather",
+      "icon": "build/icon.ico",
+      "executableName": "Stormiq",
       "extraResources": [
         {
           "from": "../server/bin/tbw-server.exe",
@@ -148,22 +149,22 @@
       "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
-      "artifactName": "TheBigWeather-${version}-setup.${ext}",
+      "artifactName": "Stormiq-${version}-setup.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "TheBigWeather",
+      "shortcutName": "Stormiq",
       "deleteAppDataOnUninstall": false,
       "runAfterFinish": true
     },
     "portable": {
-      "artifactName": "TheBigWeather-${version}-portable.${ext}"
+      "artifactName": "Stormiq-${version}-portable.${ext}"
     }
   },
-  "desktopName": "thebigweather.desktop",
+  "desktopName": "stormiq.desktop",
   "repository": {
     "type": "git",
     "url": "https://github.com/goglesquirmintontheiii/thebigweather.git"

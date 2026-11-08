@@ -110,7 +110,7 @@ export function LoopExportDialog() {
       >
         <Film size={14} /> Export{o.format !== "gif" ? ` · ~${Math.ceil(est)} s` : ""}
       </button>
-      <div class="muted small">Saved to Downloads/TheBigWeather</div>
+      <div class="muted small">Saved to Downloads/Stormiq</div>
     </div>
     </>
   );

@@ -1,0 +1,46 @@
+/* 0.8.2: Stormiq brand (yellow #ffe14d on near-black #1c1c20). Used sparingly: the logo (connect
+   dialog, About) and — only while the accent setting is the default — the rail's active button.
+   theme.ts leaves selectors containing "brand" alone (no accent / light-theme retint). */
+:root {
+  --brand: #ffe14d;
+}
+.brand-logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  flex: none;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+.brand-about {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 2px 0 8px;
+}
+.brand-about .brand-logo {
+  width: 44px;
+  height: 44px;
+}
+.brand-about b {
+  font-size: 15px;
+  letter-spacing: 0.2px;
+}
+.brand-tag {
+  color: var(--brand);
+  font-size: 12px;
+}
+html[data-theme="light"] .brand-tag {
+  color: #8a6d00;
+}
+/* the rail's active button in the brand yellow (dark text) while the accent is the default */
+html.brand-accent .rail-btn.on {
+  background: linear-gradient(180deg, #ffe14d, #f2c925);
+  color: #1c1c20;
+}
+html.brand-accent .rail-btn.on.wf-away {
+  background: rgba(255, 225, 77, 0.2);
+  color: #ffe14d;
+}
+html.brand-accent[data-theme="light"] .rail-btn.on.wf-away {
+  color: #8a6d00;
+}

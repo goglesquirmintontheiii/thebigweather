@@ -1,4 +1,4 @@
-// Save a file to Downloads/TheBigWeather (Electron IPC) or as a browser download; pick a file to open.
+// Save a file to Downloads/Stormiq (Electron IPC) or as a browser download; pick a file to open.
 
 import { toast } from "./store";
 

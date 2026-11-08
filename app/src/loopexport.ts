@@ -1,6 +1,6 @@
 // Loop export: steps through every timeline frame, waits for it to be drawn, grabs the map
 // (plus legend, time stamp and attribution) or the whole window, then encodes a GIF (gifenc.ts)
-// or WebM/MP4 (MediaRecorder on a canvas stream) and saves it to Downloads/TheBigWeather.
+// or WebM/MP4 (MediaRecorder on a canvas stream) and saves it to Downloads/Stormiq.
 
 import { signal } from "@preact/signals";
 import { settings, toast } from "./store";
@@ -154,7 +154,7 @@ function decorate(ctx: CanvasRenderingContext2D, W: number, H: number, time: num
   ctx.textAlign = "right";
   ctx.textBaseline = "bottom";
   ctx.font = `500 ${10 * k}px Inter, system-ui, sans-serif`;
-  const at = "© OpenStreetMap · CARTO · NOAA/NWS · TheBigWeather";
+  const at = "© OpenStreetMap · CARTO · NOAA/NWS · Stormiq";
   const aw = ctx.measureText(at).width;
   ctx.fillStyle = "rgba(10,13,18,.6)";
   ctx.fillRect(W - aw - 14 * k, H - 18 * k, aw + 14 * k, 18 * k);
@@ -280,7 +280,7 @@ export async function runLoopExport() {
       if (cancelled) return toast("Loop export cancelled");
       blob = new Blob(chunks, { type: mime.split(";")[0] });
     }
-    const f = await saveFile(`TheBigWeather-loop-${stamp()}.${ext}`, blob);
+    const f = await saveFile(`Stormiq-loop-${stamp()}.${ext}`, blob);
     if (f) toast(`Saved ${f} (${(blob.size / 1048576).toFixed(1)} MB)`, "info", 7000);
   } catch (e: any) {
     toast(`Loop export failed: ${e?.message ?? e}`, "error", 7000);

@@ -526,7 +526,7 @@ pub fn build_request(c: &Channel, m: &Msg) -> Result<Req, String> {
             if let Some(u) = &m.url {
                 embed["url"] = json!(u);
             }
-            Ok(Req { url: s(c, "webhook_url").to_string(), headers: vec![], json: Some(json!({"username": "TheBigWeather", "embeds": [embed], "allowed_mentions": {"parse": []}})), form: None, guard: true })
+            Ok(Req { url: s(c, "webhook_url").to_string(), headers: vec![], json: Some(json!({"username": "Stormiq", "embeds": [embed], "allowed_mentions": {"parse": []}})), form: None, guard: true })
         }
         "telegram" => {
             let text = format!("{title}\n{}", m.body);
@@ -546,7 +546,7 @@ pub fn build_request(c: &Channel, m: &Msg) -> Result<Req, String> {
             Ok(Req {
                 url: s(c, "url").to_string(),
                 headers,
-                json: Some(json!({"source": "TheBigWeather", "rule": m.rule, "title": title, "message": m.body, "level": m.level, "silent": m.silent, "url": m.url, "vars": m.vars, "test": m.test, "time": chrono::Utc::now().to_rfc3339()})),
+                json: Some(json!({"source": "Stormiq", "rule": m.rule, "title": title, "message": m.body, "level": m.level, "silent": m.silent, "url": m.url, "vars": m.vars, "test": m.test, "time": chrono::Utc::now().to_rfc3339()})),
                 form: None,
                 guard: !allow_lan,
             })
@@ -581,7 +581,7 @@ pub fn build_email(c: &Channel, m: &Msg) -> Result<lettre::Message, String> {
     if let Some(u) = &m.url {
         text.push_str(&format!("\n\n{u}"));
     }
-    text.push_str("\n\n-- \nTheBigWeather server");
+    text.push_str("\n\n-- \nStormiq server");
     b.header(ContentType::TEXT_PLAIN).body(text).map_err(|e| e.to_string())
 }
 
@@ -599,7 +599,7 @@ pub async fn send(http: &reqwest::Client, c: &Channel, m: &Msg) -> Result<u16, S
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(15))
             .resolve(&host, addr)
-            .user_agent(format!("TheBigWeather/{}", crate::api::VERSION))
+            .user_agent(format!("Stormiq/{}", crate::api::VERSION))
             .build()
             .map_err(|e| e.to_string())?
     } else {
@@ -720,7 +720,7 @@ pub async fn test(State(st): St, Json(body): Json<Value>) -> Response {
         return err(StatusCode::NOT_FOUND, "no such channel");
     };
     let m = Msg {
-        title: "TheBigWeather test".into(),
+        title: "Stormiq test".into(),
         body: format!("Test notification from {} ({}).", st.cfg.read().server.name, chrono::Local::now().format("%Y-%m-%d %H:%M")),
         level: "normal".into(),
         rule: "Test".into(),

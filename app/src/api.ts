@@ -178,7 +178,7 @@ class Api {
     const base = normUrl(url);
     try {
       const h = await fetch(base + "/api/health").then((r) => r.json());
-      if (h.app !== "thebigweather") return { ok: false, message: "Not a TheBigWeather server" };
+      if (h.app !== "thebigweather") return { ok: false, message: "Not a Stormiq server" };
       const r = await fetch(base + "/api/info", { headers: { Authorization: `Bearer ${token}` } });
       if (r.status === 401) return { ok: false, message: "Wrong token" };
       const info = await r.json();

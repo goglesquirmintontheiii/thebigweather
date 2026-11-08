@@ -166,7 +166,7 @@ export async function initViewer(): Promise<void> {
       s.radar.live = s.radar.live && !s.saver;
     });
     viewer.value = { id, name: j.name, live: !!j.live, updated: j.updated, expires: j.expires, server: j.server, follow: true };
-    document.title = `${j.name} · TheBigWeather`;
+    document.title = `${j.name} · Stormiq`;
     if (j.live) startPolling(id);
   } catch (e: any) {
     viewer.value = { id, name: "Shared view", live: false, updated: 0, expires: 0, server: "", follow: false, error: e?.message ?? String(e) };

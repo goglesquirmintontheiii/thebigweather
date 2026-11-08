@@ -185,13 +185,15 @@ async function start(cfg: PluginCfg) {
     failed.add(cfg.id);
     return status(cfg.id, { running: false, error: "No code stored — reload it" });
   }
-  // modules (`export default function (tbw) {…}`) load as-is; plain scripts get `tbw` in scope
-  const src = /\bexport\s+default\b/.test(code) ? code : `export default async function (tbw) {\n${code}\n}`;
+  // modules (`export default function (tbw) {…}`) load as-is; plain scripts get `tbw` in scope.
+  // 0.8.2: `stormiq` is the same API object under the app's new name (2nd argument / in scope).
+  const src = /\bexport\s+default\b/.test(code) ? code : `export default async function (tbw, stormiq) {\n${code}\n}`;
   const url = URL.createObjectURL(new Blob([src + `\n//# sourceURL=tbw-plugin-${cfg.name.replace(/\W+/g, "_")}.js`], { type: "text/javascript" }));
   try {
     const mod = await import(/* @vite-ignore */ url);
     if (typeof mod.default !== "function") throw new Error("plugin has no default export function");
-    const ret = await mod.default(makeApi(cfg, run));
+    const papi = makeApi(cfg, run);
+    const ret = await mod.default(papi, papi); // (tbw, stormiq): one object, two names
     if (typeof ret === "function") run.cleanups.push(ret);
     status(cfg.id, { running: true });
   } catch (e: any) {

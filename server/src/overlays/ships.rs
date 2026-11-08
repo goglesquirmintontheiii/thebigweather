@@ -115,7 +115,7 @@ impl Ships {
 }
 
 async fn digitraffic(o: &Arc<Overlays>) -> Result<()> {
-    let req = |u: &str| o.http.get(u).header("Digitraffic-User", "TheBigWeather/self-hosted").header("Accept-Encoding", "gzip").timeout(Duration::from_secs(60)).send();
+    let req = |u: &str| o.http.get(u).header("Digitraffic-User", "Stormiq/self-hosted").header("Accept-Encoding", "gzip").timeout(Duration::from_secs(60)).send();
     let from = now_ms() - 20 * 60_000;
     let loc: Value = req(&format!("https://meri.digitraffic.fi/api/ais/v1/locations?from={from}")).await?.error_for_status()?.json().await?;
     for f in loc["features"].as_array().cloned().unwrap_or_default() {

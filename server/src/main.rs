@@ -40,7 +40,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser)]
-#[command(name = "tbw-server", version, about = "TheBigWeather data server")]
+#[command(name = "tbw-server", version, about = "Stormiq data server")]
 struct Cli {
     /// Config file (created on first run). Default: data/config.toml (Unix, relative to the
     /// working directory); on Windows <exe folder>\data\config.toml when writable, else
@@ -219,8 +219,8 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
             cfg.server.local_no_auth = true;
             cfg.alerts.enabled = false;
             cfg.ml.enabled = true;
-            if cfg.server.name == "TheBigWeather" {
-                cfg.server.name = "TheBigWeather ML worker".into();
+            if cfg.server.name == "Stormiq" || cfg.server.name == "TheBigWeather" {
+                cfg.server.name = "Stormiq ML worker".into();
             }
         }
         Cmd::Run | Cmd::Camdb | Cmd::Service => {}
@@ -251,6 +251,7 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
     });
     admin::set_args(std::env::args_os().collect());
 
+    tracing::info!("Stormiq server {} (formerly TheBigWeather)", crate::api::VERSION);
     let profile = config::detect_profile(&cfg);
     tracing::info!(
         "profile: {} ({} cores, {} GB RAM, cpu {}% = {} threads) -> {} decode threads, {} MB cache (grid {} / radar {} / other {})",
@@ -428,7 +429,7 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
         Ok(l) => l,
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && cli.bind_fallback => {
             let host = bind.rsplit_once(':').map(|(h, _)| h).unwrap_or("127.0.0.1");
-            tracing::warn!("{bind} is in use (another TheBigWeather server?); using a free port instead");
+            tracing::warn!("{bind} is in use (another Stormiq server?); using a free port instead");
             tokio::net::TcpListener::bind(format!("{host}:0")).await?
         }
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {

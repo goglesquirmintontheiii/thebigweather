@@ -9,10 +9,10 @@ const KEY = "tbw.settings.v1";
 export function FilesPanel() {
   const ref = useRef<HTMLInputElement>(null);
   const exportSettings = () => {
-    const blob = new Blob([JSON.stringify({ app: "TheBigWeather", exported: new Date().toISOString(), settings: settings.value }, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ app: "Stormiq", exported: new Date().toISOString(), settings: settings.value }, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `TheBigWeather-settings-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `Stormiq-settings-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };
@@ -41,7 +41,7 @@ export function FilesPanel() {
               try {
                 const j = JSON.parse(await f.text());
                 const s = j.settings ?? j;
-                if (typeof s !== "object" || !s.radar || !s.view) throw new Error("not a TheBigWeather settings file");
+                if (typeof s !== "object" || !s.radar || !s.view) throw new Error("not a Stormiq settings file");
                 localStorage.setItem(KEY, JSON.stringify(s));
                 toast("Settings imported, reloading…");
                 setTimeout(() => location.reload(), 800);

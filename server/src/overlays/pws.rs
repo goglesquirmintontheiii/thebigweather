@@ -238,7 +238,7 @@ impl Pws {
     async fn session(o: &Arc<Overlays>, server: &str) -> Result<()> {
         let sock = tokio::time::timeout(Duration::from_secs(15), tokio::net::TcpStream::connect(server)).await.map_err(|_| anyhow!("{server}: connect timed out"))??;
         let (rd, mut wr) = sock.into_split();
-        let login = format!("user N0CALL pass -1 vers TheBigWeather {} filter t/w\r\n", env!("CARGO_PKG_VERSION"));
+        let login = format!("user N0CALL pass -1 vers Stormiq {} filter t/w\r\n", env!("CARGO_PKG_VERSION"));
         wr.write_all(login.as_bytes()).await?;
         let mut rd = BufReader::new(rd);
         let mut buf = Vec::with_capacity(512);

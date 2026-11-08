@@ -234,7 +234,7 @@ export function stopTts() {
 
 /** Settings → "Test voice" */
 export function testVoice(o: SayOpts = {}) {
-  return say("This is the TheBigWeather voice. A tornado warning is in effect until 6 45 PM.", o);
+  return say("This is the Stormiq voice. A tornado warning is in effect until 6 45 PM.", o);
 }
 
 /** whether the system engine has been seen failing (shown in settings) */
