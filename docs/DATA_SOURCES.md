@@ -72,7 +72,7 @@ Every feed is public and keyless unless marked **key**. The server caches each o
 | NOHRSC snow, HeatRisk | mapservices.weather.noaa.gov (ArcGIS) | |
 | Raspberry Shake | data.raspberryshake.org FDSN | Data may not be redistributed; the server only fetches on demand |
 | Traffic | TomTom Traffic API (**key**, free tier) | |
-| YouTube recording | yt-dlp on the server (optional) | Check the stream owner's terms before recording |
+| YouTube recording | yt-dlp + Deno (its JavaScript runtime) on the server (optional) | Check the stream owner's terms before recording |
 | Map search | Overpass API (overpass-api.de, overpass.private.coffee) | |
 
 ## Weather alerts (0.8.2)

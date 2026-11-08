@@ -1,6 +1,10 @@
-# TheBigWeather
+![Stormiq — A Swiss army knife for the sky.](docs/banner.png)
 
-Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted server that does the heavy lifting.
+# Stormiq
+
+**A Swiss army knife for the sky.** Every tool · every device · every storm.
+
+Stormiq (formerly TheBigWeather) is a radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted server that does the heavy lifting.
 
 **Status:** Phase 8 of 10 (see [PLAN.md](PLAN.md)). Test list: [docs/PHASE8_CHECKLIST.md](docs/PHASE8_CHECKLIST.md). Plan audit: [docs/PLAN_AUDIT.md](docs/PLAN_AUDIT.md). Data sources and licensing notes: [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md).
 
@@ -9,7 +13,7 @@ Radar and weather workstation: a Linux desktop app (AppImage) plus a self-hosted
 ### 0. Install from GitHub (and stay up to date)
 
 ```bash
-# Linux: desktop app (AppImage) + server bundle into ~/TheBigWeather, SHA-256 checked
+# Linux: desktop app (AppImage) + server bundle into ~/Stormiq, SHA-256 checked
 curl -fsSL https://raw.githubusercontent.com/goglesquirmintontheiii/thebigweather/main/install-latest.sh | bash
 bash install-latest.sh --server-only --dir /opt/tbw     # options: --app-only, --no-desktop-entry, --version X.Y.Z, --source release|repo
 ```
@@ -37,8 +41,8 @@ On Windows, run `start.cmd` (or `start.ps1 -Help` for options) instead of `start
 ### 2. Desktop app
 
 ```bash
-chmod +x TheBigWeather-0.8.0-x86_64.AppImage
-./TheBigWeather-0.8.0-x86_64.AppImage
+chmod +x Stormiq-0.8.2-x86_64.AppImage
+./Stormiq-0.8.2-x86_64.AppImage
 ```
 
 On first launch, paste the server URL and token. If the server runs on the same computer, click **Use the server on this computer** — no token needed (turn this off with `local_no_auth = false` under `[server]` in the config).
@@ -54,6 +58,30 @@ The UI also works in a browser at the server URL (phones too, until the Android 
 - **Publishing builds (no release needed):** build (`tools/release.sh --dry-run`), then `tools/publish-builds.sh`. It force-pushes one fresh commit to the `builds` branch with the files in ≤45 MB parts; plain `git` push access is enough. `--dry-run` only builds the commit locally.
 - **By hand:** download the `builds` branch as a ZIP and run `join-appimage.sh` / `join-windows.cmd` in it.
 - **Publishing a release:** `tools/release.sh`. It needs the `gh` CLI signed in to the repo.
+
+## Rename notes (0.8.2: TheBigWeather → Stormiq)
+
+Everything you see is called Stormiq now (window titles, tray, installer, shortcuts, menu entry, files
+saved to `Downloads/Stormiq`). Your settings come along:
+
+- **Desktop app settings** move from `…/TheBigWeather` to `…/Stormiq` (Electron's user-data folder:
+  `~/.config` on Linux, `%APPDATA%` on Windows) on the first start of 0.8.2; if moving fails, they are
+  copied and the old folder is left in place. If both folders already exist, `Stormiq` is used.
+- **Updates from 0.8.1:** 0.8.1 apps look for `TheBigWeather-<version>-…` files. The `builds` branch
+  lists every app file under both names (same parts, nothing stored twice); a release also carries
+  `TheBigWeather-<version>-portable.exe`. New file names: `Stormiq-<v>-x86_64.AppImage`,
+  `Stormiq-<v>-setup.exe`, `Stormiq-<v>-portable.exe`. 0.8.2 looks for the new names first.
+- **Linux:** `install-latest.sh` installs `Stormiq.AppImage` and `stormiq.desktop` and removes the old
+  `TheBigWeather.AppImage` / `thebigweather.desktop`; an existing `~/TheBigWeather` folder keeps being used.
+- **Windows:** the installer updates in place (same app id) and renames the shortcuts; the portable
+  install becomes `Stormiq-portable.exe` and its shortcuts are moved over.
+
+Kept on purpose (compatibility): the app id `app.thebigweather.desktop` (Windows upgrades in place),
+storage keys (localStorage / IndexedDB), `TBW_*` environment variables, the server binary and crate
+`tbw-server` (scripts, services and self-update use it), server data/config paths
+(`%ProgramData%\TheBigWeather`, the Windows service name `TheBigWeather`), the server's `"app":
+"thebigweather"` handshake, the GitHub repository URL, and `TBW-` checklist numbers. Plugins get the
+same API object as `tbw` and `stormiq`.
 
 ## Phase 8 features (0.8.0)
 
@@ -167,7 +195,7 @@ Phase 5 follow-ups: 3D surfaces, Seismographs menu, SAME decoding and live trans
   - Screen recording and a bandwidth saver.
   - Appearance settings.
   - Pinned METAR panels and GPS tracks.
-- **Cameras and radio:** bigger camera viewer with info and recording, including YouTube once yt-dlp is installed on the server. A big radio window with a DVR-style player that can pause, seek back and record.
+- **Cameras and radio:** bigger camera viewer with info and recording, including YouTube once yt-dlp is installed on the server (since 0.8.2 also Deno, which yt-dlp now needs for YouTube; `start.sh` / `start.ps1` offer to install it). A big radio window with a DVR-style player that can pause, seek back and record.
 
 ## Phase 4 features
 

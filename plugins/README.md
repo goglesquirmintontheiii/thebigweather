@@ -13,7 +13,7 @@ This folder is the app's plugin marketplace. The **Plugins** tab in the app's si
    (`storm-eta-chime/`, `hail-legend/`) as a starting point.
 2. Put in it:
    - `plugin.json` — the manifest (below)
-   - `main.js` — the plugin code (one file, see [docs/PLUGINS.md](../docs/PLUGINS.md) for the `tbw` API)
+   - `main.js` — the plugin code (one file, see [docs/PLUGINS.md](../docs/PLUGINS.md) for the `tbw` / `stormiq` API)
    - `README.md` — the description shown in the app (markdown)
    - `icon.png` (square, 256×256), `banner.png` (4:1, e.g. 1200×300), `screenshots/*.png` (16:9)
 3. Run `node tools/plugins-registry.mjs`. It checks the manifest and files and rewrites

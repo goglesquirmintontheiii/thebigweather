@@ -1,4 +1,6 @@
-# TheBigWeather — Plan
+# Stormiq — Plan
+
+Stormiq was called TheBigWeather until 0.8.2 (see the rename notes in README.md); older entries below keep the old name where it was a file or folder name.
 
 ## Ground rules from the user
 - UI text should be kept short, uncluttered.
@@ -289,7 +291,7 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 
 ## Phase 10 plan — publication (only when asked)
 
-A large phase that turns TheBigWeather into a product others can install and use safely.
+A large phase that turns Stormiq into a product others can install and use safely.
 
 **Accounts and sign-in**
 - Full registration with email verification, sign-in, sign-out, "remember this device", password reset by email link, and password change.

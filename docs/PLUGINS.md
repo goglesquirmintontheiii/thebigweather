@@ -1,4 +1,4 @@
-# TheBigWeather plugins
+# Stormiq plugins
 
 Plugins are small JavaScript files that add map layers, data sources or panels to the app.
 Manage them in the **Plugins** tab of the sidebar (0.8.2): install from the **Marketplace** (see
@@ -27,6 +27,11 @@ or a plain script, which runs as the body of that function (`tbw` is in scope):
 tbw.toast("Hello");
 ```
 
+**`stormiq` alias (0.8.2):** the app was renamed from TheBigWeather to Stormiq. The API object is also
+available as `stormiq` — the same object, not a copy: plain scripts have both `tbw` and `stormiq` in
+scope, and modules receive it twice (`export default function (tbw, stormiq) {…}`). `tbw` keeps
+working; use either name.
+
 ## The `tbw` API (version 1)
 
 Everything a plugin registers through the API is removed automatically when it is disabled or reloaded.
@@ -44,7 +49,7 @@ Everything a plugin registers through the API is removed automatically when it i
 | `tbw.onAlert(cb)` | `cb(feature)` for each newly seen NWS alert (GeoJSON feature with `properties.event`, `areaDesc`, `id` …). |
 | `tbw.on(event, cb)` | Map events (`click`, `mousemove`, `moveend` …), removed with the plugin. |
 | `tbw.toast(msg, kind?)` | Show a toast (`"info"`, `"warn"`, `"error"`). |
-| `tbw.fetchServer(path, as?)` | GET from the connected TheBigWeather server with its token, e.g. `"/api/ovl/metar"`. `as`: `"json"` (default), `"text"`, `"arrayBuffer"`. |
+| `tbw.fetchServer(path, as?)` | GET from the connected Stormiq server with its token, e.g. `"/api/ovl/metar"`. `as`: `"json"` (default), `"text"`, `"arrayBuffer"`. |
 | `tbw.settings()` | A read-only copy of the app settings (units, saved points …). |
 | `tbw.onUnload(fn)` | Run `fn` when the plugin is disabled or reloaded. |
 
