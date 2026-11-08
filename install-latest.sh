@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Install or update TheBigWeather from GitHub (Linux x86_64 / aarch64 server).
+# Install or update Stormiq (formerly TheBigWeather) from GitHub (Linux x86_64 / aarch64 server).
 #
 #   curl -fsSL https://raw.githubusercontent.com/goglesquirmintontheiii/thebigweather/main/install-latest.sh | bash
-#   bash install-latest.sh [--dir ~/TheBigWeather] [--app-only | --server-only] [--no-desktop-entry]
+#   bash install-latest.sh [--dir ~/Stormiq] [--app-only | --server-only] [--no-desktop-entry]
 #                          [--version 0.8.0] [--source auto|release|repo]
 #
 # Source: the newer of the latest GitHub release and the `builds` branch of the repository
 # (--source release / repo forces one). Builds-branch files come in parts that are checked and
 # joined while downloading; an interrupted download resumes from the parts already there.
-# Installs into DIR (default ~/TheBigWeather):
-#   DIR/TheBigWeather.AppImage      the desktop app (it updates itself afterwards)
+# Installs into DIR (default ~/Stormiq, or ~/TheBigWeather when an install from before the rename is there):
+#   DIR/Stormiq.AppImage            the desktop app (it updates itself afterwards)
 #   DIR/server/…, DIR/start.sh      the server bundle (start it with DIR/start.sh; update with --update)
 # Every download is SHA-256 checked. Re-running updates in place and keeps server/data
 # (config, token, recordings).
@@ -53,7 +53,9 @@ ver_cmp() {
 }
 [[ "${TBW_SELFTEST:-}" == vercmp ]] && { ver_cmp "$1" "$2"; exit 0; }  # tests
 
-DIR="$HOME/TheBigWeather"; APP=1; SERVER=1; DESKTOP=1; VERSION=""; SOURCE=auto
+# 0.8.2: renamed TheBigWeather → Stormiq; an existing ~/TheBigWeather install (server data, token) stays put
+DIR="$HOME/Stormiq"; [[ ! -e "$DIR" && -d "$HOME/TheBigWeather" ]] && DIR="$HOME/TheBigWeather"
+APP=1; SERVER=1; DESKTOP=1; VERSION=""; SOURCE=auto
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
@@ -107,7 +109,7 @@ elif [[ -n "$MAN_V" ]]; then
 else
   die "nothing to install: no release${VERSION:+ v$VERSION} and no builds found (offline? rate-limited?)"
 fi
-say "TheBigWeather $V (from $([[ $FROM == release ]] && echo "the GitHub release" || echo "the repository's $BRANCH branch"))"
+say "Stormiq $V (from $([[ $FROM == release ]] && echo "the GitHub release" || echo "the repository's $BRANCH branch"))"
 
 mkdir -p "$DIR"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
@@ -124,7 +126,8 @@ repo_fetch() { # $1 = asset name → prints the joined file's path
   [[ -n "$line" ]] || die "the $BRANCH branch has no $n"
   want_size="$(printf '%s' "$line" | sed -E 's/.*"size": *([0-9]+).*/\1/')"
   want_sum="$(printf '%s' "$line" | sed -E 's/.*"sha256": *"([0-9a-f]{64})".*/\1/')"
-  mapfile -t parts < <(printf '%s\n' "$MAN" | grep -F "\"path\": \"parts/$n.part")
+  # the part lines of this entry (an alias such as a pre-0.8.2 name points at another name's parts)
+  mapfile -t parts < <(printf '%s\n' "$MAN" | awk -v k="\"$n\": {" 'index($0, k) { on = 1; next } on && /"path":/ { print; next } on { exit }')
   total=${#parts[@]}
   (( total )) || die "the manifest lists no parts for $n"
   mkdir -p "$CACHE"
@@ -185,7 +188,7 @@ if (( SERVER )); then
     f="$(fetch "$b")"
     say "installing the server into $DIR"
     tar -xzf "$f" -C "$tmp"
-    src="$tmp/TheBigWeather-server"
+    src="$tmp/Stormiq-server"; [[ -d "$src" ]] || src="$tmp/TheBigWeather-server"  # pre-0.8.2 bundles
     # keep data/ (config, token, recordings) and the old binary for rollback
     mkdir -p "$DIR/server/bin" "$DIR/server/data" "$DIR/app"
     [[ -x "$DIR/server/bin/tbw-server" ]] && mv -f "$DIR/server/bin/tbw-server" "$DIR/server/bin/tbw-server.old"
@@ -207,35 +210,39 @@ if (( SERVER )); then
 fi
 
 if (( APP )); then
-  a="TheBigWeather-$V-x86_64.AppImage"
+  # 0.8.2: Stormiq-<v>-…; versions before the rename are TheBigWeather-<v>-…
+  a="Stormiq-$V-x86_64.AppImage"; has_asset "$a" || a="TheBigWeather-$V-x86_64.AppImage"
   f="$(fetch "$a")"
   say "installing the desktop app"
-  mv -f "$f" "$DIR/TheBigWeather.AppImage"
-  chmod +x "$DIR/TheBigWeather.AppImage"
+  mv -f "$f" "$DIR/Stormiq.AppImage"
+  chmod +x "$DIR/Stormiq.AppImage"
+  rm -f "$DIR/TheBigWeather.AppImage"  # renamed in 0.8.2
   if (( DESKTOP )); then
     apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
     mkdir -p "$apps"
     icon=""
     # the AppImage carries its icon; extract it once
-    if (cd "$tmp" && "$DIR/TheBigWeather.AppImage" --appimage-extract '*.png' >/dev/null 2>&1); then
+    if (cd "$tmp" && "$DIR/Stormiq.AppImage" --appimage-extract '*.png' >/dev/null 2>&1); then
       p="$(ls "$tmp"/squashfs-root/*.png 2>/dev/null | head -1)"
-      [[ -n "$p" ]] && cp "$p" "$DIR/icon.png" && icon="$DIR/icon.png"
+      [[ -n "$p" ]] && cp "$p" "$DIR/stormiq.png" && icon="$DIR/stormiq.png"
     fi
-    cat > "$apps/thebigweather.desktop" <<EOF
+    [[ -n "$icon" ]] && rm -f "$DIR/icon.png"  # the pre-0.8.2 icon
+    rm -f "$apps/thebigweather.desktop"         # the pre-0.8.2 menu entry
+    cat > "$apps/stormiq.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=TheBigWeather
-Comment=Radar and weather workstation
-Exec="$DIR/TheBigWeather.AppImage" %F
+Name=Stormiq
+Comment=A Swiss army knife for the sky
+Exec="$DIR/Stormiq.AppImage" %F
 Icon=${icon:-weather-storm}
 Terminal=false
 Categories=Science;Education;
 MimeType=application/x-tbw-colortable;application/x-tbw-workspace;application/x-nexrad-level2;
 EOF
     command -v update-desktop-database >/dev/null && update-desktop-database "$apps" >/dev/null 2>&1 || true
-    echo "    added TheBigWeather to the applications menu"
+    echo "    added Stormiq to the applications menu"
   fi
-  echo "    run it: $DIR/TheBigWeather.AppImage   (it updates itself: Settings → Updates)"
+  echo "    run it: $DIR/Stormiq.AppImage   (it updates itself: Settings → Updates)"
   command -v fusermount >/dev/null || command -v fusermount3 >/dev/null || echo "    note: AppImages need FUSE (e.g. sudo apt install libfuse2)"
 fi
 rmdir "$CACHE" 2>/dev/null || true

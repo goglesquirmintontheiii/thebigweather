@@ -3,8 +3,9 @@
 #   tbw_collect_assets ROOT VERSION OUT WINDOWS STRICT
 #
 # Copies the already built files into OUT with their published names:
-#   TheBigWeather-<v>-x86_64.AppImage (+ latest-linux.yml)        app/release
-#   TheBigWeather-<v>-setup.exe (+ .blockmap, latest.yml), TheBigWeather-<v>-portable.exe
+#   Stormiq-<v>-x86_64.AppImage (+ latest-linux.yml)              app/release
+#   Stormiq-<v>-setup.exe (+ .blockmap, latest.yml), Stormiq-<v>-portable.exe
+#   (named TheBigWeather-<v>-… before 0.8.2; see tbw_alias_old_names)
 #   tbw-server-<v>-linux-x86_64, tbw-server-<v>-windows-x86_64.exe   server/bin
 #   tbw-web-<v>.zip                                                   app/dist
 #   tbw-server-<v>-linux-x86_64.tar.gz, tbw-server-<v>-windows-x86_64.zip   server bundles
@@ -22,10 +23,10 @@ tbw_collect_assets() {
     return 0
   }
   rm -rf "$OUT"; mkdir -p "$OUT"
-  _tbw_need "$rel/TheBigWeather-$V-x86_64.AppImage" "TheBigWeather-$V-x86_64.AppImage" || return 1
+  _tbw_need "$rel/Stormiq-$V-x86_64.AppImage" "Stormiq-$V-x86_64.AppImage" || return 1
   [[ -f "$rel/latest-linux.yml" ]] && cp "$rel/latest-linux.yml" "$OUT/"
   if (( WINDOWS )); then
-    for f in "TheBigWeather-$V-setup.exe" "TheBigWeather-$V-setup.exe.blockmap" "TheBigWeather-$V-portable.exe" latest.yml; do
+    for f in "Stormiq-$V-setup.exe" "Stormiq-$V-setup.exe.blockmap" "Stormiq-$V-portable.exe" latest.yml; do
       [[ -f "$rel/$f" ]] && cp "$rel/$f" "$OUT/" || echo "    (missing $f)"
     done
   fi
@@ -45,7 +46,7 @@ tbw_collect_assets() {
   # server bundles: start scripts + binary + data tables + web app
   local stage; stage="$(mktemp -d)"
   _tbw_bundle() { # $1 = platform dir name, $2 = binary path, rest = scripts
-    local d="$stage/$1/TheBigWeather-server" s
+    local d="$stage/$1/Stormiq-server" s
     mkdir -p "$d/server/bin" "$d/server/data" "$d/app"
     cp "$2" "$d/server/bin/"
     echo "$V" > "$d/server/VERSION"
@@ -56,15 +57,28 @@ tbw_collect_assets() {
   }
   if [[ -f "$ROOT/server/bin/tbw-server" && -f "$ROOT/app/dist/index.html" ]]; then
     _tbw_bundle linux "$ROOT/server/bin/tbw-server" start.sh install-latest.sh README.md
-    chmod +x "$stage/linux/TheBigWeather-server/start.sh" "$stage/linux/TheBigWeather-server/server/bin/tbw-server"
-    tar -C "$stage/linux" -czf "$OUT/tbw-server-$V-linux-x86_64.tar.gz" TheBigWeather-server
+    chmod +x "$stage/linux/Stormiq-server/start.sh" "$stage/linux/Stormiq-server/server/bin/tbw-server"
+    tar -C "$stage/linux" -czf "$OUT/tbw-server-$V-linux-x86_64.tar.gz" Stormiq-server
   fi
   if (( WINDOWS )) && [[ -f "$ROOT/server/bin/tbw-server.exe" && -f "$ROOT/app/dist/index.html" ]]; then
     _tbw_bundle windows "$ROOT/server/bin/tbw-server.exe" start.ps1 start.cmd install-latest.ps1 install-latest.cmd README.md
-    for f in ffmpeg.exe yt-dlp.exe; do [[ -f "$ROOT/server/bin/$f" ]] && cp "$ROOT/server/bin/$f" "$stage/windows/TheBigWeather-server/server/bin/"; done
-    (cd "$stage/windows" && zip -qr "$OUT/tbw-server-$V-windows-x86_64.zip" TheBigWeather-server)
+    for f in ffmpeg.exe yt-dlp.exe; do [[ -f "$ROOT/server/bin/$f" ]] && cp "$ROOT/server/bin/$f" "$stage/windows/Stormiq-server/server/bin/"; done
+    (cd "$stage/windows" && zip -qr "$OUT/tbw-server-$V-windows-x86_64.zip" Stormiq-server)
   fi
   rm -rf "$stage"
   cp "$ROOT/install-latest.sh" "$ROOT/install-latest.ps1" "$ROOT/install-latest.cmd" "$OUT/"
   (cd "$OUT" && sha256sum -- * | grep -v ' SHA256SUMS$' > SHA256SUMS)
+}
+
+# 0.8.2 rename: installed 0.8.1 apps look for TheBigWeather-<v>-… names. For a GitHub release,
+# hard-link the portable .exe under its old name (0.8.1 portable apps download the release asset by
+# name; the AppImage / installer update through latest*.yml, which names the new files) and add it
+# to SHA256SUMS. The builds branch lists old names in its manifest instead (tools/publish-builds.sh).
+#   tbw_alias_old_names OUT VERSION
+tbw_alias_old_names() {
+  local OUT="$1" V="$2" n="Stormiq-$2-portable.exe" o="TheBigWeather-$2-portable.exe"
+  [[ -f "$OUT/$n" && ! -e "$OUT/$o" ]] || return 0
+  ln "$OUT/$n" "$OUT/$o" 2>/dev/null || cp "$OUT/$n" "$OUT/$o"
+  (cd "$OUT" && sha256sum -- * | grep -v ' SHA256SUMS$' > SHA256SUMS)
+  echo "    $o (same file as $n, for 0.8.1 portable apps)"
 }

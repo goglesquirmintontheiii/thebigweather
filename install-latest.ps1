@@ -1,12 +1,13 @@
 <#
 .SYNOPSIS
-  Install or update TheBigWeather from GitHub (Windows x64).
+  Install or update Stormiq (formerly TheBigWeather) from GitHub (Windows x64).
 
 .DESCRIPTION
-  .\install-latest.ps1                     desktop app (installer) + server bundle into %USERPROFILE%\TheBigWeather
+  .\install-latest.ps1                     desktop app (installer) + server bundle into %USERPROFILE%\Stormiq
+                                           (%USERPROFILE%\TheBigWeather when an install from before the rename is there)
   .\install-latest.ps1 -Portable           the portable desktop app instead of the installer
   .\install-latest.ps1 -AppOnly / -ServerOnly
-  .\install-latest.ps1 -Dir D:\TBW -Version 0.8.0
+  .\install-latest.ps1 -Dir D:\Stormiq -Version 0.8.0
   .\install-latest.ps1 -Source release     only the GitHub release (-Source repo: only the builds branch)
   Double-click install-latest.cmd to run it without changing the execution policy.
 
@@ -18,7 +19,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$Dir = (Join-Path $env:USERPROFILE "TheBigWeather"),
+  [string]$Dir = "",
   [switch]$Portable,
   [switch]$AppOnly,
   [switch]$ServerOnly,
@@ -27,13 +28,19 @@ param(
   [switch]$NoLaunch
 )
 $ErrorActionPreference = "Stop"
+# 0.8.2: renamed TheBigWeather -> Stormiq; an existing %USERPROFILE%\TheBigWeather install (server data, token) stays put
+if (-not $Dir) {
+  $Dir = Join-Path $env:USERPROFILE "Stormiq"
+  $oldDir = Join-Path $env:USERPROFILE "TheBigWeather"
+  if (-not (Test-Path -LiteralPath $Dir) -and (Test-Path -LiteralPath $oldDir)) { $Dir = $oldDir }
+}
 $ProgressPreference = "SilentlyContinue" # Invoke-WebRequest is very slow with the progress bar
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 $Repo = if ($env:TBW_REPO) { $env:TBW_REPO } else { "goglesquirmintontheiii/thebigweather" }
 $Raw = if ($env:TBW_RAW_BASE) { $env:TBW_RAW_BASE.TrimEnd('/') } else { "https://raw.githubusercontent.com/$Repo" }
 $Api = if ($env:TBW_API_BASE) { $env:TBW_API_BASE.TrimEnd('/') } else { "https://api.github.com" }
 $Branch = if ($env:TBW_BUILDS_BRANCH) { $env:TBW_BUILDS_BRANCH } else { "builds" }
-$UA = @{ "User-Agent" = "TheBigWeather-installer" }
+$UA = @{ "User-Agent" = "Stormiq-installer" }
 function Say($m) { Write-Host "==> " -ForegroundColor Cyan -NoNewline; Write-Host $m }
 function Die($m) { Write-Host "x $m" -ForegroundColor Red; exit 1 }
 
@@ -83,7 +90,7 @@ $rel = $null; $relV = ""
 if ($Source -ne "repo") {
   $api = if ($Version) { "$Api/repos/$Repo/releases/tags/v$($Version.TrimStart('v'))" } else { "$Api/repos/$Repo/releases/latest" }
   Say "looking up the latest release ($Repo)"
-  try { $rel = Invoke-RestMethod -Uri $api -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "TheBigWeather-installer" } -TimeoutSec 30; $relV = $rel.tag_name -replace '^[vV]', '' } catch { $rel = $null }
+  try { $rel = Invoke-RestMethod -Uri $api -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "Stormiq-installer" } -TimeoutSec 30; $relV = $rel.tag_name -replace '^[vV]', '' } catch { $rel = $null }
   if ($relV) { Write-Host "    release: $relV" } else { Write-Host "    no release found" }
 }
 $man = $null; $manV = ""; $ref = $Branch
@@ -102,7 +109,7 @@ if ($relV -and (-not $manV -or (Compare-Ver $relV $manV) -ge 0)) { $From = "rele
 elseif ($manV) { $From = "repo"; $V = $manV }
 else { $vv = if ($Version) { " v$Version" } else { "" }; Die "nothing to install: no release$vv and no builds found (offline? rate-limited?)" }
 $fromText = if ($From -eq "release") { "the GitHub release" } else { "the repository's $Branch branch" }
-Say "TheBigWeather $V (from $fromText)"
+Say "Stormiq $V (from $fromText)"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("tbw-install-" + [guid]::NewGuid())
 $cache = Join-Path $Dir ".download"  # builds-branch downloads (kept until installed, so a re-run resumes)
@@ -190,6 +197,30 @@ function Fetch-Release($name) {
   if (-not $want -or $want -ne $got) { Die "checksum mismatch for $name (download corrupted?)" }
   return $out
 }
+# 0.8.2: Stormiq-<v>-...; versions before the rename are TheBigWeather-<v>-...
+function App-Asset($suffix) { $n = "Stormiq-$V-$suffix"; if (Has-Asset $n) { return $n }; return "TheBigWeather-$V-$suffix" }
+# Desktop / Start menu shortcuts that start $old: point them at $new and give them the new name
+function Move-Shortcuts([string]$old, [string]$new, [string]$name) {
+  try {
+    $sh = New-Object -ComObject WScript.Shell
+    $dirs = @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"))
+    foreach ($d in $dirs) {
+      if (-not $d -or -not (Test-Path -LiteralPath $d)) { continue }
+      foreach ($l in @(Get-ChildItem -LiteralPath $d -Filter "*.lnk" -ErrorAction SilentlyContinue)) {
+        $lnk = $sh.CreateShortcut($l.FullName)
+        if ($lnk.TargetPath -ne $old) { continue }
+        $lnk.TargetPath = $new
+        $lnk.WorkingDirectory = Split-Path -Parent $new
+        $lnk.Save()
+        if ($l.BaseName -like "*TheBigWeather*") {
+          $to = Join-Path $d ($l.Name -replace "TheBigWeather", $name)
+          if (-not (Test-Path -LiteralPath $to)) { Move-Item -LiteralPath $l.FullName $to } else { Remove-Item -Force -LiteralPath $l.FullName }
+        }
+        Write-Host "    shortcut updated: $($l.Name)"
+      }
+    }
+  } catch { Write-Host "    (couldn't update shortcuts: $($_.Exception.Message))" }
+}
 function Fetch($name) { if ($From -eq "release") { return (Fetch-Release $name) } else { return (Fetch-Repo $name) } }
 
 # ---------- install ----------
@@ -201,7 +232,9 @@ try {
       Say "installing the server into $Dir"
       $x = Join-Path $tmp "x"
       Expand-Archive -Path $zip -DestinationPath $x -Force
-      $src = Join-Path $x "TheBigWeather-server"
+      $src = Join-Path $x "Stormiq-server"
+      if (-not (Test-Path -LiteralPath $src)) { $src = Join-Path $x "TheBigWeather-server" } # pre-0.8.2 bundles
+      # the Windows service keeps its name "TheBigWeather" (start.ps1 and existing installs use it)
       $svc = $null; try { $svc = Get-Service -Name "TheBigWeather" -ErrorAction SilentlyContinue } catch {}
       $wasRunning = $svc -and $svc.Status -eq "Running"
       if ($wasRunning) { & sc.exe stop TheBigWeather | Out-Null; Start-Sleep -Seconds 4 }
@@ -219,26 +252,33 @@ try {
         $p = Join-Path $src $f; if (Test-Path $p) { Copy-Item -Force $p (Join-Path $Dir $f) }
       }
       if ($From -eq "repo") { Remove-Item -Force -LiteralPath $zip -ErrorAction SilentlyContinue }
-      if ($wasRunning) { & sc.exe start TheBigWeather | Out-Null; Write-Host "    restarted the TheBigWeather service" }
+      if ($wasRunning) { & sc.exe start TheBigWeather | Out-Null; Write-Host "    restarted the Stormiq server service" }
       Write-Host "    start it with: $Dir\start.cmd   (or start.ps1 -InstallService to run it at boot)"
     } else { Write-Host "    (version $V has no Windows server bundle)" }
   }
   if (-not $ServerOnly) {
     if ($Portable) {
-      $p = Fetch "TheBigWeather-$V-portable.exe"
-      $dst = Join-Path $Dir "TheBigWeather-portable.exe"
+      $p = Fetch (App-Asset "portable.exe")
+      $dst = Join-Path $Dir "Stormiq-portable.exe"
       Move-Item -Force $p $dst
+      # 0.8.2: renamed from TheBigWeather-portable.exe
+      $oldExe = Join-Path $Dir "TheBigWeather-portable.exe"
+      if (Test-Path -LiteralPath $oldExe) {
+        Move-Shortcuts $oldExe $dst "Stormiq"
+        try { Remove-Item -Force -LiteralPath $oldExe } catch { Write-Host "    (the old $oldExe is in use; delete it later)" }
+      }
       Say "portable app: $dst (it updates itself: Settings > Updates)"
       if (-not $NoLaunch) { Start-Process $dst }
     } else {
-      $setup = Fetch "TheBigWeather-$V-setup.exe"
+      $setup = Fetch (App-Asset "setup.exe")
       Say "running the installer (the app updates itself afterwards: Settings > Updates)"
-      # /S = silent per-user install into %LOCALAPPDATA%\Programs\TheBigWeather
+      # /S = silent per-user install into %LOCALAPPDATA%\Programs\Stormiq (an update stays in the
+      # folder of the earlier install, e.g. Programs\TheBigWeather; shortcuts are renamed by the installer)
       $proc = Start-Process -FilePath $setup -ArgumentList "/S" -PassThru -Wait
       if ($proc.ExitCode -ne 0) { Die "the installer failed ($($proc.ExitCode))" }
       if ($From -eq "repo") { Remove-Item -Force -LiteralPath $setup -ErrorAction SilentlyContinue }
-      $exe = Join-Path $env:LOCALAPPDATA "Programs\TheBigWeather\TheBigWeather.exe"
-      if ((Test-Path $exe) -and -not $NoLaunch) { Start-Process $exe }
+      $exe = @("Programs\Stormiq\Stormiq.exe", "Programs\TheBigWeather\Stormiq.exe", "Programs\TheBigWeather\TheBigWeather.exe") | ForEach-Object { Join-Path $env:LOCALAPPDATA $_ } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+      if ($exe -and -not $NoLaunch) { Start-Process $exe }
     }
   }
   if ((Test-Path -LiteralPath $cache) -and -not (Get-ChildItem -Force -LiteralPath $cache)) { Remove-Item -Force -LiteralPath $cache }

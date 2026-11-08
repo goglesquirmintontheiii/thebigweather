@@ -1,4 +1,4 @@
-# Rebuilds TheBigWeather files from their parts and checks them.
+# Rebuilds Stormiq (formerly TheBigWeather) files from their parts and checks them.
 # Usage:
 #   - builds branch (downloaded as a ZIP and extracted): double-click join-windows.cmd in its folder;
 #     it joins parts\<file>.partNN into <file> for the Windows files (or the names given) and checks SHA256SUMS.
@@ -19,6 +19,8 @@ if ((Test-Path "SHA256SUMS") -and @(Get-ChildItem -LiteralPath $pd | Where-Objec
   $bad = 0
   foreach ($name in $Names) {
     $parts = @(Get-ChildItem -LiteralPath $pd | Where-Object { $_.Name -match ('^' + [regex]::Escape($name) + '\.part\d+$') } | Sort-Object Name)
+    # 0.8.2: TheBigWeather-<v>-... entries are the same files as Stormiq-<v>-... (for 0.8.1 apps)
+    if ($parts.Count -eq 0 -and $name -like "TheBigWeather-*" -and $sums.ContainsKey("Stormiq-" + $name.Substring(14))) { continue }
     if ($parts.Count -eq 0) { if ($plain) { continue }; Write-Host "No parts for $name"; $bad = 1; continue }
     $tmp = Join-Path $PSScriptRoot "$name.joining"
     $out = [System.IO.File]::Create($tmp)
@@ -31,8 +33,8 @@ if ((Test-Path "SHA256SUMS") -and @(Get-ChildItem -LiteralPath $pd | Where-Objec
   Read-Host "Done. Press Enter"
   exit $bad
 }
-$first = Get-ChildItem -Filter "TheBigWeather-*.exe.part0.zip" | Sort-Object Name | Select-Object -Last 1
-if (-not $first) { Write-Host "Put this script next to the TheBigWeather-...exe.partN.zip files (or in the builds branch folder)"; Read-Host "Press Enter"; exit 1 }
+$first = @(Get-ChildItem -Filter "Stormiq-*.exe.part0.zip") + @(Get-ChildItem -Filter "TheBigWeather-*.exe.part0.zip") | Select-Object -First 1
+if (-not $first) { Write-Host "Put this script next to the Stormiq-...exe.partN.zip files (or in the builds branch folder)"; Read-Host "Press Enter"; exit 1 }
 $name = $first.Name -replace '\.part0\.zip$', ''
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("tbw-join-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null

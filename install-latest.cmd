@@ -1,5 +1,5 @@
 @echo off
-rem Install or update TheBigWeather from GitHub: the latest release or repository build (double-click me).
+rem Install or update Stormiq (formerly TheBigWeather) from GitHub: the latest release or repository build (double-click me).
 rem Options are passed on to install-latest.ps1, e.g.: install-latest.cmd -Portable
 setlocal
 set "PS1=%~dp0install-latest.ps1"

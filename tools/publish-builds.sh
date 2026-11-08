@@ -9,6 +9,7 @@
 #   tools/publish-builds.sh --branch NAME      branch name (default: builds)
 #   tools/publish-builds.sh --no-windows       leave out the Windows files
 #   tools/publish-builds.sh --part-size 45M    largest part (default 45M; GitHub warns at 50 MB, refuses 100 MB)
+#   TBW_BUILDS_DIR=DIR (with --dry-run)        build the branch in DIR instead of release/builds-branch
 #
 # Build first (tools/release.sh --dry-run builds and collects everything, or npm run dist / cargo
 # build). Needs only git with push access (whatever credentials git already uses), sha256sum, split.
@@ -18,6 +19,10 @@
 #   manifest.json        {version, date, commit, files: {"<asset>": {size, sha256, parts: [{path, size, sha256}]}}}
 #   SHA256SUMS           sha256 of every whole asset
 #   parts/<asset>.partNN the asset split in order (cat them together, or use the join scripts)
+#
+# 0.8.2 rename (TheBigWeather → Stormiq): every Stormiq-<v>-{x86_64.AppImage,setup.exe,portable.exe}
+# is also listed under its old name TheBigWeather-<v>-… in manifest.json and SHA256SUMS, pointing
+# at the same parts (nothing is stored twice), because installed 0.8.1 apps look for the old name.
 #   install-latest.*, join-*  installers (they download and join the parts) and offline join scripts
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,7 +35,7 @@ while [[ $# -gt 0 ]]; do
     --branch) BRANCH="$2"; shift 2 ;;
     --no-windows) WINDOWS=0; shift ;;
     --part-size) PART="$2"; shift 2 ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "unknown option $1 (see --help)"; exit 1 ;;
   esac
 done
@@ -75,52 +80,66 @@ for f in "$ASSETS"/*; do
     SHA256SUMS|latest*.yml|*.blockmap|install-latest.*|join-*) continue ;;
     *-windows-*|*.exe) (( WINDOWS )) || continue ;;
   esac
+  # a pre-0.8.2 name next to its Stormiq file (release.sh's portable alias): listed as an alias below
+  [[ "$n" == TheBigWeather-* && -f "$ASSETS/Stormiq-${n#TheBigWeather-}" ]] && continue
   names+=("$n")
 done
 (( ${#names[@]} )) || die "nothing to publish in $ASSETS (build first, or use --from DIR)"
 
-if (( DRY )); then WORK="$ROOT/release/builds-branch"; else WORK="$stage/branch"; fi
+if (( DRY )); then WORK="${TBW_BUILDS_DIR:-$ROOT/release/builds-branch}"; else WORK="$stage/branch"; fi
 rm -rf "$WORK"; mkdir -p "$WORK/parts"
 say "splitting ${#names[@]} files into parts of at most $PART"
-{
-  echo "{"
-  echo "  \"version\": \"$V\","
-  echo "  \"date\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
-  echo "  \"commit\": \"$COMMIT\","
-  echo "  \"files\": {"
-} > "$WORK/manifest.json"
+# pre-0.8.2 name of a renamed app asset (empty when it has none)
+old_name() {
+  case "$1" in
+    Stormiq-*-x86_64.AppImage|Stormiq-*-setup.exe|Stormiq-*-portable.exe) echo "TheBigWeather-${1#Stormiq-}" ;;
+  esac
+}
+entries=()
 : > "$WORK/SHA256SUMS"
-i=0
 for n in "${names[@]}"; do
   src="$ASSETS/$n"
   size="$(stat -c %s "$src")"
   sum="$(sha256sum "$src" | cut -d' ' -f1)"
   echo "$sum  $n" >> "$WORK/SHA256SUMS"
   if (( size == 0 )); then : > "$WORK/parts/$n.part00"; else split -b "$PB" -d -a 2 "$src" "$WORK/parts/$n.part"; fi
-  i=$((i + 1))
-  {
-    echo "    \"$n\": { \"size\": $size, \"sha256\": \"$sum\", \"parts\": ["
-    first=1
-    for pp in "$WORK/parts/$n".part[0-9][0-9]; do
-      p="$(basename "$pp")"
-      ps="$(stat -c %s "$WORK/parts/$p")"; ph="$(sha256sum "$WORK/parts/$p" | cut -d' ' -f1)"
-      (( first )) || echo ","
-      printf '      { "path": "parts/%s", "size": %s, "sha256": "%s" }' "$p" "$ps" "$ph"
-      first=0
-    done
-    echo
-    if (( i < ${#names[@]} )); then echo "    ] },"; else echo "    ] }"; fi
-  } >> "$WORK/manifest.json"
+  plist=""
+  first=1
+  for pp in "$WORK/parts/$n".part[0-9][0-9]; do
+    p="$(basename "$pp")"
+    ps="$(stat -c %s "$WORK/parts/$p")"; ph="$(sha256sum "$WORK/parts/$p" | cut -d' ' -f1)"
+    (( first )) || plist+=$',\n'
+    plist+="$(printf '      { "path": "parts/%s", "size": %s, "sha256": "%s" }' "$p" "$ps" "$ph")"
+    first=0
+  done
+  entries+=("$(printf '    "%s": { "size": %s, "sha256": "%s", "parts": [\n%s\n    ] }' "$n" "$size" "$sum" "$plist")")
   np=("$WORK/parts/$n".part[0-9][0-9])
   echo "    $n ($(( size / 1024 / 1024 )) MB, ${#np[@]} parts)"
+  # 0.8.2: the old name too, pointing at the same parts
+  o="$(old_name "$n")"
+  if [[ -n "$o" ]]; then
+    echo "$sum  $o" >> "$WORK/SHA256SUMS"
+    entries+=("$(printf '    "%s": { "size": %s, "sha256": "%s", "parts": [\n%s\n    ] }' "$o" "$size" "$sum" "$plist")")
+    echo "    $o (alias of $n for 0.8.1 apps)"
+  fi
 done
-printf '  }\n}\n' >> "$WORK/manifest.json"
+{
+  echo "{"
+  echo "  \"version\": \"$V\","
+  echo "  \"date\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
+  echo "  \"commit\": \"$COMMIT\","
+  echo "  \"files\": {"
+  for (( i = 0; i < ${#entries[@]}; i++ )); do
+    if (( i + 1 < ${#entries[@]} )); then printf '%s,\n' "${entries[$i]}"; else printf '%s\n' "${entries[$i]}"; fi
+  done
+  printf '  }\n}\n'
+} > "$WORK/manifest.json"
 
 # installers + offline join scripts at the root
 cp "$ROOT/install-latest.sh" "$ROOT/install-latest.ps1" "$ROOT/install-latest.cmd" "$ROOT/tools/join-appimage.sh" "$ROOT/tools/join-windows.ps1" "$ROOT/tools/join-windows.cmd" "$WORK/"
 chmod +x "$WORK/install-latest.sh" "$WORK/join-appimage.sh"
 cat > "$WORK/README.md" <<EOF
-# TheBigWeather $V builds
+# Stormiq $V builds
 
 Automatic build files (commit \`${COMMIT:0:12}\`). This branch is replaced on every publish.
 
@@ -128,17 +147,19 @@ Automatic build files (commit \`${COMMIT:0:12}\`). This branch is replaced on ev
 - Windows: download \`install-latest.cmd\` from this branch and run it.
 - By hand: download the branch as a ZIP, then run \`join-appimage.sh\` (Linux) or \`join-windows.cmd\` (Windows)
   to rebuild the files from \`parts/\` (checked against \`SHA256SUMS\`).
+- Stormiq was called TheBigWeather before 0.8.2: \`TheBigWeather-$V-…\` entries in \`manifest.json\` /
+  \`SHA256SUMS\` are the same files as \`Stormiq-$V-…\` (for apps that update from 0.8.1).
 EOF
 
 say "creating the $BRANCH commit"
 git init -q "$WORK"
 git -C "$WORK" checkout -q --orphan "$BRANCH" 2>/dev/null || git -C "$WORK" symbolic-ref HEAD "refs/heads/$BRANCH"
 # same identity / credentials / http settings as the main repository
-GN="$(git -C "$ROOT" config user.name || echo "TheBigWeather builds")"
-GE="$(git -C "$ROOT" config user.email || echo "builds@thebigweather.invalid")"
+GN="$(git -C "$ROOT" config user.name || echo "Stormiq builds")"
+GE="$(git -C "$ROOT" config user.email || echo "builds@stormiq.invalid")"
 while read -r k v; do [[ -n "$k" ]] && git -C "$WORK" config --add "$k" "$v"; done < <(git -C "$ROOT" config --local --get-regexp '^(credential|http|url)\.' 2>/dev/null || true)
 git -C "$WORK" add -A
-git -C "$WORK" -c user.name="$GN" -c user.email="$GE" -c commit.gpgsign=false commit -q -m "TheBigWeather $V builds (main ${COMMIT:0:12})"
+git -C "$WORK" -c user.name="$GN" -c user.email="$GE" -c commit.gpgsign=false commit -q -m "Stormiq $V builds (main ${COMMIT:0:12})"
 SHA="$(git -C "$WORK" rev-parse HEAD)"
 big="$(find "$WORK/parts" -type f -size +$(( 95 * 1024 ))k | head -1)"
 [[ -z "$big" ]] || die "$big is too big for GitHub"

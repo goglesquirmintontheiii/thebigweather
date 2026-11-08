@@ -67,12 +67,24 @@ function parseManifest(input) {
   return { version: String(m.version).replace(/^[vV]/, ""), date: String(m.date ?? ""), commit: String(m.commit ?? ""), files: m.files };
 }
 
-/** Asset names the app uses, per install kind. */
-function appAssetName(kind, version) {
-  if (kind === "appimage") return `TheBigWeather-${version}-x86_64.AppImage`;
-  if (kind === "nsis") return `TheBigWeather-${version}-setup.exe`;
-  if (kind === "portable") return `TheBigWeather-${version}-portable.exe`;
+/** 0.8.2: the app was renamed TheBigWeather → Stormiq; builds before 0.8.2 used the old prefix. */
+const ASSET_PREFIX = "Stormiq";
+const OLD_ASSET_PREFIX = "TheBigWeather";
+/** Asset name the app uses, per install kind (the current name). */
+function appAssetName(kind, version, prefix = ASSET_PREFIX) {
+  if (kind === "appimage") return `${prefix}-${version}-x86_64.AppImage`;
+  if (kind === "nsis") return `${prefix}-${version}-setup.exe`;
+  if (kind === "portable") return `${prefix}-${version}-portable.exe`;
   return null;
+}
+/** Names to look for, preferred first: the new name, then the pre-0.8.2 name. */
+function appAssetNames(kind, version) {
+  const a = appAssetName(kind, version);
+  return a ? [a, appAssetName(kind, version, OLD_ASSET_PREFIX)] : [];
+}
+/** First of appAssetNames() that `has(name)` says exists → name | null. */
+function pickAssetName(kind, version, has) {
+  return appAssetNames(kind, version).find((n) => has(n)) ?? null;
 }
 
 /** "version: 0.8.1" from electron-builder's latest*.yml */
@@ -95,7 +107,7 @@ async function getText(fetchFn, url, { timeout = 20000, headers = {} } = {}) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeout);
   try {
-    const r = await fetchFn(url, { headers: { "User-Agent": "TheBigWeather", ...headers }, signal: ac.signal, cache: "no-store" });
+    const r = await fetchFn(url, { headers: { "User-Agent": "Stormiq", ...headers }, signal: ac.signal, cache: "no-store" });
     if (!r.ok) {
       const e = new Error(`HTTP ${r.status}`);
       e.status = r.status;
@@ -192,7 +204,7 @@ async function downloadAsset({ fetchFn, entry, base, dest, onProgress, signal, r
         const onAbort = () => ac.abort();
         signal?.addEventListener?.("abort", onAbort);
         try {
-          const r = await fetchFn(url, { headers: { "User-Agent": "TheBigWeather" }, signal: ac.signal, cache: "no-store" });
+          const r = await fetchFn(url, { headers: { "User-Agent": "Stormiq" }, signal: ac.signal, cache: "no-store" });
           if (!r.ok || !r.body) throw new Error(`HTTP ${r.status} for ${p.path || p.url}`);
           const h = crypto.createHash("sha256");
           const fd = fs.openSync(dest, "r+");
@@ -300,4 +312,4 @@ function portableSwapScript(newExe, exe) {
   ].join("\r\n");
 }
 
-module.exports = { REPO, BRANCH, parseSemver, cmpVersion, pickUpdate, parseManifest, appAssetName, ymlVersion, parseSums, getText, buildsInfo, hashRange, downloadAsset, installAppImage, dirWritable, portableSwapScript };
+module.exports = { REPO, BRANCH, parseSemver, cmpVersion, pickUpdate, parseManifest, ASSET_PREFIX, OLD_ASSET_PREFIX, appAssetName, appAssetNames, pickAssetName, ymlVersion, parseSums, getText, buildsInfo, hashRange, downloadAsset, installAppImage, dirWritable, portableSwapScript };

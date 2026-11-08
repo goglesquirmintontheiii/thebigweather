@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and publish a TheBigWeather release on GitHub (release assets, not git files: the
+# Build and publish a Stormiq (formerly TheBigWeather) release on GitHub (release assets, not git files: the
 # AppImage / installers are far over git's 100 MB file limit).
 #
 #   tools/release.sh                      build everything for the version in app/package.json and publish v<version>
@@ -16,9 +16,11 @@
 #
 # Assets (what install-latest.sh / install-latest.ps1, the server's self-update and the app's
 # auto-update look for — keep the names):
-#   TheBigWeather-<v>-x86_64.AppImage, latest-linux.yml          desktop app, Linux (+ updater metadata)
-#   TheBigWeather-<v>-setup.exe, latest.yml, *.blockmap          desktop app, Windows installer (+ updater metadata)
-#   TheBigWeather-<v>-portable.exe                               desktop app, Windows portable
+#   Stormiq-<v>-x86_64.AppImage, latest-linux.yml                desktop app, Linux (+ updater metadata)
+#   Stormiq-<v>-setup.exe, latest.yml, *.blockmap                desktop app, Windows installer (+ updater metadata)
+#   Stormiq-<v>-portable.exe                                     desktop app, Windows portable
+#   TheBigWeather-<v>-portable.exe                               the same file under its pre-0.8.2 name
+#                                                                (0.8.1 portable apps update by that name)
 #   tbw-server-<v>-linux-x86_64, tbw-server-<v>-windows-x86_64.exe   bare server binaries (self-update)
 #   tbw-server-<v>-linux-x86_64.tar.gz, tbw-server-<v>-windows-x86_64.zip   server bundles (start scripts, binary, web app)
 #   tbw-web-<v>.zip                                              web app (browser UI served by the server)
@@ -84,6 +86,7 @@ say "collecting assets in $OUT"
 # shellcheck source=lib/assets.sh
 source "$ROOT/tools/lib/assets.sh"
 tbw_collect_assets "$ROOT" "$V" "$OUT" "$WINDOWS" 1 || die "collecting the assets failed"
+tbw_alias_old_names "$OUT" "$V"
 ls -la "$OUT"
 
 if (( DRY )); then say "dry run: not uploading"; exit 0; fi
@@ -92,7 +95,7 @@ if [[ -z "$NOTES" ]]; then
   NOTES="$(mktemp)"
   prev="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)"
   {
-    echo "## TheBigWeather $V"
+    echo "## Stormiq $V"
     echo
     echo "Install or update: Linux \`curl -fsSL https://github.com/$REPO/releases/latest/download/install-latest.sh | bash\`,"
     echo "Windows: download and run \`install-latest.cmd\`. Installed apps update themselves (Settings → Updates)."
@@ -102,7 +105,7 @@ if [[ -z "$NOTES" ]]; then
 fi
 HEAD_SHA="$(git rev-parse HEAD)"
 git branch -r --contains "$HEAD_SHA" 2>/dev/null | grep -q . || echo "    warning: $HEAD_SHA is not pushed; the tag will point at the remote default branch instead (git push first)"
-args=(--repo "$REPO" --title "TheBigWeather $V" --notes-file "$NOTES")
+args=(--repo "$REPO" --title "Stormiq $V" --notes-file "$NOTES")
 (( DRAFT )) && args+=(--draft)
 git branch -r --contains "$HEAD_SHA" 2>/dev/null | grep -q . && args+=(--target "$HEAD_SHA")
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then

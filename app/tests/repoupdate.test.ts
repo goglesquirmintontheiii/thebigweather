@@ -72,8 +72,15 @@ export function testManifest() {
   bad((x) => (x.files["a.bin"].parts[1].size += 1), /add up/);
   bad((x) => (x.files["a.bin"].parts[0].path = "../etc/passwd"), /bad part/);
   bad((x) => (x.files["a.bin"].sha256 = "xyz"), /bad entry/);
-  assert.equal(RU.appAssetName("appimage", "0.8.2"), "TheBigWeather-0.8.2-x86_64.AppImage");
-  assert.equal(RU.appAssetName("portable", "0.8.2"), "TheBigWeather-0.8.2-portable.exe");
+  // 0.8.2: renamed to Stormiq; the pre-rename names are the fallback
+  assert.equal(RU.appAssetName("appimage", "0.8.2"), "Stormiq-0.8.2-x86_64.AppImage");
+  assert.equal(RU.appAssetName("portable", "0.8.2"), "Stormiq-0.8.2-portable.exe");
+  assert.equal(RU.appAssetName("nsis", "0.8.2"), "Stormiq-0.8.2-setup.exe");
+  assert.deepEqual(RU.appAssetNames("nsis", "0.8.2"), ["Stormiq-0.8.2-setup.exe", "TheBigWeather-0.8.2-setup.exe"]);
+  assert.deepEqual(RU.appAssetNames("mac", "0.8.2"), []);
+  assert.equal(RU.pickAssetName("portable", "0.8.2", () => true), "Stormiq-0.8.2-portable.exe");
+  assert.equal(RU.pickAssetName("portable", "0.8.1", (n: string) => n.startsWith("TheBigWeather-")), "TheBigWeather-0.8.1-portable.exe");
+  assert.equal(RU.pickAssetName("portable", "0.8.1", () => false), null);
   assert.equal(RU.ymlVersion("version: 0.8.1\nfiles:\n  - url: x\n"), "0.8.1");
   const h = "a".repeat(64);
   assert.deepEqual(RU.parseSums(`${h}  one.exe\r\n${"B".repeat(64)} *two.zip\n`), { "one.exe": h, "two.zip": "b".repeat(64) });

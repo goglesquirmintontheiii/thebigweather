@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuilds TheBigWeather files from their parts and checks them.
+# Rebuilds Stormiq (formerly TheBigWeather) files from their parts and checks them.
 # Usage:
 #   - builds branch (downloaded as a ZIP): run bash join-appimage.sh [FILE...] in its folder; it
 #     joins parts/<file>.partNN into <file> for every file (or the ones named) and checks SHA256SUMS.
@@ -14,6 +14,11 @@ if [[ -f SHA256SUMS ]] && compgen -G "$PD/*.part[0-9][0-9]" >/dev/null; then
   bad=0
   for name in "${names[@]}"; do
     ps=("$PD/$name".part[0-9][0-9])
+    # 0.8.2: TheBigWeather-<v>-… lines are the same files as Stormiq-<v>-… (for 0.8.1 apps)
+    if [[ ! -f "${ps[0]}" && "$name" == TheBigWeather-* ]] && grep -qE "  \*?Stormiq-${name#TheBigWeather-}\$" SHA256SUMS; then
+      (( $# )) && echo "$name is Stormiq-${name#TheBigWeather-} (renamed in 0.8.2)"
+      continue
+    fi
     if [[ ! -f "${ps[0]}" ]]; then [[ $PD == . && $# -eq 0 ]] && continue; echo "No parts for $name"; bad=1; continue; fi
     cat "${ps[@]}" > "$name.joining"
     want="$(awk -v n="$name" '$2==n {print $1}' SHA256SUMS)"
@@ -25,8 +30,8 @@ if [[ -f SHA256SUMS ]] && compgen -G "$PD/*.part[0-9][0-9]" >/dev/null; then
   done
   exit "$bad"
 fi
-first=$(ls -1 TheBigWeather-*-x86_64.AppImage.part0.zip 2>/dev/null | sort -V | tail -1)
-[ -n "$first" ] || { echo "Put this script next to the TheBigWeather-…AppImage.partN.zip files (or in the builds branch folder)"; exit 1; }
+first=$(ls -1 Stormiq-*-x86_64.AppImage.part0.zip TheBigWeather-*-x86_64.AppImage.part0.zip 2>/dev/null | sort -V | tail -1)
+[ -n "$first" ] || { echo "Put this script next to the Stormiq-…AppImage.partN.zip files (or in the builds branch folder)"; exit 1; }
 name=${first%.part0.zip}
 tmp=$(mktemp -d)
 n=$(ls -1 "$name".part*.zip | wc -l)
