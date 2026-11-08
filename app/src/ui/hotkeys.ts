@@ -9,6 +9,9 @@ import { toggle3D } from "./View3D"; // 3D
 
 import { handleKeybind, shortcutsOpen } from "../keybinds";
 import { paletteOpen, openPalette } from "./CommandPalette"; // panes/palette/a11y 0.8
+import { defaultCfg } from "./Panes"; // 0.8.3
+import { paneConfigured } from "../map/panes";
+import type { PaneCfg } from "../store";
 
 const PRODUCTS = ["REF", "VEL", "SW", "ZDR", "RHO", "PHI"];
 
@@ -45,6 +48,59 @@ export const BUILTIN_HOTKEYS: [string, string][] = [
   [".", "Legend filter up (legend hovered)"],
 ];
 
+/* ---------- 0.8.3: keys on a map pane (the focused / last clicked pane, or a pane window's pane) ---------- */
+
+/** standard NEXRAD tilts, for a pane on another site (its own tilt list isn't loaded) */
+const STD_TILTS = [0.5, 0.9, 1.3, 1.8, 2.4, 3.1, 4, 5.1, 6.4, 8, 10, 12.5, 15.6, 19.5];
+let lastPane = 0;
+if (typeof window !== "undefined")
+  window.addEventListener(
+    "pointerdown",
+    (e) => {
+      const el = (e.target as HTMLElement)?.closest?.(".pane");
+      lastPane = el ? paneIdxOf(el) : 0;
+    },
+    true,
+  );
+function paneIdxOf(el: Element): number {
+  if (el.classList.contains("main") || el.classList.contains("pane-solo")) return 0;
+  const m = (el.getAttribute("aria-label") ?? "").match(/Map pane (\d+)/);
+  return m ? +m[1] - 1 : 0;
+}
+/** the extra pane (1-based) that keys act on in the main window, or 0 for the main map */
+export function focusedPane(): number {
+  const a = document.activeElement?.closest?.(".pane");
+  if (a) return paneIdxOf(a);
+  return document.activeElement && document.activeElement !== document.body ? 0 : lastPane;
+}
+/** Product (1–6) and tilt (↑ / ↓) keys for pane `idx`. True when the key was the pane's. */
+export function paneKey(e: KeyboardEvent, idx: number): boolean {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || idx < 1) return false;
+  const digit = /^[1-6]$/.test(e.key);
+  const arrow = e.key === "ArrowUp" || e.key === "ArrowDown";
+  if (!digit && !arrow) return false;
+  e.preventDefault();
+  const cfg = settings.peek().panes.list[idx - 1] ?? defaultCfg(idx);
+  if (cfg.weather.kind !== "radar" || (cfg.source ?? "L2") !== "L2") return true; // not a Level II pane: nothing to step
+  let next: PaneCfg;
+  if (digit) next = { ...cfg, product: PRODUCTS[+e.key - 1] };
+  else {
+    const own = !cfg.site || cfg.site === settings.peek().radar.site;
+    const list = own ? [...new Set(tilts.peek().filter((x) => x.moments.includes(cfg.product ?? "REF")).map((x) => x.angle))].sort((a, b) => a - b) : [];
+    const angles = list.length ? list : STD_TILTS;
+    const t = cfg.tilt ?? 0.5;
+    let i = angles.reduce((bi, a, k) => (Math.abs(a - t) < Math.abs(angles[bi] - t) ? k : bi), 0);
+    i = Math.max(0, Math.min(angles.length - 1, i + (e.key === "ArrowUp" ? 1 : -1)));
+    next = { ...cfg, tilt: angles[i] };
+  }
+  update((s) => {
+    while (s.panes.list.length < idx) s.panes.list.push(defaultCfg(s.panes.list.length + 1));
+    s.panes.list[idx - 1] = next;
+  });
+  paneConfigured(idx, next);
+  return true;
+}
+
 export function useHotkeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -59,6 +115,7 @@ export function useHotkeys() {
       // user layer shortcuts first (they may use modifiers or two-key chords)
       if (handleKeybind(e)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (paneKey(e, focusedPane())) return; // 0.8.3: 1–6 / ↑ ↓ on the pane that has focus
       if (e.key === "?") {
         shortcutsOpen.value = !shortcutsOpen.value;
         return;

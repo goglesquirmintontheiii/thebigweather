@@ -44,6 +44,18 @@ contextBridge.exposeInMainWorld("tbw", {
       ipcRenderer.on("win-max", h);
       return () => ipcRenderer.removeListener("win-max", h);
     },
+    /* 0.8.3: drag a pop-out back into the main window */
+    onDrag: (cb) => {
+      const h = (_e, v) => cb(v);
+      ipcRenderer.on("win-drag", h);
+      return () => ipcRenderer.removeListener("win-drag", h);
+    },
+    onDrop: (cb) => {
+      const h = (_e, v) => cb(v);
+      ipcRenderer.on("win-drop", h);
+      return () => ipcRenderer.removeListener("win-drop", h);
+    },
+    focusMain: () => ipcRenderer.invoke("win-focus-main"),
   },
   screenRec: {
     open: () => ipcRenderer.invoke("screenrec-open"),

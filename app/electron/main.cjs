@@ -436,6 +436,55 @@ ipcMain.handle("popout", (_e, spec) => {
   w.on("maximize", () => (remember(), alive(w) && w.webContents.send("win-max", true)));
   w.on("unmaximize", () => (remember(), alive(w) && w.webContents.send("win-max", false)));
   w.on("close", remember);
+  // 0.8.3: drag a pop-out back into the main window. While it's dragged (by its title bar) with the
+  // cursor over the main window, the main window shows where it would dock and the pop-out turns
+  // see-through; dropping there asks the pop-out to dock ("win-drop": cursor in main-window px).
+  // Windows / macOS say when the drag ends ("moved"); elsewhere a short pause counts as the drop.
+  const did = PW.dragId(spec);
+  if (did) {
+    let over = false;
+    let dropT = null;
+    const rel = () => {
+      const p = screen.getCursorScreenPoint();
+      const cb = win.getContentBounds();
+      return { p, cb, x: p.x - cb.x, y: p.y - cb.y, cw: cb.width };
+    };
+    const toMain = (phase, r) => alive(win) && win.webContents.send("win-drag", { phase, id: did, x: r ? r.x : 0, y: r ? r.y : 0, cw: r ? r.cw : 0 });
+    const see = (v) => {
+      try {
+        w.setOpacity(v);
+      } catch {}
+    };
+    const leave = () => {
+      clearTimeout(dropT);
+      if (!over) return;
+      over = false;
+      see(1);
+      toMain("leave");
+    };
+    const drop = () => {
+      clearTimeout(dropT);
+      if (!over || !alive(w) || !alive(win)) return;
+      over = false;
+      see(1);
+      const r = rel();
+      toMain("end");
+      if (PW.inside(r.cb, r.p)) w.webContents.send("win-drop", { x: r.x, y: r.y, cw: r.cw });
+    };
+    w.on("move", () => {
+      if (!alive(w) || !alive(win) || !w.isFocused() || win.isMinimized() || !win.isVisible()) return leave();
+      const p = screen.getCursorScreenPoint();
+      if (!PW.inside(w.getBounds(), p) || !PW.inside(win.getContentBounds(), p)) return leave(); // not dragged by its title bar / not over the main window
+      if (!over) (over = true), see(0.72);
+      toMain("over", rel());
+      if (process.platform !== "win32" && process.platform !== "darwin") {
+        clearTimeout(dropT);
+        dropT = setTimeout(drop, 900);
+      }
+    });
+    w.on("moved", drop);
+    w.on("closed", () => (clearTimeout(dropT), over && toMain("end")));
+  }
   popouts.add(w);
   if (single) popByKey.set(single, w);
   w.on("closed", () => {
@@ -452,6 +501,14 @@ ipcMain.handle("win-ctl", (e, a) => {
   else if (a === "min") w.minimize();
   else if (a === "max") w.isMaximized() ? w.unmaximize() : w.maximize();
   return alive(w) && w.isMaximized();
+});
+// 0.8.3: a shortcut pressed in a pop-out that opens something in the main window (palette, ?) brings it up
+ipcMain.handle("win-focus-main", () => {
+  if (!alive(win)) return false;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  return true;
 });
 
 // ---------- screen recording (toolbar): the renderer streams WebM chunks, saved to Downloads/Stormiq ----------

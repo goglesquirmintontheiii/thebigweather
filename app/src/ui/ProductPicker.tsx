@@ -83,6 +83,8 @@ export function ProductPicker({ value, groups, onPick, fallback, title, "aria-la
     } else if (e.key === "Tab") close(false);
   };
   const onBtnKey = (e: KeyboardEvent) => {
+    // 0.8.3: focused by a click (not by Tab): the map's shortcuts (Space, ↓, letters, digits) keep working
+    if (!document.documentElement.classList.contains("kb-nav") && e.key !== "Enter") return;
     if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       e.stopPropagation();

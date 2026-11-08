@@ -6,12 +6,14 @@
 //   full / set   settings: the whole set for a new pop-out, then only the top-level keys that changed,
 //                both ways (main saves; pop-outs never write settings to disk)
 //   dock         a pop-out's dock button: the main window opens that window again
+//   show         0.8.3: main → the pop-out holding a window: show this in it (an alert clicked on the
+//                main map while the alert info panel is out)
 //   open         0.8.2 integration: a pop-out opened another window (Settings → Data sources, a layer's
 //                gear, …): it opens in the main window instead (the pop-out doesn't draw other windows)
 // Map / pane windows keep their own settings and use linkwin.ts instead.
 
 import { effect, untracked } from "@preact/signals";
-import { settings } from "./store";
+import { settings, details } from "./store";
 import { popoutSpec } from "./popout";
 import { IN_OS_WIN, POP_WIN, POPPERS, popped, setDockImpl, popWindow } from "./ui/winframe";
 import { changedKeys, livePeers } from "./ui/wincore";
@@ -23,8 +25,10 @@ type Msg =
   | { t: "full"; to: string; keys: Record<string, unknown> }
   | { t: "set"; keys: Record<string, unknown> }
   | { t: "dock"; id: string; arg: any }
-  | { t: "open"; id: string; arg: any };
+  | { t: "open"; id: string; arg: any }
+  | { t: "show"; id: string; arg: any };
 type Env = Msg & { from: string };
+const AD_WIN = "a:detail"; // 0.8.3: AlertDetail.tsx AD_ID
 
 const isMain = !popoutSpec;
 const enabled = (isMain || IN_OS_WIN) && typeof BroadcastChannel !== "undefined";
@@ -120,10 +124,17 @@ function onMsg(m: Env) {
       POPPERS.get(m.id)?.open(m.arg);
       return;
     }
+    case "show":
+      if (!isMain && m.id === POP_WIN && m.arg != null) POPPERS.get(m.id)?.open(m.arg);
+      return;
     case "open": {
       // 0.8.2 integration: opened from inside a pop-out
       if (!isMain) return;
-      if (popped.peek()[m.id]) return void popWindow(m.id); // already in its own window: focus it
+      if (popped.peek()[m.id]) {
+        // already in its own window: show it there (0.8.3) and focus it
+        if (m.arg != null) send({ t: "show", id: m.id, arg: m.arg });
+        return void popWindow(m.id);
+      }
       POPPERS.get(m.id)?.open(m.arg);
       return;
     }
@@ -135,6 +146,15 @@ if (ch) {
   if (isMain) {
     send({ t: "who" });
     setDockImpl(() => {});
+    // 0.8.3: an alert clicked here while the info panel is out shows in its window
+    effect(() => {
+      const d = details.value;
+      if (!d || !untracked(() => popped.value[AD_WIN])) return;
+      queueMicrotask(() => {
+        send({ t: "show", id: AD_WIN, arg: d });
+        popWindow(AD_WIN); // focuses it; closes it here
+      });
+    });
     setInterval(() => {
       peers = livePeers(peers, Date.now());
       syncPopped();
@@ -151,7 +171,7 @@ if (ch) {
       effect(() => {
         const open: [string, any][] = [];
         for (const [id, p] of POPPERS) {
-          if (id === POP_WIN || !/^[cof]:/.test(id) || p.hideWhenPopped || !p.isOpen()) continue;
+          if (id === POP_WIN || !/^[cofa]:/.test(id) /* 0.8.3: a: the alert info panel */ || p.hideWhenPopped || !p.isOpen()) continue;
           open.push([id, untracked(() => p.arg?.())]);
         }
         if (!open.length) return;

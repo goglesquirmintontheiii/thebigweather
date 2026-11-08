@@ -36,6 +36,10 @@ import { startAlerts } from "../alerts";
 import { api } from "../api";
 import { activeServer } from "../store";
 import "../winsync";
+import { AlertDetail, AD_ID } from "./AlertDetail"; // 0.8.3
+import { details } from "../store";
+import "./WinDrop"; // 0.8.3: drag pop-outs back in
+import "./winkeys"; // 0.8.3: shortcuts in pop-outs
 import { Toasts } from "./Overlays"; // 0.8.2 integration: toasts (installs, capture copied, …) in pop-outs too
 
 type Sig = { value: boolean };
@@ -119,6 +123,18 @@ registerPopper({
   open: () => {},
   close: () => {},
   render: () => <StatsPanel />,
+});
+/* 0.8.3: the alert info panel */
+registerPopper({
+  id: AD_ID,
+  title: "Alert",
+  w: 440,
+  h: 720,
+  isOpen: () => details.value != null,
+  open: (a) => a?.items?.length && (details.value = a),
+  close: () => (details.value = null),
+  arg: () => details.peek(),
+  render: () => <AlertDetail />,
 });
 /* older pop-out kinds (camera, METAR, radio stream): only "dock back" goes through here */
 const none = { isOpen: () => true, close: () => {}, render: () => null };

@@ -1,6 +1,7 @@
 // 0.8.2 windows: the one title-bar button group every window uses (side panels, centre windows,
 // floating panels, cameras, radio players, layer settings, pop-out OS windows):
-//   [pop-out] [● close] [● minimize] [● maximize / restore]   (Mac-style, glyphs on hover)
+//   [● close] [● minimize] [● maximize / restore] [● pop out / dock back]   (Mac-style, glyphs on hover;
+//   0.8.3: the pop-out button is the green circle after the others)
 // plus the shared window state: minimized windows (chips in the tray, bottom left), maximized
 // windows, the Esc stack (Esc closes only the top window), the open/close animation switch and the
 // registry of windows that can pop out into their own OS window (filled by winreg.tsx).
@@ -9,11 +10,10 @@ import "./winframe.css";
 import { signal } from "@preact/signals";
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef } from "preact/hooks";
-import { PictureInPicture2, SquareArrowDownLeft } from "lucide-preact";
 import { popoutSpec, popout, canPopout, type PopoutSpec } from "../popout";
 import { settings } from "../store";
 import { perf } from "../perf";
-import { raise, topOf } from "./wincore";
+import { raise, topOf, fitScale } from "./wincore";
 
 /* ---------- pop-out OS windows ---------- */
 
@@ -45,6 +45,34 @@ if (IN_OS_WIN) {
   } catch {
     /* browser */
   }
+}
+
+/* 0.8.3: "This computer" (stats) in its own window: its contents scale to fit the window */
+if (IN_OS_WIN && POP_WIN === "s:stats" && typeof ResizeObserver !== "undefined") {
+  let raf = 0;
+  let last = "";
+  const fit = () => {
+    raf = 0;
+    const st = document.querySelector<HTMLElement>(".stats.wf-osframe");
+    const body = st?.querySelector<HTMLElement>(":scope > .stats-zoom > :not(.stats-head)");
+    const head = st?.querySelector<HTMLElement>(".stats-head");
+    if (!st || !body) return;
+    st.classList.add("wf-measure");
+    const natH = body.scrollHeight;
+    st.classList.remove("wf-measure");
+    const availH = window.innerHeight - (head?.offsetHeight ?? 0) - 8;
+    // the panels are laid out for ~280 px; wider windows scale them up, height permitting
+    const f = String(fitScale(window.innerWidth, availH, 280, natH));
+    if (f !== last) document.documentElement.style.setProperty("--wf-fit", (last = f));
+  };
+  const soon = () => raf || (raf = requestAnimationFrame(fit));
+  window.addEventListener("resize", soon);
+  const start = () => {
+    new MutationObserver(soon).observe(document.body, { childList: true, subtree: true });
+    soon();
+  };
+  if (document.body) start();
+  else window.addEventListener("DOMContentLoaded", start);
 }
 
 /** A window that can open in its own OS window. */
@@ -81,6 +109,9 @@ export function popWindow(id: string) {
   if (!p) return;
   const spec: PopoutSpec = p.spec?.() ?? { kind: "win", title: p.title, width: p.w ?? 900, height: p.h ?? 640, data: { id, arg: p.arg?.() } };
   popout(spec);
+  if (lastPopRect) homes.set(id, lastPopRect); // 0.8.3
+  else if (!popped.peek()[id]) homes.delete(id);
+  lastPopRect = null;
   popped.value = { ...popped.peek(), [id]: Date.now() + 12_000 }; // until the window says "here" (winsync.ts)
   forget(id);
   if (!p.hideWhenPopped) p.close();
@@ -219,6 +250,25 @@ if (typeof window !== "undefined" && !IN_OS_WIN)
 
 /* ---------- the button group ---------- */
 
+/* 0.8.3: glyphs as 8 × 8 inline SVG (text glyphs sat off-centre: font baselines differ per OS / zoom) */
+const svg = (d: string, fill = false) => (
+  <svg viewBox="0 0 8 8" width="8" height="8" aria-hidden="true" class={fill ? "f" : undefined}>
+    <path d={d} />
+  </svg>
+);
+const G_CLOSE = svg("M2.1 2.1 5.9 5.9M5.9 2.1 2.1 5.9");
+const G_MIN = svg("M1.6 4h4.8");
+const G_MAX = svg("M1.6 4.7V1.6h3.1zM6.4 3.3v3.1H3.3z", true);
+const G_RESTORE = svg("M3.6 0.9v2.7H0.9zM4.4 7.1V4.4h2.7z", true);
+const G_POP = svg("M2.3 5.7 5.6 2.4M3 2.2h2.8V5");
+const G_DOCK = svg("M5.7 2.3 2.4 5.6M2.2 3v2.8H5");
+
+/** 0.8.3: where each popped-out window sat in the main window (its drop target when dragged back) */
+const homes = new Map<string, { x: number; y: number; w: number; h: number }>();
+let lastPopRect: { x: number; y: number; w: number; h: number } | null = null;
+const FRAME_SEL = ".side-panel, .cmodal, .fpanel, .cam-panel, .rp, .stats, .ovl-modal, .alert-detail";
+export const homeOf = (id: string) => homes.get(id) ?? null;
+
 export interface WinButtonsProps {
   onClose: () => void;
   /** minimize (in-app); pop-out OS windows minimize the OS window */
@@ -249,23 +299,33 @@ export function WinButtons({ onClose, onMin, onZoom, zoomed, onPop, os, closeTit
         }
       }
     : onClose;
+  // 0.8.3: remember where the window sat (dragging the pop-out back there docks it)
+  const popClick = (e: MouseEvent) => {
+    if (!os) {
+      const el = (e.currentTarget as HTMLElement).closest(FRAME_SEL);
+      const r = el?.getBoundingClientRect();
+      lastPopRect = r && r.width > 20 && r.height > 20 ? { x: r.left, y: r.top, w: r.width, h: r.height } : null;
+    }
+    pop?.();
+  };
+  // 0.8.3: red · yellow · gray · green (pop out / dock back), Mac-style circles, glyphs on hover
   return (
     <div class="wf-btns" onPointerDown={stop} onDblClick={stop} onMouseDown={stop}>
-      {pop && (
-        <button class="wf-pop" title={os ? "Dock back into the main window" : "Pop out to its own window"} aria-label={os ? "Dock back" : "Pop out"} onClick={pop}>
-          {os ? <SquareArrowDownLeft size={13} /> : <PictureInPicture2 size={13} />}
-        </button>
-      )}
       <span class="wf-lights">
         <button class="wf-l wf-close" title={closeTitle ?? (os ? "Close window" : "Close (Esc)")} aria-label="Close" onClick={close}>
-          <i>×</i>
+          {G_CLOSE}
         </button>
         <button class="wf-l wf-min" title="Minimize" aria-label="Minimize" disabled={!min} onClick={min}>
-          <i>−</i>
+          {G_MIN}
         </button>
         <button class="wf-l wf-zoom" title={zoomedNow ? "Restore size" : "Maximize"} aria-label={zoomedNow ? "Restore size" : "Maximize"} disabled={!zoom} onClick={zoom}>
-          <i>⤢</i>
+          {zoomedNow ? G_RESTORE : G_MAX}
         </button>
+        {pop && (
+          <button class="wf-l wf-popl" title={os ? "Dock back" : "Pop out"} aria-label={os ? "Dock back" : "Pop out"} onClick={popClick as any}>
+            {os ? G_DOCK : G_POP}
+          </button>
+        )}
       </span>
     </div>
   );
