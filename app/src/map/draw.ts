@@ -125,7 +125,8 @@ function toFeatures(list: Drawing[]): any[] {
   return out;
 }
 
-/* 0.8.1: drawings also show in linked map panes (each pane says whether it wants them) */
+/* 0.8.1: drawings also show in linked map panes (each pane says whether it wants them)
+ * 0.8.2: and you can draw in any pane (the pane being drawn in always shows the drawings) */
 const paneMaps = new Map<MLMap, () => boolean>();
 export function attachDrawPane(m: MLMap, show: () => boolean) {
   paneMaps.set(m, show);
@@ -137,11 +138,18 @@ export function attachDrawPane(m: MLMap, show: () => boolean) {
   };
   m.on("style.load", add);
   if (m.isStyleLoaded()) add();
+  const off = attachHandlers(m); // 0.8.2
+  applyTool(m);
   return () => {
     paneMaps.delete(m);
     m.off("style.load", add);
+    off();
+    if (cur === m) cur = null;
   };
 }
+/** 0.8.2: the map the current stroke / text / polygon is being drawn on (main map or a pane) */
+let cur: MLMap | null = null;
+const drawMap = () => cur ?? map;
 /** re-check which panes show the drawings (links changed) */
 export function refreshDrawPanes() {
   render();
@@ -154,7 +162,8 @@ function render() {
   const fc = { type: "FeatureCollection", features: toFeatures(list) } as any;
   src?.setData(fc);
   untracked(() => {
-    for (const [pm, show] of paneMaps) (pm.getSource("draw") as GeoJSONSource | undefined)?.setData(list.length && show() ? fc : EMPTY); // 0.8.1
+    const drawing = tool.value === "draw";
+    for (const [pm, show] of paneMaps) (pm.getSource("draw") as GeoJSONSource | undefined)?.setData(list.length && (show() || drawing || pm === cur) ? fc : EMPTY); // 0.8.1, 0.8.2
   });
   if (src) refreshMarkers();
 }
@@ -242,6 +251,7 @@ function shape(kind: Drawing["kind"], a: [number, number], b: [number, number]):
 
 /** Arrow head as a small triangle sized in screen pixels at the current zoom. */
 function arrowHead(a: [number, number], b: [number, number], width: number): [number, number][] | undefined {
+  const map = drawMap(); // 0.8.2: the map being drawn on
   if (!map) return;
   const pa = map.project(a);
   const pb = map.project(b);
@@ -267,8 +277,9 @@ function onDown(e: MapMouseEvent) {
   const t = drawTool.value;
   if (t === "pan" || t === "poly" || t === "text") return;
   e.preventDefault();
+  cur = e.target; // 0.8.2
   if (t === "erase") {
-    const f = map!.queryRenderedFeatures(e.point, { layers: ["draw-fill", "draw-line", "draw-text"] })[0];
+    const f = e.target.queryRenderedFeatures(e.point, { layers: ["draw-fill", "draw-line", "draw-text"].filter((l) => e.target.getLayer(l)) })[0];
     if (f) commit(drawings.value.filter((x) => x.id !== f.properties.id));
     return;
   }
@@ -281,6 +292,7 @@ function onDown(e: MapMouseEvent) {
 function onMove(e: MapMouseEvent) {
   if (tool.value !== "draw") return;
   const t = drawTool.value;
+  if (cur && e.target !== cur) return; // 0.8.2: a stroke stays on the map it started on
   if (t === "poly" && active) {
     preview = { ...active, coords: [...active.coords, ll(e)] };
     render();
@@ -291,7 +303,7 @@ function onMove(e: MapMouseEvent) {
   if (t === "free") {
     // keep points a couple of pixels apart
     const last = preview.coords[preview.coords.length - 1];
-    const a = map!.project(last);
+    const a = e.target.project(last);
     if (Math.hypot(a.x - e.point.x, a.y - e.point.y) < 2) return;
     preview = { ...preview, coords: [...preview.coords, p] };
   } else {
@@ -313,13 +325,16 @@ function onUp() {
 function onClick(e: MapMouseEvent) {
   if (tool.value !== "draw") return;
   const t = drawTool.value;
+  if (t === "poly" && active && cur && e.target !== cur) return; // 0.8.2: finish the polygon where it started
+  cur = e.target; // 0.8.2
   if (t === "poly") {
     const st = drawStyle.value;
     active = active ? { ...active, coords: [...active.coords, ll(e)] } : { id: uid(), kind: "poly", coords: [ll(e)], color: st.color, width: st.width, fill: st.fill };
     preview = active;
     render();
   } else if (t === "text") {
-    textInput.value = { x: e.point.x, y: e.point.y, lng: e.lngLat.lng, lat: e.lngLat.lat };
+    const r = e.target.getContainer().getBoundingClientRect(); // 0.8.2: window coordinates (any pane)
+    textInput.value = { x: r.left + e.point.x, y: r.top + e.point.y, lng: e.lngLat.lng, lat: e.lngLat.lat };
   }
 }
 
@@ -338,21 +353,48 @@ export function addText(text: string) {
   commit([...drawings.value, { id: uid(), kind: "text", coords: [[t.lng, t.lat]], color: st.color, width: st.width, fill: false, text: text.trim() }]);
 }
 
+/** 0.8.2: drawing handlers for one map (the main map or a pane) */
+function attachHandlers(m: MLMap): () => void {
+  const dbl = (e: MapMouseEvent) => {
+    if (tool.value === "draw" && drawTool.value === "poly") {
+      e.preventDefault();
+      finishPoly();
+    }
+  };
+  m.on("mousedown", onDown);
+  m.on("mousemove", onMove);
+  m.on("mouseup", onUp);
+  m.on("click", onClick);
+  m.on("dblclick", dbl);
+  return () => {
+    m.off("mousedown", onDown);
+    m.off("mousemove", onMove);
+    m.off("mouseup", onUp);
+    m.off("click", onClick);
+    m.off("dblclick", dbl);
+  };
+}
+
+/** 0.8.2: drawing tools take the left mouse button on every map */
+function applyTool(m: MLMap) {
+  const drawing = tool.peek() === "draw" && drawTool.peek() !== "pan";
+  if (drawing) {
+    m.dragPan.disable();
+    m.doubleClickZoom.disable();
+  } else {
+    m.dragPan.enable();
+    m.doubleClickZoom.enable();
+  }
+  const t = drawTool.peek();
+  m.getCanvas().style.cursor = drawing ? (t === "erase" ? "not-allowed" : t === "text" ? "text" : "crosshair") : "";
+}
+
 export function attachDraw(m: MLMap) {
   map = m;
   drawings.value = settings.value.drawings ?? [];
   m.on("style.load", () => addDrawLayers(m));
   if (m.isStyleLoaded()) addDrawLayers(m);
-  m.on("mousedown", onDown);
-  m.on("mousemove", onMove);
-  m.on("mouseup", onUp);
-  m.on("click", onClick);
-  m.on("dblclick", (e) => {
-    if (tool.value === "draw" && drawTool.value === "poly") {
-      e.preventDefault();
-      finishPoly();
-    }
-  });
+  attachHandlers(m); // 0.8.2
   window.addEventListener("keydown", (e) => {
     if (tool.value !== "draw" || (e.target as HTMLElement)?.tagName === "INPUT") return;
     if (e.key === "Enter") finishPoly();
@@ -367,20 +409,17 @@ effect(() => {
   const on = tool.value === "draw";
   const t = drawTool.value;
   if (!map) return;
-  const drawing = on && t !== "pan";
-  if (drawing) {
-    map.dragPan.disable();
-    map.doubleClickZoom.disable();
-  } else {
-    map.dragPan.enable();
-    map.doubleClickZoom.enable();
-  }
-  map.getCanvas().style.cursor = drawing ? (t === "erase" ? "not-allowed" : t === "text" ? "text" : "crosshair") : "";
+  void t;
+  untracked(() => {
+    applyTool(map!); // 0.8.2: same for every pane
+    for (const pm of paneMaps.keys()) applyTool(pm);
+  });
   if (on && !wasOn) newDrawing(); // every drawing session is a separate drawing
   wasOn = on;
   if (!on) {
     active = null;
     preview = null;
+    cur = null; // 0.8.2
     currentGroup.value = null;
     // leaving drawing mode: keep or drop the drawings
     if (!settings.value.drawKeep && drawings.value.length) {

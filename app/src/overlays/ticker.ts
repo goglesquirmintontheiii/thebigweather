@@ -10,6 +10,8 @@ import { mapRef } from "../map/mapview";
 type Anim = { active: () => boolean; frame: (m: MLMap, t: number) => void };
 
 const anims: Anim[] = [];
+/** 0.8.2: map panes (their copies of animated overlays step with the main map's) */
+export const tickerMaps = new Set<MLMap>();
 let raf: number | undefined;
 export const TICK_FPS = 30;
 const STEP = 1000 / TICK_FPS;
@@ -31,15 +33,17 @@ function loop(now: number) {
   acc += dt;
   if (acc < STEP - 1) return; // rAF runs at the display rate; draw at TICK_FPS
   acc = acc % STEP;
-  for (const a of live) {
-    try {
-      a.frame(m, now);
-    } catch {
-      /* layer gone mid-frame */
+  for (const mm of [m, ...tickerMaps]) // 0.8.2: map panes animate too
+    for (const a of live) {
+      try {
+        a.frame(mm, now);
+      } catch {
+        /* layer gone mid-frame */
+      }
     }
-  }
   tickStats.frames++;
   m.triggerRepaint();
+  for (const mm of tickerMaps) mm.triggerRepaint(); // 0.8.2
   tickStats.repaints++;
 }
 

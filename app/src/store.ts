@@ -194,6 +194,8 @@ export interface Settings {
     mainPos?: boolean;
     ml?: Record<string, boolean>;
     drawAll?: boolean;
+    /** 0.8.2: per-pane layer overrides (pane → layer id → shown); "base:<k>" for the built-in layers */
+    layers?: Record<string, Record<string, boolean>>;
   };
   /* panes/palette/a11y 0.8 */
   paneLayouts?: PaneLayoutDef[];

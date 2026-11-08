@@ -2,26 +2,35 @@
 // panes 0.8: grid layouts (built-in + custom, see PaneLayoutEditor.tsx) with drawn icons, per-pane
 // links (position / time / layers), pane pop-out windows and pane windows linked to the main one.
 
-import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
+import { createPortal } from "preact/compat"; // 0.8.2
 import { settings, update, openPanel, crosshair, type PaneCfg, type PaneLink, type PaneLayoutDef, type PaneLayoutId } from "../store";
-import { mountPane, paneConfigured, paneStatus, resizePanes, paneLink, paneMap, paneCenter, paneMl, mainLinked } from "../map/panes";
+import { mountPane, paneConfigured, paneStatus, resizePanes, paneLink, paneMap, paneCenter, paneMl, mainLinked, paneLayerShown, paneOverride, paneHasOverrides, paneHover } from "../map/panes";
 import { L2_MOMENTS, l3Products, sites, productName } from "../radar/controller";
 import { gridLayers, selectWeather, activeLabel, GIBS } from "../weather";
 import { SwipeDivider, swipeGeom, type SwipeMode } from "./CompareSwipe"; // data 0.6
 import { noLevel3 } from "../intl/sites";
 import { fmtTime } from "../util";
-import { AppWindow, Move, Clock, Layers, ExternalLink, SquarePlus, Pencil, Link2, Link2Off, ScanEye } from "lucide-preact";
+import { AppWindow, Move, Clock, Layers, ExternalLink, SquarePlus, Pencil, Link2, Link2Off, ScanEye, RefreshCw } from "lucide-preact";
 import { popout, popoutSpec } from "../popout";
 import { mapRef } from "../map/mapview";
 import { myKind, myLink, peerList, setMyLink, setPeerLink, linkMap } from "../linkwin";
 import { startAlerts } from "../alerts";
 import { jumpToSetting } from "../a11y/jump";
 // 0.8.1
-import { Crosshair } from "./Readouts";
-import { isOn } from "../overlays/manager";
+import { Crosshair, shiftHeld } from "./Readouts";
+import { isOn, ovlStatus } from "../overlays/manager";
+/* 0.8.2 */
+import { ProductPicker } from "./ProductPicker";
+import type { PGroup } from "./productFilter";
+import { OVERLAYS } from "../overlays/defs";
+import { fileOverlays } from "../overlays/files";
+import { dropPane } from "../map/panesync";
+import "./panes082.css";
 
-/** Product dropdown options: Level II moments, Level III families (for the site's radar type), gridded layers. */
-function ProductOptions({ site, current, value, label, sat }: { site: string; current?: string; value: string; label?: string; /* data 0.6 */ sat?: boolean }) {
+/** Product dropdown options: Level II moments, Level III families (for the site's radar type), gridded layers.
+ * 0.8.2: as data for the searchable dropdown (same groups and labels as before). */
+export function productGroups({ site, current, value, label, sat }: { site: string; current?: string; value: string; label?: string; /* data 0.6 */ sat?: boolean }): PGroup[] {
   const st = sites.value.find((x) => x.id === site);
   const tdwr = st?.type === "TDWR";
   const l3 = noLevel3(st) ? [] : l3Products.value.filter((p) => !!p.tdwr === tdwr);
@@ -38,72 +47,29 @@ function ProductOptions({ site, current, value, label, sat }: { site: string; cu
     (value.startsWith("r:L3:") && l3.some((p) => `r:L3:${p.id}` === value)) ||
     (value.startsWith("g:") && gridLayers.value.some((l) => `g:${l.id}` === value)) ||
     (!!sat && value.startsWith("s:") && GIBS.some((g) => `s:${g.id}` === value)); // data 0.6
-  return (
-    <>
-      {!known && <option value={value}>{label ?? value.replace(/^\w:(L[23]:)?/, "")}</option>}
-      <optgroup label={`Level II · ${site}`}>
-        {L2_MOMENTS.map((m, i) => (
-          <option key={m.id} value={`r:L2:${m.id}`}>
-            {m.name}
-            {i < 6 ? `  (${i + 1})` : ""}
-          </option>
-        ))}
-      </optgroup>
-      {fams.size > 0 && (
-        <optgroup label={`Level III · ${site}`}>
-          {[...fams.values()].map((f) => {
-            const pick = f.find((p) => p.id === current) ?? f.find((p) => p.tilt === cur?.tilt) ?? f[0];
-            return (
-              <option key={pick.id} value={`r:L3:${pick.id}`}>
-                {f[0].name}
-                {f.length > 1 ? ` ~${(tdwr ? [0.3, 0.6, 1.0, 1.5] : [0.5, 0.9, 1.3, 1.8])[pick.tilt] ?? pick.tilt}°` : ""}
-              </option>
-            );
-          })}
-        </optgroup>
-      )}
-      {groups.map((g) => (
-        <optgroup key={g} label={g}>
-          {gridLayers.value
-            .filter((l) => l.group === g)
-            .map((l) => (
-              <option key={l.id} value={`g:${l.id}`}>
-                {l.name}
-              </option>
-            ))}
-        </optgroup>
-      ))}
-      {sat /* data 0.6: imagery in panes */ &&
-        [...new Set(GIBS.map((g) => g.group))].map((g) => (
-          <optgroup key={g} label={`${g} (imagery)`}>
-            {GIBS.filter((x) => x.group === g).map((x) => (
-              <option key={x.id} value={`s:${x.id}`}>
-                {x.name}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-    </>
-  );
+  const out: PGroup[] = [];
+  if (!known) out.push({ label: "Current", items: [{ value, label: label ?? value.replace(/^\w:(L[23]:)?/, "") }] });
+  out.push({ label: `Level II · ${site}`, items: L2_MOMENTS.map((m, i) => ({ value: `r:L2:${m.id}`, label: m.name, hint: i < 6 ? String(i + 1) : undefined })) });
+  if (fams.size > 0)
+    out.push({
+      label: `Level III · ${site}`,
+      items: [...fams.values()].map((f) => {
+        const pick = f.find((p) => p.id === current) ?? f.find((p) => p.tilt === cur?.tilt) ?? f[0];
+        return { value: `r:L3:${pick.id}`, label: f[0].name, hint: f.length > 1 ? `~${(tdwr ? [0.3, 0.6, 1.0, 1.5] : [0.5, 0.9, 1.3, 1.8])[pick.tilt] ?? pick.tilt}°` : undefined };
+      }),
+    });
+  for (const g of groups) out.push({ label: g, items: gridLayers.value.filter((l) => l.group === g).map((l) => ({ value: `g:${l.id}`, label: l.name })) });
+  if (sat) /* data 0.6: imagery in panes */ for (const g of [...new Set(GIBS.map((x) => x.group))]) out.push({ label: `${g} (imagery)`, items: GIBS.filter((x) => x.group === g).map((x) => ({ value: `s:${x.id}`, label: x.name })) });
+  return out;
 }
 
 type Sty = Record<string, any>;
 
-/** 0.8.1: the product <select>. Its options change after it first renders (radar list, Level III and
- * gridded catalogs arrive later); a native select then silently falls back to its first option, so the
- * selector showed one product while the map had another. Re-apply the value after every render. */
-export function ProductSelect({ value, onPick, children, ...rest }: { value: string; onPick: (v: string) => void; children: any; title?: string; "aria-label"?: string }) {
-  const ref = useRef<HTMLSelectElement>(null);
-  void (sites.value, l3Products.value, gridLayers.value); // re-render (and re-apply) when the option lists change
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (el && el.value !== value) el.value = value;
-  });
-  return (
-    <select ref={ref} value={value} onChange={(e) => onPick((e.target as HTMLSelectElement).value)} {...rest}>
-      {children}
-    </select>
-  );
+/** The product dropdown. 0.8.1: the lists arrive after the first render (radar list, Level III and
+ * gridded catalogs); it re-renders when they change. 0.8.2: searchable (type to filter). */
+export function ProductSelect({ value, onPick, opts, ...rest }: { value: string; onPick: (v: string) => void; opts: Parameters<typeof productGroups>[0]; title?: string; "aria-label"?: string }) {
+  void (sites.value, l3Products.value, gridLayers.value); // re-render when the option lists change
+  return <ProductPicker value={value} groups={productGroups(opts)} onPick={onPick} fallback={opts.label} {...rest} />;
 }
 
 /* ---------- links ---------- */
@@ -113,18 +79,38 @@ const LINK_KINDS: [keyof PaneLink, any, string][] = [
   ["layers", Layers, "layers"],
 ];
 
-/** Three small toggles: position / time / layers. */
-export function LinkToggles({ lk, set, what, chips }: { lk: PaneLink; set: (l: PaneLink) => void; what: string; chips?: boolean }) {
+/** Three small toggles: position / time / layers. 0.8.2: right-click the layers one for the pane's own layers. */
+export function LinkToggles({ lk, set, what, chips, onLayers, own }: { lk: PaneLink; set: (l: PaneLink) => void; what: string; chips?: boolean; onLayers?: (x: number, y: number) => void; own?: boolean }) {
   return (
     <span class={chips ? "lk8-chips" : "lk8-icons"} role="group" aria-label={`${what} links`}>
       {LINK_KINDS.map(([k, I, name]) => (
         <button
           key={k}
-          class={`lk8 ${lk[k] ? "on" : ""}`}
+          class={`lk8 ${lk[k] ? "on" : ""} ${k === "layers" && own ? "own" : ""}`}
           aria-pressed={lk[k]}
-          title={`${what}: ${lk[k] ? "follows" : "doesn't follow"} the main map's ${name} (click to ${lk[k] ? "unlink" : "link"})`}
+          title={`${what}: ${lk[k] ? "follows" : "doesn't follow"} the main map's ${name} (click to ${lk[k] ? "unlink" : "link"})${k === "layers" && onLayers ? `${own ? " · has its own layers" : ""} · right-click: choose layers` : ""}`}
           aria-label={`Link ${name} for ${what}`}
           onClick={(e) => (e.stopPropagation(), set({ ...lk, [k]: !lk[k] }))}
+          onContextMenu={
+            k === "layers" && onLayers
+              ? (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onLayers(e.clientX, e.clientY);
+                }
+              : undefined
+          }
+          onKeyDown={
+            k === "layers" && onLayers
+              ? (e) => {
+                  if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+                    e.preventDefault();
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    onLayers(r.left, r.bottom + 4);
+                  }
+                }
+              : undefined
+          }
         >
           <I size={chips ? 12 : 11} />
           {chips && <span>{name === "position" ? "Pos" : name === "time" ? "Time" : "Layers"}</span>}
@@ -171,7 +157,7 @@ function MlToggle({ idx, what }: { idx: number; what: string }) {
       aria-pressed={on}
       title={`${what}: model detections ${on ? "shown" : "hidden"} (click to ${on ? "hide" : "show"})`}
       aria-label={`Model detections in ${what}`}
-      onClick={(e) => (e.stopPropagation(), update((s) => (s.panes.ml = { ...(s.panes.ml ?? {}), [idx]: !on })))}
+      onClick={(e) => (e.stopPropagation(), setPaneLayer(idx, "mldetect", !on))}
     >
       <ScanEye size={11} />
     </button>
@@ -179,10 +165,132 @@ function MlToggle({ idx, what }: { idx: number; what: string }) {
 }
 /* ---------- end 0.8.1 ---------- */
 
+/* ---------- 0.8.2: per-pane layers, data inspector ---------- */
+/** show / hide one layer in a pane (an override; dropped again when it matches the main map) */
+function setPaneLayer(idx: number, id: string, on: boolean) {
+  update((s) => {
+    const all = { ...(s.panes.layers ?? {}) };
+    const mine = { ...(all[idx] ?? {}) };
+    delete mine[id];
+    all[idx] = mine;
+    s.panes.layers = all;
+    if (id === "mldetect" && s.panes.ml?.[idx] !== undefined) {
+      const ml = { ...s.panes.ml };
+      delete ml[idx];
+      s.panes.ml = ml;
+    }
+  });
+  // without an override the pane follows the main map: keep one only if that differs
+  if (paneLayerShown(idx, id) !== on) update((s) => (s.panes.layers = { ...(s.panes.layers ?? {}), [idx]: { ...(s.panes.layers?.[idx] ?? {}), [id]: on } }));
+}
+/** "Sync to main": drop the pane's own layers and link its layers again */
+function syncPaneLayers(idx: number) {
+  update((s) => {
+    const all = { ...(s.panes.layers ?? {}) };
+    delete all[idx];
+    s.panes.layers = all;
+    if (s.panes.ml) {
+      const ml = { ...s.panes.ml };
+      delete ml[idx];
+      s.panes.ml = ml;
+    }
+  });
+  if (myKind === "pane") setMyLink({ ...myLink.value, layers: true });
+  else setPaneLink(idx, { ...paneLink(idx), layers: true });
+}
+
+const BASE_ROWS: [string, string][] = [
+  ["base:alerts", "Weather alerts"],
+  ["base:sites", "Radar sites"],
+  ["base:states", "State lines"],
+  ["base:counties", "Counties"],
+  ["base:points", "My points"],
+  ["base:rings", "Range rings"],
+];
+
+/** Right-click menu of a pane's Layers link: which layers this pane shows, and Sync to main. */
+function PaneLayerMenu({ idx, what, at, onClose }: { idx: number; what: string; at: { x: number; y: number }; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector<HTMLInputElement>("input")?.focus();
+    const down = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && onClose();
+    const key = (e: KeyboardEvent) => e.key === "Escape" && (e.stopPropagation(), onClose());
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("keydown", key, true);
+    return () => (window.removeEventListener("pointerdown", down, true), window.removeEventListener("keydown", key, true));
+  }, []);
+  void ovlStatus.value;
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hit = (name: string, group: string) => words.every((w) => `${name} ${group}`.toLowerCase().includes(w));
+  const rows: { id: string; name: string; group: string; client?: boolean }[] = [
+    ...BASE_ROWS.map(([id, name]) => ({ id, name, group: "Map" })),
+    ...OVERLAYS.filter((o) => !o.hidden || o.id === "mldetect").map((o) => ({ id: o.id, name: o.name, group: o.group, client: o.feed === "client" })),
+    ...fileOverlays.value.map((f) => ({ id: `file:${f.id}`, name: f.name, group: "My files" })),
+  ].filter((r) => hit(r.name, r.group));
+  // what's shown first, then the rest by group
+  const shown = rows.filter((r) => paneLayerShown(idx, r.id));
+  const rest = rows.filter((r) => !paneLayerShown(idx, r.id));
+  const groups = [...new Set(rest.map((r) => r.group))];
+  const W = 290;
+  const left = Math.max(8, Math.min(at.x, window.innerWidth - W - 8));
+  const top = Math.max(8, Math.min(at.y, window.innerHeight - 420));
+  const own = paneHasOverrides(idx);
+  const row = (r: (typeof rows)[number]) => {
+    const on = paneLayerShown(idx, r.id);
+    const o = paneOverride(idx, r.id);
+    const noData = on && r.client && !r.id.startsWith("base:") && !isOn(r.id);
+    return (
+      <label key={r.id} class={`pl82-row ${o !== undefined ? "own" : ""}`} title={o !== undefined ? "Set for this pane only" : "Follows the main map"}>
+        <input type="checkbox" checked={on} onChange={() => setPaneLayer(idx, r.id, !on)} />
+        <span class="pl82-name">{r.name}</span>
+        {noData && <span class="pl82-note" title="Computed in the app: turn it on in the main Layers menu for data">main off</span>}
+        {o !== undefined && <span class="pl82-dot" aria-label="set for this pane" />}
+      </label>
+    );
+  };
+  return createPortal(
+    <div ref={ref} class="pl82 glass" style={{ left: `${left}px`, top: `${top}px`, width: `${W}px` }} role="dialog" aria-label={`${what} layers`}>
+      <div class="pl82-h">
+        <b>{what} layers</b>
+        <button class="pp8-chip pl82-sync" disabled={!own && paneLink(idx).layers} title="Show the same layers as the main map (clears this pane's own choices)" onClick={() => syncPaneLayers(idx)}>
+          <RefreshCw size={12} /> Sync to main
+        </button>
+      </div>
+      <input class="pl82-q" value={q} placeholder="Search layers" aria-label="Search layers" onInput={(e) => setQ((e.target as HTMLInputElement).value)} onKeyDown={(e) => e.stopPropagation()} />
+      <div class="pl82-list">
+        {shown.length > 0 && <div class="pl82-gh">Shown here</div>}
+        {shown.map(row)}
+        {groups.map((g) => (
+          <div key={g}>
+            <div class="pl82-gh">{g}</div>
+            {rest.filter((r) => r.group === g).map(row)}
+          </div>
+        ))}
+        {!rows.length && <div class="muted small" style={{ padding: "6px 8px" }}>No layer matches</div>}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Data inspector (value under the mouse) inside a pane, from the pane's own product. */
+function PaneCursorValue({ idx }: { idx: number }) {
+  const h = paneHover.value;
+  if (!h || h.idx !== idx || !(settings.value.ui.cursorValue || shiftHeld.value)) return null;
+  return (
+    <div class="cursor-val" style={{ left: `${h.x + 16}px`, top: `${h.y + 14}px` }}>
+      <b>{h.v}</b>
+      {h.sub && <span>{h.sub}</span>}
+    </div>
+  );
+}
+/* ---------- end 0.8.2 ---------- */
+
 /** Second map window / pane window: what this window follows. */
-function LinkControls() {
+function LinkControls({ onLayers }: { onLayers?: (x: number, y: number) => void }) {
   if (myKind === "main") return null;
-  return <LinkToggles lk={myLink.value} set={setMyLink} what="This window" />;
+  return <LinkToggles lk={myLink.value} set={setMyLink} what="This window" onLayers={myKind === "pane" ? onLayers : undefined} own={myKind === "pane" && paneHasOverrides(1)} />;
 }
 
 /** Publish the header's bottom edge as --hdr-b so the pane dropdowns and the scan bar sit just
@@ -305,9 +413,7 @@ export function MainPaneHead({ style }: { style?: Sty }) {
   }, []);
   return (
     <div class={`pane-head main-head glass ${openPanel.value ? "shift" : ""}`} style={style}>
-      <ProductSelect value={value} onPick={pick} title="Product (1–6 for Level II)" aria-label="Main map product">
-        <ProductOptions site={s.radar.site} current={s.radar.product} value={value} label={w.kind === "radar" ? productName(s.radar.product) : activeLabel.value.title} />
-      </ProductSelect>
+      <ProductSelect value={value} onPick={pick} title="Product (1–6 for Level II) · type to search" aria-label="Main map product" opts={{ site: s.radar.site, current: s.radar.product, value, label: w.kind === "radar" ? productName(s.radar.product) : activeLabel.value.title }} />
       <LinkControls />
     </div>
   );
@@ -348,12 +454,8 @@ export function popOutPane(idx: number) {
     for (const [k, v] of Object.entries(old)) if (+k < idx) links[k] = v;
     else if (+k > idx) links[+k - 1] = v;
     s.panes.links = links;
-    if (s.panes.ml) {
-      // 0.8.1: per-pane detection toggles move with their panes
-      const ml: Record<string, boolean> = {};
-      for (const [k, v] of Object.entries(s.panes.ml)) if (+k !== idx) ml[+k < idx ? k : +k - 1] = v;
-      s.panes.ml = ml;
-    }
+    if (s.panes.ml) s.panes.ml = dropPane(s.panes.ml, idx); // 0.8.1: per-pane detection toggles move with their panes
+    if (s.panes.layers) s.panes.layers = dropPane(s.panes.layers, idx); // 0.8.2: and their own layers
     const BY_COUNT: PaneLayoutId[] = ["1", "2", "3", "4"];
     if (s.panes.layout === "swipe" || !s.panes.layout.startsWith("custom:") || n - 1 <= 3) s.panes.layout = BY_COUNT[Math.max(0, Math.min(3, n - 1))];
   });
@@ -382,25 +484,25 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
   const g = swipe ? swipeGeom.value : null;
   const hs: Sty | undefined = g?.pane ? { left: `${g.pane.x}px`, top: `${g.pane.y}px` } : g ? { display: "none" } : headStyle;
   const lk = paneLink(idx);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null); // 0.8.2: the pane's layers menu
+  const what = standalone ? "This window" : `Pane ${idx + 1}`;
   return (
     <div class={`pane ${standalone ? "pane-solo" : ""}`} style={{ gridArea: area, clipPath: g?.clip }} aria-label={`Map pane ${idx + 1}`}>
       <div ref={ref} class="pane-map" />
       <div class="pane-head glass" style={hs}>
-        <ProductSelect value={value} onPick={set} title="Product for this pane" aria-label={standalone ? "Product" : `Product for pane ${idx + 1}`}>
-          <ProductOptions site={cfg.site ?? settings.value.radar.site} current={cfg.product} value={value} sat />
-        </ProductSelect>
+        <ProductSelect value={value} onPick={set} title="Product for this pane · type to search" aria-label={standalone ? "Product" : `Product for pane ${idx + 1}`} opts={{ site: cfg.site ?? settings.value.radar.site, current: cfg.product, value, sat: true }} />
         <span class="pane-time" title={st.error ?? ""}>{st.loading ? "Loading…" : st.error ? st.error : st.time ? fmtTime(st.time, true) : ""}</span>
         {standalone ? (
           <>
-            <LinkControls />
+            <LinkControls onLayers={(x, y) => setMenu({ x, y })} />
             <span class="lk8-icons">
               <MlToggle idx={idx} what="This window" />
             </span>
           </>
         ) : (
           <span class="ph-tools">
-            {!swipe && <LinkToggles lk={lk} set={(l) => setPaneLink(idx, l)} what={`Pane ${idx + 1}`} />}
-            {swipe && <LinkToggles lk={{ ...lk, pos: true }} set={(l) => setPaneLink(idx, { ...l, pos: true })} what={`Pane ${idx + 1}`} />}
+            {!swipe && <LinkToggles lk={lk} set={(l) => setPaneLink(idx, l)} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
+            {swipe && <LinkToggles lk={{ ...lk, pos: true }} set={(l) => setPaneLink(idx, { ...l, pos: true })} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
             <MlToggle idx={idx} what={`Pane ${idx + 1}`} />
             <button class="lk8 pane-out" title="Pop this pane out into its own window" aria-label={`Pop out pane ${idx + 1}`} onClick={() => popOutPane(idx)}>
               <ExternalLink size={11} />
@@ -409,6 +511,8 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
         )}
       </div>
       {!swipe && <PaneCrosshair idx={idx} /> /* 0.8.1 */}
+      <PaneCursorValue idx={idx} /* 0.8.2 */ />
+      {menu && <PaneLayerMenu idx={idx} what={what} at={menu} onClose={() => setMenu(null)} /* 0.8.2 */ />}
     </div>
   );
 }

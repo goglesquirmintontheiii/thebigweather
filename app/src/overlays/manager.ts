@@ -293,8 +293,11 @@ function clickableLayers(m: MLMap): string[] {
 /** What's under a click: a point feature opens the popup right away (handled); area features
  * from "panel" overlays (watches, storms, MDs) go to the info panel together with alerts; other
  * areas (outlooks, files) open the popup only if nothing else is there (fallback). */
-export function pickOverlay(e: MapMouseEvent): { handled: boolean; panel: DetailItem[]; fallback?: () => void } {
-  const m = map;
+export function pickOverlay(e: MapMouseEvent, on?: { map: MLMap; pane: number } /* 0.8.2: a map pane */): { handled: boolean; panel: DetailItem[]; fallback?: () => void } {
+  const m = on?.map ?? map;
+  // 0.8.2: pane popups are placed in window coordinates and follow their pane
+  const pr = on ? on.map.getContainer().getBoundingClientRect() : null;
+  const at = { x: e.point.x + (pr?.left ?? 0), y: e.point.y + (pr?.top ?? 0), ...(on ? { pane: on.pane } : {}) };
   const none = { handled: false, panel: [] as DetailItem[] };
   if (!m) return none;
   const ids = clickableLayers(m);
@@ -329,7 +332,7 @@ export function pickOverlay(e: MapMouseEvent): { handled: boolean; panel: Detail
       }
       if (oid === "flights") showFlightTrack(String(props.hex ?? ""));
       else showFlightTrack(null);
-      popup.value = { x: e.point.x, y: e.point.y, lng: e.lngLat.lng, lat: e.lngLat.lat, p, overlay: oid };
+      popup.value = { ...at, lng: e.lngLat.lng, lat: e.lngLat.lat, p, overlay: oid };
       return { handled: true, panel: [] };
     }
     if (def?.panel) {
@@ -341,7 +344,7 @@ export function pickOverlay(e: MapMouseEvent): { handled: boolean; panel: Detail
       panel.push({ kind: "ovl", overlay: oid, p });
     } else if (!fallback) {
       const p = def?.click ? def.click(props) : oid.startsWith("file:") ? fileClick(props) : null;
-      if (p) fallback = () => (popup.value = { x: e.point.x, y: e.point.y, lng: e.lngLat.lng, lat: e.lngLat.lat, p, overlay: oid });
+      if (p) fallback = () => (popup.value = { ...at, lng: e.lngLat.lng, lat: e.lngLat.lat, p, overlay: oid });
     }
   }
   clearSelections();
@@ -444,8 +447,7 @@ async function fetchHistOverlay(id: string, def: OverlayDef) {
 }
 
 /** Show only what was in effect (or reported) at the frame time: a layer filter, no new data. */
-function applyHistFilter(id: string) {
-  const m = map;
+function applyHistFilter(id: string, m: MLMap | null = map /* 0.8.2: panes too */) {
   const hf = histFeedFor(overlayDef(id));
   if (!m || !hf || hf.kind === "valid" || !m.getStyle() || !histRange.value) return;
   const T = histTime.value;
@@ -501,4 +503,37 @@ export const overlayData = ovlData;
 /** The map the overlays are attached to. */
 export function overlayMap(): MLMap | null {
   return map;
+}
+
+/* ---------- 0.8.2: map panes draw overlays from the same layer definitions and data ---------- */
+/** overlay ids the main map's Layers menu has on (catalog + files; history-mode filtered) */
+export const activeOverlayIds = () => activeIds();
+/** what an overlay's drawn layers depend on (styles, options, units): rebuild when it changes */
+export const overlaySig = (id: string) => signature(id);
+/** add an overlay's source and layers to another map (same specs and order as the main map) */
+export function addOverlayTo(m: MLMap, id: string) {
+  addOverlay(m, id);
+}
+export function removeOverlayFrom(m: MLMap, id: string) {
+  const src = `o-${id}`;
+  for (const l of m.getStyle()?.layers ?? []) if (l.id.startsWith(`${src}-`)) m.removeLayer(l.id);
+  if (m.getSource(src)) m.removeSource(src);
+}
+/** the replay time filter on another map's copy of an overlay */
+export function applyHistFilterTo(m: MLMap, id: string) {
+  applyHistFilter(id, m);
+}
+/** fetch an overlay's feed for another map's view (a pane that isn't position-linked, or one that
+ * shows a layer the main map has off). null = not a server feed (or history mode). */
+export async function fetchOverlayFor(id: string, m: MLMap): Promise<any | null> {
+  const def = overlayDef(id);
+  if (!def || def.feed === "client" || def.raster || !api.base || histRange.value) return null;
+  const vp = viewParams(def, m);
+  if (vp === null) return EMPTY;
+  const q = new URLSearchParams({ ...(def.params ?? {}), ...optsFor(def), ...vp });
+  const off = settings.value.ovl[id]?.opts?.off;
+  if (id === "cameras" && off !== undefined) q.set("off", off);
+  let fc = await api.get(`${def.path ?? `/api/ovl/${def.feed ?? id}`}?${q}`);
+  if (def.prepare) fc = def.prepare(fc, optsFor(def));
+  return fc;
 }
