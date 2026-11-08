@@ -9,6 +9,7 @@ import { addProtocol, type Map as MLMap, type RequestTransformFunction } from "m
 import { signal } from "@preact/signals";
 import { settings, update, uid, toast, type OfflineRegion } from "../store";
 import { OFFLINE_HOSTS } from "../map/basemaps";
+import { tileKey, tileInPoly, neededKeys } from "./cover"; // 0.8.2
 
 const io = () => (window as any).tbw?.wf6 as
   | { tileGet(k: string): Promise<Uint8Array | null>; tilePut(k: string, b: ArrayBuffer): Promise<boolean>; tileDel(k: string[]): Promise<number>; tileUsage(): Promise<{ bytes: number; files: number }> }
@@ -16,16 +17,9 @@ const io = () => (window as any).tbw?.wf6 as
 const CACHE = "tbw-offline-tiles";
 const cacheUrl = (k: string) => `https://tbw-offline.invalid/${encodeURIComponent(k)}`;
 
-/** Stable key for a tile/resource URL: no scheme, CARTO subdomain and OpenFreeMap version dropped. */
-export function tileKey(url: string): string {
-  return url
-    .replace(/^[a-z]+:\/\//, "")
-    .replace(/\?.*$/, "")
-    .replace(/^[a-d]\.basemaps\.cartocdn\.com/, "basemaps.cartocdn.com")
-    .replace(/(tiles\.openfreemap\.org\/[a-z]+)\/\d{8}_\d{6}_[a-z]+\//, "$1/");
-}
+export { tileKey } from "./cover"; // 0.8.2: moved (pure, unit-tested)
 
-async function getLocal(k: string): Promise<ArrayBuffer | null> {
+export async function getLocal(k: string): Promise<ArrayBuffer | null> {
   const e = io();
   if (e) {
     const b = await e.tileGet(k).catch(() => null);
@@ -36,13 +30,13 @@ async function getLocal(k: string): Promise<ArrayBuffer | null> {
   const r = await c.match(cacheUrl(k));
   return r ? r.arrayBuffer() : null;
 }
-async function putLocal(k: string, b: ArrayBuffer) {
+export async function putLocal(k: string, b: ArrayBuffer) {
   const e = io();
   if (e) return void (await e.tilePut(k, b));
   const c = await caches.open(CACHE);
   await c.put(cacheUrl(k), new Response(b));
 }
-async function delLocal(keys: string[]) {
+export async function delLocal(keys: string[]) {
   const e = io();
   if (e) return void (await e.tileDel(keys));
   const c = await caches.open(CACHE);
@@ -130,7 +124,8 @@ function register() {
 /** MapLibre transformRequest: basemap requests go through the store when it can help. */
 export const offlineTransform: RequestTransformFunction = (url, kind) => {
   const regions = settings.value.wf6?.offline.regions ?? [];
-  if (!regions.length || !OFFLINE_HOSTS.test(url)) return undefined;
+  const areas = settings.value.wf6?.offline.areas ?? []; // 0.8.2
+  if ((!regions.length && !areas.length) || !(OFFLINE_HOSTS.test(url) || areaHost(url))) return undefined;
   register();
   const prefer = settings.value.wf6.offline.prefer || !online.value;
   const rest = url.replace(/^https:\/\//, "");
@@ -139,13 +134,31 @@ export const offlineTransform: RequestTransformFunction = (url, kind) => {
     // ArcGIS tiles are z/y/x
     const arc = url.includes("arcgisonline");
     const zxy = m ? (arc ? [+m[1], +m[3], +m[2]] : [+m[1], +m[2], +m[3]]) : null;
-    if (prefer || (zxy && inRegion(zxy[0], zxy[1], zxy[2]))) return { url: `tbwtiles://c/${rest}` };
+    if (prefer || (zxy && (inRegion(zxy[0], zxy[1], zxy[2]) || inArea(zxy[0], zxy[1], zxy[2])))) return { url: `tbwtiles://c/${rest}` };
     return undefined;
   }
   if (kind === "Glyphs") return { url: `tbwtiles://c/${rest}` };
   if (kind === "Source") return { url: `tbwtiles://${prefer ? "c" : "n"}/${rest}` };
   return undefined;
 };
+
+/* 0.8.2: polygon areas — tile inside an area (any basemap: a stored copy is served when there is one) */
+function inArea(z: number, x: number, y: number): boolean {
+  for (const a of settings.value.wf6.offline.areas ?? []) if (z >= a.minz && z <= a.maxz && tileInPoly(a.poly, z, x, y)) return true;
+  return false;
+}
+let hostsFor: unknown = null;
+let hostSet = new Set<string>();
+const hostOf = (u: string) => u.replace(/^[a-z]+:\/\//, "").split("/")[0];
+/** hosts of custom tile servers that have saved areas */
+function areaHost(url: string): boolean {
+  const areas = settings.value.wf6.offline.areas ?? [];
+  if (hostsFor !== areas) {
+    hostsFor = areas;
+    hostSet = new Set(areas.flatMap((a) => a.templates.map((t) => hostOf(t.url))));
+  }
+  return hostSet.has(hostOf(url));
+}
 
 // ---------- download ----------
 export const dlProgress = signal<{ done: number; total: number; bytes: number; failed: number; name: string } | null>(null);
@@ -246,7 +259,28 @@ export async function deleteRegion(id: string) {
       const t = tileRange(o.bbox, z);
       return x >= t.x0 && x <= t.x1 && y >= t.y0 && y <= t.y1;
     });
-  for (const t of r.templates) for (const [z, x, y] of tilesOf(r.bbox, r.minz, r.maxz)) if (!covered(z, x, y)) keys.push(tileKey(t.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y)).replace("{r}", "")));
+  // 0.8.2: tiles a polygon area still needs stay
+  const areaKeys = neededKeys(settings.value.wf6.offline.areas ?? []);
+  for (const t of r.templates)
+    for (const [z, x, y] of tilesOf(r.bbox, r.minz, r.maxz)) {
+      const k = tileKey(t.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y)).replace("{r}", ""));
+      if (!covered(z, x, y) && !areaKeys.has(k)) keys.push(k);
+    }
   for (let i = 0; i < keys.length; i += 2000) await delLocal(keys.slice(i, i + 2000));
   toast(`Deleted “${r.name}”`);
+}
+
+/** 0.8.2: is a store key inside a legacy (box) region? Area deletes keep those tiles. */
+export function legacyCovered(key: string): boolean {
+  const regions = settings.value.wf6.offline.regions;
+  if (!regions.length) return false;
+  const m = key.match(/\/(\d+)\/(\d+)\/(\d+)(?:@2x)?(?:\.\w+)?$/);
+  if (!m) return regions.some((r) => r.templates.some((t) => tileKey(t).split("/")[0] === key.split("/")[0])); // TileJSON / glyphs of that host
+  const arc = key.includes("arcgisonline");
+  const [z, x, y] = arc ? [+m[1], +m[3], +m[2]] : [+m[1], +m[2], +m[3]];
+  return regions.some((r) => {
+    if (z < r.minz || z > r.maxz || !r.templates.some((t) => key.startsWith(tileKey(t).split("{z}")[0]))) return false;
+    const t = tileRange(r.bbox, z);
+    return x >= t.x0 && x <= t.x1 && y >= t.y0 && y <= t.y1;
+  });
 }

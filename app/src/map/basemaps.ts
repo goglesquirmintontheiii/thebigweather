@@ -13,7 +13,26 @@ export const BASEMAPS: { id: Basemap; name: string; needsKey?: string }[] = [
   { id: "satellite", name: "Satellite" },
   { id: "google", name: "Google satellite", needsKey: "google_maps" },
   { id: "offline", name: "Offline (built-in)" },
+  /* 0.8.2: FAA aeronautical charts (raster, US) */
+  { id: "faa_tac", name: "Terminal (TAC)" },
+  { id: "faa_sec", name: "VFR Sectional" },
+  { id: "faa_ifrlo", name: "IFR Low" },
+  { id: "faa_ifrhi", name: "IFR High" },
 ];
+
+/* ---------- 0.8.2: FAA charts — FAA AIS tiled map services on ArcGIS Online (Web Mercator, 256 px,
+ * tile/{z}/{y}/{x}); levels per service from its MapServer info. Charts are drawn over the Light map
+ * (shown where / when a chart has no tiles). ---------- */
+const FAA_TILES = "https://tiles.arcgis.com/tiles/ssFJjBXIUyZDrSYZ/arcgis/rest/services";
+export const FAA_ATTR = 'Charts: <a href="https://www.faa.gov/air_traffic/flight_info/aeronav/">FAA Aeronautical Information Services</a> · not for navigation';
+export const FAA_CHARTS: Record<string, { service: string; minzoom: number; maxzoom: number; bounds?: [number, number, number, number]; under?: string }> = {
+  faa_tac: { service: "VFR_Terminal", minzoom: 10, maxzoom: 12, bounds: [-163.2, 17.7, -54.1, 65.4], under: "faa_sec" },
+  faa_sec: { service: "VFR_Sectional", minzoom: 8, maxzoom: 12 },
+  faa_ifrlo: { service: "IFR_AreaLow", minzoom: 7, maxzoom: 12 },
+  faa_ifrhi: { service: "IFR_High", minzoom: 5, maxzoom: 9 },
+};
+const faaTile = (service: string) => `${FAA_TILES}/${service}/MapServer/tile/{z}/{y}/{x}`;
+/* ---------- end 0.8.2 ---------- */
 
 const carto = (style: string) => ["a", "b", "c", "d"].map((s) => `https://${s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}@2x.png`);
 const CARTO_ATTR = '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>';
@@ -31,6 +50,10 @@ const BG: Record<string, string> = {
   satellite: "#0a0a0a",
   google: "#0a0a0a",
   offline: "#0b1016",
+  faa_tac: "#e9ecef", // 0.8.2
+  faa_sec: "#e9ecef",
+  faa_ifrlo: "#e9ecef",
+  faa_ifrhi: "#e9ecef",
 };
 
 export function isDarkBasemap(b: Basemap, custom?: CustomBasemap[]) {
@@ -186,6 +209,21 @@ export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey
       // keep place names readable on top when labels are on
       if (opts.labels && c.labels) addRaster("labels", raster(carto(dark ? "dark_only_labels" : "voyager_only_labels"), CARTO_ATTR, 20, 512), true);
     }
+    return style;
+  }
+  /* 0.8.2: FAA charts over the Light map (the chart covers it where it has tiles) */
+  const faa = FAA_CHARTS[b];
+  if (faa) {
+    if (useOfm) ofm(THEMES.light);
+    else addRaster("carto", raster(carto("light_nolabels"), CARTO_ATTR, 20, 512));
+    for (const id of [faa.under, b].filter(Boolean) as string[]) {
+      const c = FAA_CHARTS[id];
+      style.sources[id] = { type: "raster", tiles: [faaTile(c.service)], tileSize: 256, minzoom: c.minzoom, maxzoom: c.maxzoom, attribution: FAA_ATTR, ...(c.bounds ? { bounds: c.bounds } : {}) } as SourceSpecification;
+      // above the base fills and roads, under weather / labels
+      style.layers.push({ id: `base-${id}`, type: "raster", source: id, paint: { "raster-fade-duration": 0 } } as LayerSpecification);
+    }
+    // OFM labels / roads sit above the chart otherwise — the chart has its own
+    style.layers = style.layers.filter((l) => !l.id.startsWith("top-"));
     return style;
   }
   if (useOfm && (b === "dark" || b === "light" || b === "road")) {

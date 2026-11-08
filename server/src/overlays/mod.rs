@@ -5,6 +5,7 @@
 //! has the overlay turned on.
 
 pub mod agsquery;
+pub mod airspace; // 0.8.2
 pub mod arcgis;
 pub mod aviation;
 pub mod cameras;
@@ -104,6 +105,8 @@ pub const FEEDS: &[(&str, u64)] = &[
     ("sigmet", 120),
     ("gairmet", 600),
     ("airports", 86400 * 7),
+    ("airspace", 0), // 0.8.2: answered from the in-memory national copy (no per-box response cache)
+    ("airadv", 120),    // 0.8.2
     ("flights", 2),
     ("flighttrack", 20),
     ("recon", 30),
@@ -368,6 +371,8 @@ impl Overlays {
             "sigmet" => aviation::sigmets(self).await,
             "gairmet" => aviation::gairmet(self, p("type"), p("fcst")).await,
             "airports" => aviation::airports(self, p("all") == "1").await,
+            "airspace" => airspace::airspace(self, p("bbox"), p("z"), p("cls"), p("sua")).await, // 0.8.2
+            "airadv" => airspace::advisories(self, p("tfr"), p("cwa")).await,                      // 0.8.2
             "flights" => {
                 let lat: f64 = p("lat").parse().map_err(|_| anyhow!("lat"))?;
                 let lon: f64 = p("lon").parse().map_err(|_| anyhow!("lon"))?;
@@ -478,6 +483,8 @@ fn label(id: &str) -> String {
         "metar" => "METARs",
         "taf" | "pirep" | "sigmet" | "gairmet" => "aviationweather.gov",
         "airports" => "OurAirports",
+        "airspace" => "FAA airspace (AIS open data)", // 0.8.2
+        "airadv" => "Airspace advisories (FAA TFRs / AWC CWAs)", // 0.8.2
         "flights" => "ADS-B (airplanes.live)",
         "recon" => "Recon (NHC HDOBs)",
         "buoys" => "NDBC buoys",

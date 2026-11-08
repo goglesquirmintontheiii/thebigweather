@@ -67,6 +67,7 @@ import { SpacePanel } from "./SpacePanel";
 /* end data 0.6 */
 /* workflow 0.6 */
 import { Wf6Overlays } from "./Wf6Overlays";
+import { OfflineAreaBar } from "./OfflineAreas"; // 0.8.2
 import { startRules } from "../rules/engine";
 import { startWidgets } from "../widgets/manager";
 import { startPlugins } from "../plugins/host";
@@ -172,6 +173,7 @@ function MainApp() {
       <MetarPanels /> {/* workflow */}
       <TrackPanel /> {/* workflow */}
       <Wf6Overlays /> {/* workflow 0.6 */}
+      <OfflineAreaBar /> {/* 0.8.2 */}
       <SharePanel /> {/* share & collab */}
       <CollabPanel /> {/* share & collab */}
       <ConfigModal />
