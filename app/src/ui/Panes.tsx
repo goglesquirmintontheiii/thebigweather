@@ -32,6 +32,7 @@ import { PaneInspector } from "./Inspector";
 import { paneBearing } from "../map/panes";
 import { tool } from "../store";
 import { fmtDist, compass } from "../util";
+import { Pane3DBtn } from "./View3D"; // 0.8.3 3d
 
 /** Product dropdown options: Level II moments, Level III families (for the site's radar type), gridded layers.
  * 0.8.2: as data for the searchable dropdown (same groups and labels as before). */
@@ -513,6 +514,7 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
           <>
             <LinkControls onLayers={(x, y) => setMenu({ x, y })} />
             <span class="lk8-icons">
+              <Pane3DBtn idx={idx} /* 0.8.3 3d */ />
               <MlToggle idx={idx} what="This window" />
               {/* 0.8.3: back into the main window as a pane (or drag this window onto it) */}
               <button class="lk8 pane-out" title="Dock back (or drag this window onto the main window)" aria-label="Dock back" onClick={() => window.dispatchEvent(new Event("tbw-dock-pane")) /* WinDrop.tsx */}>
@@ -524,6 +526,7 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
           <span class="ph-tools">
             {!swipe && <LinkToggles lk={lk} set={(l) => setPaneLink(idx, l)} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
             {swipe && <LinkToggles lk={{ ...lk, pos: true }} set={(l) => setPaneLink(idx, { ...l, pos: true })} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
+            <Pane3DBtn idx={idx} /* 0.8.3 3d */ />
             <MlToggle idx={idx} what={`Pane ${idx + 1}`} />
             <button class="lk8 pane-out" title="Pop out" /* 0.8.3 */ aria-label={`Pop out pane ${idx + 1}`} onClick={() => popOutPane(idx)}>
               <ExternalLink size={11} />

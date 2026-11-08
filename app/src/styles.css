@@ -5825,6 +5825,27 @@ body.loopx-hide .loopx {
   line-height: 1.45;
   white-space: nowrap;
 }
+/* 0.8.3 3d: per-pane 3D toggle, loader line */
+.lk8.p3d {
+  min-width: 20px;
+  height: 18px;
+  justify-content: center;
+  padding: 0 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.lk8.p3d.on {
+  background: var(--accent-soft, rgba(63, 183, 255, 0.15));
+}
+.lk8.p3d.err {
+  color: var(--danger, #ff6b6b);
+}
+.v3d-load {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
 
 /* ---------- shake/stats/server 0.6 ---------- */
 /* seismographs window */

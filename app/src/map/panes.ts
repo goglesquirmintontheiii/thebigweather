@@ -61,6 +61,9 @@ export const paneInsp = signal<{ idx: number; x: number; y: number; lat: number;
 /** distance & direction tool in each pane: from that pane's radar to its centre */
 export const paneBearing = signal<Record<number, { site: string; dist: number; brg: number }>>({});
 
+/** 0.8.3 3d: bumped when a pane is built, removed or shows a new frame (the pane's 3D view follows it) */
+export const paneRev = signal(0); // 0.8.3 3d
+const bumpRev = () => queueMicrotask(() => (paneRev.value = paneRev.peek() + 1)); // 0.8.3 3d
 export const paneStatus = signal<Record<number, { loading?: boolean; error?: string; time?: number; label?: string }>>({});
 const panes = new Map<number, PaneView>();
 let syncing = false;
@@ -629,6 +632,7 @@ class PaneView {
       this.cur = { raster: hit.r, key: f.key, table, units: d?.units ?? table?.units ?? "" }; // 0.8.1
     } else return;
     this.shownKey = f.key;
+    bumpRev(); // 0.8.3 3d
     setStatus(this.idx, { time: f.time, error: undefined });
     this.readCenter(); // 0.8.1
   }
@@ -970,6 +974,7 @@ class PaneView {
     this.rasters.clear();
     for (const mk of this.pointMarkers) mk.remove();
     this.map.remove();
+    bumpRev(); // 0.8.3 3d
   }
 }
 
@@ -1001,6 +1006,7 @@ export function mountPane(idx: number, el: HTMLElement, fallback?: PaneCfg, onMa
     const v = new PaneView(idx, el);
     p = v;
     panes.set(idx, v);
+    bumpRev(); // 0.8.3 3d
     onMap?.(v.map); // 0.8.1: a pane window links through this map (also after a rebuild)
     // 0.8.1: a new pane has no saved config yet (the layout adds it a moment later): load what its selector shows
     const cfg = settings.value.panes.list[idx - 1] ?? fallback;
@@ -1051,6 +1057,14 @@ const sameCfg = (a: PaneCfg | null | undefined, b: PaneCfg | null | undefined) =
 /* panes 0.8 */
 export function paneMap(idx: number): MLMap | null {
   return panes.get(idx)?.map ?? null;
+}
+/** 0.8.3 3d: what a pane shows, for its 3D view */
+export function pane3dInfo(idx: number) {
+  const p = panes.get(idx);
+  if (!p || p.dead) return null;
+  const i = p.frames.findIndex((x) => x.key === p.shownKey);
+  const f = i >= 0 ? p.frames[i] : undefined;
+  return { map: p.map, cfg: p.cfg, cur: p.cur, key: p.shownKey, time: f?.time, next: i >= 0 && p.frames.length > 1 ? p.frames[(i + 1) % p.frames.length].key : undefined, layers: ["pane-radar", "pane-grid"] };
 }
 export function paneCount() {
   return panes.size;
