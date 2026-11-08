@@ -241,7 +241,7 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 
 **Android:** Capacitor app reusing the UI with a mobile layout (see Stack). It adds push alerts for saved points and GPS, background location for "alerts where I am", widgets, and Android Auto / car-friendly mode.
 
-**More Android ideas (added in 0.8.1):**
+**More Android ideas (added in 0.8.1; reviewed by you: all passed except Wear OS, still undecided):**
 - **Home-screen widgets:** radar loop for a saved point, conditions, active alerts, and nearest storm with its ETA.
 - **Lock-screen / ongoing notification** while a warning is active for your location: countdown, storm motion and distance, one tap to the radar.
 - **Wear OS companion:** alert vibrations, distance to the nearest storm, a small radar tile.
@@ -268,7 +268,7 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 - **Input:** controllers and hand tracking, voice commands (switch layers, play loop), and keyboard/mouse support.
 - **Performance:** foveated rendering, reduced-resolution volumes, and server-side tiling sized for Quest GPUs.
 
-**More VR ideas (added in 0.8.1):**
+**More VR ideas (added in 0.8.1; reviewed by you: all passed except Shared VR rooms, still undecided):**
 - **Storm-scale "god view":** stand inside a supercell's 3D radar volume at true scale, with the mesocyclone, hail core and BWER highlighted by the detection models, and velocity shown as flowing particles.
 - **Tornado track replays:** walk along a historical track with the radar volume, damage survey points and photos at each spot.
 - **Shared VR rooms (with Team):** several people in one space around the same tabletop storm, with voice, pointers and drawings that also show on desktop clients.
@@ -278,11 +278,10 @@ Ideas drawn from RadarScope, RadarOmega, The Weather Channel, WeatherWise, MyRad
 - **Comfort options:** vignette while moving, seated mode, snap turning, and a "reduce flashing" setting for lightning.
 - **Desktop bridge:** pick up windows from the desktop app on the same server (same layout, panes and time), and send a view back to the desktop.
 
-**Other Phase 9 ideas (not mobile or VR):**
+**Other Phase 9 ideas (not mobile or VR; all passed — the verification dashboard was rejected and removed):**
 - **Briefing generator:** an automatic morning/evening video or slide briefing for chosen points (radar loop, outlook, model summaries, read aloud), saved or sent through notification channels.
 - **Storm-relative "my day" timeline:** one strip per saved point with predicted storm arrival windows from storm tracks and model forecasts.
 - **Smarter detection models:** active learning (mark a detection right/wrong and retrain from it), automatic calibration from verified reports, and model cards (what it was trained on, its skill, its limits).
-- **Verification dashboard** for your own models only (skill over time, by region and season) — not NWS warning verification, which was rejected.
 - **Scheduled recordings:** record radar/cameras/radio on a schedule or when a model or rule fires, with automatic highlight clips.
 - **Layer presets per situation** (Tornado day, Winter storm, Tropical, Fire weather) that switch layers, panes and windows in one click.
 - **Performance auto-tuning:** the app lowers image size and frame cache on its own when it detects stutter, and tells you what it changed.
