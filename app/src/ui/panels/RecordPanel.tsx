@@ -8,9 +8,11 @@ import { settings, update, toast, activeServer } from "../../store";
 import { pinned, playingRec, l3Products, currentSite } from "../../radar/controller";
 import { ALERT_COLORS } from "../../alerts";
 import { openCamera } from "../CameraPanels";
-import { Circle, Square, Play, Trash2, Download, Upload, RefreshCw, Film } from "lucide-preact";
+import { Circle, Square, Play, Trash2, Download, Upload, RefreshCw, Film, ChevronRight } from "lucide-preact";
 import { Toggle } from "./RadarPanel";
 import { TimelapseSection } from "../Timelapses"; // p8: webcam daily timelapses
+import { groupRecs, loadCollapsed, saveCollapsed, fmtSize } from "../recgroups"; // 0.8.2
+import "../recordings082.css"; // 0.8.2
 
 export interface Rec {
   id: string;
@@ -28,6 +30,8 @@ export interface Rec {
   bytes: number;
   t0: number;
   t1: number;
+  /** 0.8.2: from an imported .zip */
+  imported?: boolean;
 }
 interface Rules {
   enabled: boolean;
@@ -133,7 +137,7 @@ async function download(path: string, name: string) {
   }
 }
 
-const size = (b: number) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} kB`);
+const size = fmtSize;
 const when = (ms: number) =>
   ms ? new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: settings.value.utc ? "UTC" : undefined }) : "—";
 
@@ -287,6 +291,7 @@ function RecRow({ r }: { r: Rec }) {
           {r.trigger.startsWith("alert") ? ` · ${r.trigger}` : ""}
         </small>
         {r.error && <small class="err-text">{r.error}</small>}
+        {!r.error && r.status === "done" && r.files === 0 && <small class="err-text">Nothing was recorded</small>}
       </div>
       {r.files > 0 && (
         <button class="icon-btn" title="Play" onClick={() => playRec(r)}>
@@ -391,12 +396,44 @@ export function RecordPanel() {
           />
         </div>
         {list.length === 0 && <div class="muted small">No recordings yet.</div>}
-        {list.map((r) => (
-          <RecRow key={r.id} r={r} />
-        ))}
+        {groupRecs(list)
+          .filter((g) => g.items.length)
+          .map((g) => (
+            <RecSection key={g.id} id={g.id} label={g.label} count={g.items.length} bytes={g.bytes} live={g.items.some((r) => r.status === "recording")}>
+              {g.items.map((r) => (
+                <RecRow key={r.id} r={r} />
+              ))}
+            </RecSection>
+          ))}
         <p class="muted small">Recordings stay on the server until you delete them. Recording or sharing some camera feeds may need the owner's permission.</p>
       </section>
-      <TimelapseSection />
+      <TimelapseSection collapsed={collapsed.value.has("tl")} onToggle={() => toggleSection("tl")} />
+    </div>
+  );
+}
+
+// 0.8.2: collapsible sections by type; collapsed state remembered on this device
+const collapsed = signal<Set<string>>(loadCollapsed());
+function toggleSection(id: string) {
+  const s = new Set(collapsed.value);
+  if (!s.delete(id)) s.add(id);
+  collapsed.value = s;
+  saveCollapsed(s);
+}
+
+function RecSection({ id, label, count, bytes, live, children }: { id: string; label: string; count: number; bytes: number; live: boolean; children: any }) {
+  const open = !collapsed.value.has(id);
+  return (
+    <div class={`rec-sec${open ? "" : " closed"}`}>
+      <button class="rec-sec-head" aria-expanded={open} onClick={() => toggleSection(id)} title={open ? "Collapse" : "Expand"}>
+        <ChevronRight size={12} class={open ? "rot" : ""} />
+        <span class="rec-sec-name">{label}</span>
+        {live && <i class="rec-sec-live" title="Recording now" />}
+        <span class="rec-sec-count">
+          {count} · {size(bytes)}
+        </span>
+      </button>
+      {open && <div class="rec-sec-body">{children}</div>}
     </div>
   );
 }

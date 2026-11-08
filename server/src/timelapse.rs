@@ -394,10 +394,13 @@ async fn image_url(st: &AppState, c: &TlCam) -> Result<String> {
     crate::overlays::cameras::image_url(&st.overlays, &c.cam_id).await
 }
 
-/// YouTube page URL → direct stream URL (yt-dlp -g), cached for 20 minutes.
-async fn youtube_direct(st: &AppState, url: &str) -> Result<String> {
-    static CACHE: std::sync::OnceLock<Mutex<HashMap<String, (String, std::time::Instant)>>> = std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+/// YouTube page URL → the stream (URL + the HTTP headers YouTube expects), cached for 20 minutes.
+/// 0.8.2: resolved like recordings (`yt-dlp -j`, HLS first for live streams); a failed grab drops
+/// the cached stream so the next capture resolves it again.
+static YT_CACHE: std::sync::OnceLock<Mutex<HashMap<String, (crate::recorder::YtStream, std::time::Instant)>>> = std::sync::OnceLock::new();
+
+async fn youtube_direct(st: &AppState, url: &str) -> Result<crate::recorder::YtStream> {
+    let cache = YT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some((u, at)) = cache.lock().get(url) {
         if at.elapsed() < Duration::from_secs(20 * 60) {
             return Ok(u.clone());
@@ -406,15 +409,19 @@ async fn youtube_direct(st: &AppState, url: &str) -> Result<String> {
     if !st.rec.has_ytdlp() {
         bail!("YouTube timelapses need yt-dlp on the server");
     }
-    let out = tokio::time::timeout(Duration::from_secs(60), crate::platform::command("yt-dlp").args(["-g", "-q", "--no-warnings", "--no-playlist", "-f", "best[height<=1080]/best", url]).kill_on_drop(true).output()).await.map_err(|_| anyhow!("yt-dlp timed out"))??;
-    let direct = String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").trim().to_string();
-    if !out.status.success() || !direct.starts_with("http") {
-        bail!("yt-dlp: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("no stream URL"));
-    }
+    let s = crate::recorder::yt_resolve(url).await?;
     let mut c = cache.lock();
     c.retain(|_, v| v.1.elapsed() < Duration::from_secs(20 * 60));
-    c.insert(url.to_string(), (direct.clone(), std::time::Instant::now()));
-    Ok(direct)
+    c.insert(url.to_string(), (s.clone(), std::time::Instant::now()));
+    Ok(s)
+}
+
+/// ffmpeg arguments that grab one JPEG frame from a stream.
+fn grab_args(src: &str, headers: &[(String, String)]) -> Vec<String> {
+    let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-loglevel", "error", "-rw_timeout", "15000000"].iter().map(|s| s.to_string()).collect();
+    a.extend(crate::recorder::ffmpeg_header_args(headers));
+    a.extend(["-i", src, "-an", "-frames:v", "1", "-q:v", "3", "-f", "image2", "-c:v", "mjpeg", "pipe:1"].iter().map(|s| s.to_string()));
+    a
 }
 
 /// One JPEG frame from a video stream (ffmpeg -frames:v 1).
@@ -422,21 +429,27 @@ async fn grab_frame(st: &AppState, c: &TlCam) -> Result<bytes::Bytes> {
     if !st.rec.has_ffmpeg() {
         bail!("video timelapses need ffmpeg on the server");
     }
-    let src = if c.kind == "yt" { youtube_direct(st, &c.url).await? } else { c.url.clone() };
-    let out = tokio::time::timeout(
-        Duration::from_secs(60),
-        crate::platform::command("ffmpeg")
-            .args(["-hide_banner", "-nostdin", "-loglevel", "error", "-rw_timeout", "15000000", "-i", &src, "-an", "-frames:v", "1", "-q:v", "3", "-f", "image2", "-c:v", "mjpeg", "pipe:1"])
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .map_err(|_| anyhow!("ffmpeg timed out reading the stream"))??;
-    if !out.status.success() || out.stdout.len() < 500 {
-        bail!("ffmpeg: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or("no frame"));
+    let (src, headers) = if c.kind == "yt" {
+        let s = youtube_direct(st, &c.url).await?;
+        (s.url, s.headers)
+    } else {
+        (c.url.clone(), vec![])
+    };
+    let res = tokio::time::timeout(Duration::from_secs(60), crate::platform::command("ffmpeg").args(grab_args(&src, &headers)).stdin(std::process::Stdio::null()).kill_on_drop(true).output()).await;
+    let err = match res {
+        Ok(Ok(o)) if o.status.success() && o.stdout.len() >= 500 => return Ok(o.stdout.into()),
+        Ok(Ok(o)) => anyhow!("ffmpeg: {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("no frame")),
+        Ok(Err(e)) => anyhow!("ffmpeg: {e}"),
+        Err(_) => anyhow!("ffmpeg timed out reading the stream"),
+    };
+    if c.kind == "yt" {
+        // the stream URL may have expired: resolve it again next time
+        if let Some(m) = YT_CACHE.get() {
+            m.lock().remove(&c.url);
+        }
+        tracing::warn!("timelapse {}: {err:#}", c.url);
     }
-    Ok(out.stdout.into())
+    Err(err)
 }
 
 async fn capture(st: &AppState, c: &TlCam) -> Result<bool> {
@@ -923,6 +936,9 @@ mod tests {
         assert!(!due(&v, t - 9_000, t) && due(&v, t - 10_000, t));
         assert_eq!(video_problem(&v, false, false), Some("video timelapses need ffmpeg on the server"));
         assert_eq!(video_problem(&v, true, false), None);
+        // 0.8.2: YouTube headers go before -i
+        let g = grab_args("https://m/x.m3u8", &[("User-Agent".into(), "UA".into()), ("Accept".into(), "*/*".into())]).join(" ");
+        assert!(g.contains("-user_agent UA -headers Accept: */*\r\n -i https://m/x.m3u8 -an -frames:v 1"));
         let y = TlCam { kind: "yt".into(), url: "https://www.youtube.com/watch?v=abc".into(), ..Default::default() };
         assert_eq!(video_problem(&y, true, false), Some("YouTube timelapses need yt-dlp on the server"));
         assert_eq!(video_problem(&TlCam::default(), false, false), None);

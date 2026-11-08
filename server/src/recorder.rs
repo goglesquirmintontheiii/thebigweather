@@ -75,6 +75,9 @@ pub struct Rec {
     pub t0: i64,
     #[serde(default)]
     pub t1: i64,
+    /// 0.8.2: came from an imported .zip (the Recordings tab groups these)
+    #[serde(default)]
+    pub imported: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -201,6 +204,13 @@ impl Recorder {
     pub fn list(&self) -> Vec<Rec> {
         let mut v: Vec<Rec> = self.recs.lock().values().cloned().collect();
         v.sort_by(|a, b| b.created.cmp(&a.created));
+        // 0.8.2: a video piece is only counted when it ends (up to 10 min): show the bytes of the
+        // piece being written, so a running recording doesn't look empty
+        for r in v.iter_mut().filter(|r| r.status == "recording" && r.kind == "camera") {
+            if let Ok(rd) = std::fs::read_dir(self.rec_dir(&r.id)) {
+                r.bytes += rd.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".part")).filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum::<u64>();
+            }
+        }
         v
     }
 
@@ -409,6 +419,7 @@ impl Recorder {
             if name == "meta.json" {
                 let mut r: Rec = serde_json::from_slice(&buf)?;
                 r.id = id.clone();
+                r.imported = true;
                 if r.status == "recording" || r.status == "scheduled" {
                     r.status = "done".into();
                 }
@@ -546,6 +557,8 @@ fn start_worker(st: &Arc<AppState>, id: &str) {
                     x.status = "error".into();
                     x.error = format!("{e:#}");
                 });
+                // 0.8.2: let the app show the error right away
+                st.hub.send(json!({"type": "recording", "id": id}));
             }
         }
     });
@@ -681,105 +694,547 @@ async fn radar_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<
     Ok(())
 }
 
+// ---------- 0.8.2: video / YouTube capture ----------
+//
+// Each piece (up to 10 minutes) is written as *fragmented* MP4 (a fragment per keyframe), so a
+// piece that ends badly (ffmpeg killed, server stopped, connection lost) still plays up to its last
+// fragment; the old `+faststart` pieces needed a clean finish plus a second pass that rewrote the
+// whole file, and a piece killed during that pass was unplayable.
+//
+// YouTube: `yt-dlp -j` resolves the stream (HLS for live streams, with the HTTP headers YouTube
+// expects) and our own ffmpeg copies it. The resolved stream is reused for the next pieces (no gap
+// for re-resolving) and resolved again after 30 minutes or after a failure. If reading the stream
+// directly fails, the next attempt lets yt-dlp download it (`--downloader ffmpeg --hls-use-mpegts
+// -o -`) and pipes that into ffmpeg; the two ways alternate until one works. yt-dlp runs in its own
+// process group (Unix) / is killed with its child processes (Windows): the standalone yt-dlp
+// builds are a launcher plus a child process, and killing only the launcher kept the real
+// download (and its ffmpeg) running and writing into the pipe.
+//
+// Every failed attempt logs the tails of yt-dlp's and ffmpeg's stderr to the server log and shows
+// the reason on the recording ("Retrying (n/5): …"); a recording that ends with nothing recorded
+// becomes an error instead of an empty "done" recording, and empty pieces are deleted.
+
+/// yt-dlp format choice: a single (audio+video) stream, HLS first (live streams), ≤ 1080p.
+pub const YT_FORMAT: &str = "best[protocol^=m3u8][height<=1080]/best[protocol^=m3u8]/best[height<=1080]/best";
+
+/// A YouTube stream resolved by yt-dlp.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct YtStream {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub is_live: bool,
+    pub live_status: String,
+    pub protocol: String,
+    pub format: String,
+}
+
+/// How a YouTube piece is captured.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum YtMode {
+    /// ffmpeg reads the stream yt-dlp resolved
+    Direct,
+    /// yt-dlp downloads, ffmpeg reads its output from a pipe
+    Pipe,
+}
+
+fn strs<const N: usize>(a: [&str; N]) -> Vec<String> {
+    a.iter().map(|s| s.to_string()).collect()
+}
+
+/// `--ffmpeg-location` for yt-dlp when ffmpeg sits next to the server (not on PATH).
+fn ffmpeg_location() -> Vec<String> {
+    let t = crate::platform::tool("ffmpeg");
+    if t.is_absolute() && t.is_file() {
+        vec!["--ffmpeg-location".into(), t.to_string_lossy().to_string()]
+    } else {
+        vec![]
+    }
+}
+
+/// yt-dlp arguments that print the chosen stream as JSON (url, http_headers, is_live…).
+pub fn ytdlp_resolve_args(url: &str) -> Vec<String> {
+    let mut a = strs(["--no-playlist", "--no-progress", "--socket-timeout", "20", "-f", YT_FORMAT, "-j"]);
+    a.push("--".into());
+    a.push(url.into());
+    a
+}
+
+/// yt-dlp arguments that download the stream to stdout (MPEG-TS for HLS, so a pipe works).
+pub fn ytdlp_pipe_args(url: &str, ffmpeg_loc: &[String]) -> Vec<String> {
+    let mut a = strs(["--no-playlist", "--no-progress", "--no-part", "--socket-timeout", "20", "-f", YT_FORMAT, "--downloader", "ffmpeg", "--hls-use-mpegts"]);
+    a.extend(ffmpeg_loc.iter().cloned());
+    a.extend(strs(["-o", "-", "--"]));
+    a.push(url.into());
+    a
+}
+
+/// The stream yt-dlp printed with `-j` (the last JSON line of its output).
+pub fn parse_resolve(out: &str) -> Result<YtStream> {
+    let line = out.lines().rev().map(str::trim).find(|l| l.starts_with('{')).ok_or_else(|| anyhow!("yt-dlp printed no stream info"))?;
+    let v: Value = serde_json::from_str(line).map_err(|e| anyhow!("yt-dlp output: {e}"))?;
+    let url = v["url"].as_str().unwrap_or("").to_string();
+    if !url.starts_with("http") {
+        bail!("yt-dlp found no single stream (format {})", v["format_id"].as_str().unwrap_or("?"));
+    }
+    let headers = v["http_headers"]
+        .as_object()
+        .map(|m| m.iter().filter_map(|(k, x)| Some((k.clone(), x.as_str()?.to_string()))).filter(|(k, x)| !k.contains(['\r', '\n', ':']) && !x.contains(['\r', '\n'])).collect())
+        .unwrap_or_default();
+    let live_status = v["live_status"].as_str().unwrap_or("").to_string();
+    let format = format!("{} {}", v["format_id"].as_str().unwrap_or("?"), v["height"].as_i64().map(|h| format!("{h}p")).unwrap_or_default()).trim().to_string();
+    Ok(YtStream { url, headers, is_live: v["is_live"].as_bool().unwrap_or(false) || live_status == "is_live", live_status, protocol: v["protocol"].as_str().unwrap_or("").to_string(), format })
+}
+
+/// ffmpeg input options for HTTP headers (User-Agent separately, the rest as `-headers`).
+pub fn ffmpeg_header_args(headers: &[(String, String)]) -> Vec<String> {
+    let mut a = vec![];
+    if let Some((_, ua)) = headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("user-agent")) {
+        a.extend(["-user_agent".to_string(), ua.clone()]);
+    }
+    let rest: String = headers.iter().filter(|(k, _)| !k.eq_ignore_ascii_case("user-agent")).map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+    if !rest.is_empty() {
+        a.extend(["-headers".to_string(), rest]);
+    }
+    a
+}
+
+/// Where ffmpeg reads a piece from.
+pub enum PieceInput<'a> {
+    Url { url: &'a str, headers: &'a [(String, String)], hls: bool },
+    Pipe,
+}
+
+/// ffmpeg arguments for one piece: copy (never re-encode) into fragmented MP4.
+/// `lenient_hls`: this ffmpeg has the HLS `extension_picky` check (7.1+), turned off because
+/// stream segment URLs don't always end in a media extension.
+pub fn ffmpeg_piece_args(input: &PieceInput, secs: Option<i64>, out: &str, lenient_hls: bool) -> Vec<String> {
+    let mut a = strs(["-hide_banner", "-nostats", "-loglevel", "warning", "-y"]);
+    match input {
+        PieceInput::Url { url, headers, hls } => {
+            a.extend(strs(["-rw_timeout", "15000000"]));
+            a.extend(ffmpeg_header_args(headers));
+            if *hls && lenient_hls {
+                a.extend(strs(["-extension_picky", "0"]));
+            }
+            a.extend(["-i".to_string(), url.to_string()]);
+        }
+        PieceInput::Pipe => a.extend(strs(["-i", "pipe:0"])),
+    }
+    a.extend(strs(["-c", "copy"]));
+    if let Some(t) = secs {
+        a.extend(["-t".to_string(), t.max(1).to_string()]);
+    }
+    // no `empty_moov`: with it the header is written before the first packet, so ffmpeg can't
+    // insert aac_adtstoasc for the ADTS AAC in HLS/MPEG-TS (YouTube live) and stops with
+    // "Malformed AAC bitstream detected" after ~1 s (seen with ffmpeg 6.1)
+    a.extend(strs(["-f", "mp4", "-movflags", "+frag_keyframe+default_base_moof"]));
+    a.push(out.to_string());
+    a
+}
+
+/// An MP4 that holds media: a `moov` box and an `mdat` box with data. ffmpeg may write a header
+/// (ftyp, or ftyp + an empty moov) before any data arrives, so size alone can't tell.
+pub fn mp4_has_media<R: Read + std::io::Seek>(mut r: R, len: u64) -> bool {
+    use std::io::SeekFrom;
+    let (mut pos, mut moov, mut media) = (0u64, false, false);
+    for _ in 0..200_000 {
+        if pos + 8 > len || r.seek(SeekFrom::Start(pos)).is_err() {
+            break;
+        }
+        let mut h = [0u8; 8];
+        if r.read_exact(&mut h).is_err() {
+            break;
+        }
+        let (mut size, mut hdr) = (u32::from_be_bytes([h[0], h[1], h[2], h[3]]) as u64, 8u64);
+        if size == 1 {
+            let mut l = [0u8; 8];
+            if r.read_exact(&mut l).is_err() {
+                break;
+            }
+            size = u64::from_be_bytes(l);
+            hdr = 16;
+        } else if size == 0 {
+            size = len - pos;
+        }
+        if size < hdr {
+            break;
+        }
+        match &h[4..8] {
+            b"moov" => moov = true,
+            b"mdat" if size > hdr && len > pos + hdr => media = true,
+            _ => {}
+        }
+        if moov && media {
+            return true;
+        }
+        pos = pos.saturating_add(size);
+    }
+    false
+}
+
+fn file_has_media(p: &Path) -> bool {
+    let Ok(f) = std::fs::File::open(p) else { return false };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    mp4_has_media(std::io::BufReader::new(f), len)
+}
+
+/// A short reason for a failed piece, from the tails of yt-dlp's and ffmpeg's stderr.
+pub fn fail_reason(dl: &[String], ff: &[String]) -> String {
+    let pick = |v: &[String]| v.iter().rev().find(|l| l.contains("ERROR") || l.to_ascii_lowercase().contains("error")).or_else(|| v.last()).cloned();
+    let l = dl.iter().rev().find(|l| l.contains("ERROR:")).cloned().or_else(|| pick(ff)).or_else(|| pick(dl)).unwrap_or_else(|| "no data from the stream".into());
+    let mut s = l.trim().trim_start_matches("ERROR:").trim().to_string();
+    // "[youtube] abc123: Sign in…" → "Sign in…"
+    if s.starts_with('[') {
+        if let Some(i) = s.find("]") {
+            let rest = s[i + 1..].trim();
+            s = rest.split_once(": ").map(|(id, m)| if id.contains(' ') { rest.to_string() } else { m.to_string() }).unwrap_or_else(|| rest.to_string());
+        }
+    }
+    if s.chars().count() > 220 {
+        s = s.chars().take(220).collect::<String>() + "…";
+    }
+    s
+}
+
+type Tail = Arc<Mutex<std::collections::VecDeque<String>>>;
+
+/// Keep the last lines a process writes to stderr (split on \n and \r — ffmpeg progress lines end
+/// in \r — and capped, so hours of output never grow memory). Reading also keeps the pipe from
+/// filling up and blocking the process.
+fn collect_tail<S: tokio::io::AsyncRead + Unpin + Send + 'static>(err: Option<S>) -> Tail {
+    let t: Tail = Arc::new(Mutex::new(Default::default()));
+    if let Some(mut e) = err {
+        let t2 = t.clone();
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = [0u8; 4096];
+            let mut line = Vec::<u8>::new();
+            let push = |line: &mut Vec<u8>| {
+                let s = String::from_utf8_lossy(line).trim().to_string();
+                line.clear();
+                if !s.is_empty() {
+                    let mut q = t2.lock();
+                    if q.len() >= 30 {
+                        q.pop_front();
+                    }
+                    q.push_back(s);
+                }
+            };
+            while let Ok(n) = e.read(&mut buf).await {
+                if n == 0 {
+                    break;
+                }
+                for &b in &buf[..n] {
+                    if b == b'\n' || b == b'\r' {
+                        push(&mut line);
+                    } else if line.len() < 600 {
+                        line.push(b);
+                    }
+                }
+            }
+            push(&mut line);
+        });
+    }
+    t
+}
+
+fn tail_vec(t: &Tail) -> Vec<String> {
+    t.lock().iter().cloned().collect()
+}
+
+/// Kill a process with everything it started (yt-dlp → its own child → ffmpeg).
+fn kill_tree(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        #[cfg(unix)]
+        {
+            // yt-dlp was started as the leader of its own process group
+            let _ = std::process::Command::new("kill").args(["-s", "KILL", "--", &format!("-{pid}")]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).creation_flags(0x0800_0000).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+        }
+    }
+    child.start_kill().ok();
+}
+
+/// ffmpeg 7.1+ checks HLS segment extensions (`extension_picky`); checked once.
+async fn ffmpeg_hls_lenient() -> bool {
+    static V: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+    *V.get_or_init(|| async {
+        let out = tokio::time::timeout(Duration::from_secs(10), crate::platform::command("ffmpeg").args(["-hide_banner", "-h", "demuxer=hls"]).stdin(std::process::Stdio::null()).kill_on_drop(true).output()).await;
+        matches!(out, Ok(Ok(o)) if String::from_utf8_lossy(&o.stdout).contains("extension_picky"))
+    })
+    .await
+}
+
+/// Resolve a YouTube URL with yt-dlp (`-j`); failures log yt-dlp's stderr.
+pub async fn yt_resolve(url: &str) -> Result<YtStream> {
+    let out = tokio::time::timeout(Duration::from_secs(90), crate::platform::command("yt-dlp").args(ytdlp_resolve_args(url)).stdin(std::process::Stdio::null()).kill_on_drop(true).output())
+        .await
+        .map_err(|_| anyhow!("yt-dlp timed out finding the stream"))??;
+    let err: Vec<String> = String::from_utf8_lossy(&out.stderr).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+    let tail = err.iter().rev().take(12).rev().cloned().collect::<Vec<_>>().join("\n    ");
+    if !out.status.success() {
+        tracing::warn!("yt-dlp couldn't resolve {url} ({}):\n    {tail}", out.status);
+        bail!("yt-dlp: {}", fail_reason(&err, &[]));
+    }
+    match parse_resolve(&String::from_utf8_lossy(&out.stdout)) {
+        Ok(s) => {
+            if !err.is_empty() {
+                tracing::info!("yt-dlp {url}: {tail}");
+            }
+            Ok(s)
+        }
+        Err(e) => {
+            tracing::warn!("yt-dlp {url}: {e:#}\n    {tail}");
+            Err(e)
+        }
+    }
+}
+
+/// Sleep up to `secs`, returning early when the recording is stopped.
+async fn wait_or_stop(stop: &AtomicBool, secs: u64) {
+    for _ in 0..secs {
+        if stop.load(Ordering::SeqCst) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+/// `.part` pieces left by a server that stopped mid-piece: keep the playable ones (renamed to
+/// their final name), delete the empty / unplayable ones. Returns the kept (name, size).
+pub fn recover_parts(dir: &Path) -> Vec<(String, u64)> {
+    let mut kept = vec![];
+    let Ok(rd) = std::fs::read_dir(dir) else { return kept };
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().to_string();
+        let Some(base) = n.strip_suffix(".part") else { continue };
+        if base.ends_with(".mp4") && file_has_media(&e.path()) && std::fs::rename(e.path(), dir.join(base)).is_ok() {
+            kept.push((base.to_string(), std::fs::metadata(dir.join(base)).map(|m| m.len()).unwrap_or(0)));
+        } else {
+            std::fs::remove_file(e.path()).ok();
+        }
+    }
+    kept
+}
+
+/// Video cameras (HLS) and YouTube: ffmpeg copies the stream in pieces of up to 10 minutes.
+async fn video_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<()> {
+    let c = r.camera.clone().unwrap_or_default();
+    let dir = st.rec.rec_dir(&r.id);
+    std::fs::create_dir_all(&dir).ok();
+    for (n, size) in recover_parts(&dir) {
+        note_file(st, &r.id, size, file_time(&n));
+    }
+    let yt = is_youtube(&c.url);
+    let lenient = ffmpeg_hls_lenient().await;
+    let mut mode = YtMode::Direct;
+    let mut resolved: Option<(YtStream, std::time::Instant)> = None;
+    let mut seen_live = false;
+    let mut fails = 0u32;
+    let mut last_reason = String::new();
+    let id = r.id.clone();
+    // a failed attempt: show why, back off, give up after 5 in a row (30 once something was recorded)
+    macro_rules! failed {
+        ($reason:expr) => {{
+            last_reason = $reason;
+            fails += 1;
+            let have = st.rec.get(&id).map(|x| x.files).unwrap_or(0);
+            let limit = if have > 0 { 30 } else { 5 };
+            if fails >= limit {
+                bail!("the stream couldn't be recorded: {last_reason}");
+            }
+            let msg = format!("Retrying ({fails}/{limit}): {last_reason}");
+            st.rec.update(&id, |x| x.error = msg);
+            st.hub.send(json!({"type": "recording", "id": id}));
+            wait_or_stop(stop, [5u64, 10, 20, 30][(fails as usize - 1).min(3)]).await;
+            continue;
+        }};
+    }
+    while !stop.load(Ordering::SeqCst) {
+        // the end can change while recording (Record for… / until stopped): read it each piece
+        let end = st.rec.get(&id).map(|x| x.end).unwrap_or(r.end);
+        let mut live = true;
+        let mut what = if c.kind == "hls" { "HLS".to_string() } else { "stream".to_string() };
+        let stream = if yt && mode == YtMode::Direct {
+            let fresh = resolved.as_ref().filter(|(_, at)| at.elapsed() < Duration::from_secs(30 * 60)).map(|x| x.0.clone());
+            let s = match fresh {
+                Some(s) => s,
+                None => match yt_resolve(&c.url).await {
+                    Ok(s) => {
+                        resolved = Some((s.clone(), std::time::Instant::now()));
+                        s
+                    }
+                    Err(e) => {
+                        resolved = None;
+                        mode = YtMode::Pipe;
+                        failed!(format!("{e:#}"))
+                    }
+                },
+            };
+            if seen_live && !s.is_live {
+                // the live stream has ended (it is a replay now): don't record it from the start
+                tracing::info!("recording {id}: the live stream ended ({})", s.live_status);
+                st.rec.update(&id, |x| {
+                    x.status = "done".into();
+                    x.end = Some(now_ms());
+                    x.error.clear();
+                });
+                break;
+            }
+            seen_live |= s.is_live;
+            live = s.is_live;
+            what = format!("yt-dlp {} {} (live: {}{})", s.protocol, s.format, s.is_live, if s.live_status.is_empty() { String::new() } else { format!(", {}", s.live_status) });
+            Some(s)
+        } else {
+            if yt {
+                live = resolved.as_ref().map(|x| x.0.is_live).unwrap_or(true);
+                what = "yt-dlp pipe".into();
+            }
+            None
+        };
+        // live: 10-minute pieces; a video file: one piece (to the end time, if any)
+        let secs = if live { Some(piece_secs(end, now_ms())) } else { end.map(|e| ((e - now_ms()) / 1000).max(1)) };
+        let name = format!("{}.mp4", now_ms());
+        let part = dir.join(format!("{name}.part"));
+        let part_s = part.to_string_lossy().to_string();
+        let input = match (&stream, yt) {
+            (Some(s), _) => PieceInput::Url { url: &s.url, headers: &s.headers, hls: s.protocol.starts_with("m3u8") },
+            (None, true) => PieceInput::Pipe,
+            (None, false) => PieceInput::Url { url: &c.url, headers: &[], hls: true },
+        };
+        let piped = matches!(input, PieceInput::Pipe);
+        let args = ffmpeg_piece_args(&input, secs, &part_s, lenient);
+        let mut dl = None;
+        let mut ffc = crate::platform::command("ffmpeg");
+        ffc.args(&args).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+        if piped {
+            let mut d = crate::platform::command("yt-dlp");
+            d.args(ytdlp_pipe_args(&c.url, &ffmpeg_location())).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+            #[cfg(unix)]
+            d.process_group(0);
+            let mut d = d.spawn().map_err(|e| anyhow!("yt-dlp: {e}"))?;
+            let out: std::process::Stdio = d.stdout.take().ok_or_else(|| anyhow!("yt-dlp pipe"))?.try_into()?;
+            ffc.stdin(out);
+            dl = Some(d);
+        } else {
+            // Windows: "q" on stdin is how ffmpeg is asked to finish the file (no SIGINT)
+            ffc.stdin(if cfg!(unix) { std::process::Stdio::null() } else { std::process::Stdio::piped() });
+        }
+        let mut ff = match ffc.spawn() {
+            Ok(f) => f,
+            Err(e) => {
+                if let Some(mut d) = dl {
+                    kill_tree(&mut d);
+                }
+                bail!("ffmpeg: {e}");
+            }
+        };
+        let ff_tail = collect_tail(ff.stderr.take());
+        let dl_tail = collect_tail(dl.as_mut().and_then(|d| d.stderr.take()));
+        tracing::info!("recording {id}: piece {name} from {what}{}", secs.map(|s| format!(", {s} s")).unwrap_or_default());
+        let started = std::time::Instant::now();
+        let status;
+        let mut stopped = false;
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                stopped = true;
+                match dl.as_mut() {
+                    // the pipe: on Windows ffmpeg's stdin is the pipe, so end the feed (EOF) instead
+                    Some(d) if !cfg!(unix) => kill_tree(d),
+                    _ => crate::platform::ffmpeg_finish(&mut ff).await,
+                }
+                status = tokio::time::timeout(Duration::from_secs(15), ff.wait()).await.ok().and_then(|x| x.ok());
+                if status.is_none() {
+                    // fragmented MP4: what was written so far still plays
+                    ff.start_kill().ok();
+                    let _ = tokio::time::timeout(Duration::from_secs(5), ff.wait()).await;
+                }
+                break;
+            }
+            if let Ok(Some(s)) = ff.try_wait() {
+                status = Some(s);
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        let mut dl_status = None;
+        if let Some(mut d) = dl.take() {
+            dl_status = d.try_wait().ok().flatten();
+            kill_tree(&mut d);
+            let _ = tokio::time::timeout(Duration::from_secs(5), d.wait()).await;
+        }
+        // let the stderr readers drain
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+        if file_has_media(&part) {
+            std::fs::rename(&part, dir.join(&name))?;
+            note_file(st, &id, size, now_ms());
+            let clean = status.map(|s| s.success()).unwrap_or(false);
+            if !stopped && started.elapsed().as_secs() + 30 < secs.unwrap_or(i64::MAX).max(0) as u64 {
+                tracing::warn!("recording {id}: piece {name} ended early after {} s (ffmpeg {status:?}): {}", started.elapsed().as_secs(), tail_vec(&ff_tail).join(" | "));
+                // ffmpeg keeps failing a few seconds in: don't spin out 1-second pieces
+                if !clean && started.elapsed() < Duration::from_secs(30) {
+                    failed!(fail_reason(&tail_vec(&dl_tail), &tail_vec(&ff_tail)))
+                }
+            }
+            fails = 0;
+            if st.rec.get(&id).map(|x| !x.error.is_empty()).unwrap_or(false) {
+                st.rec.update(&id, |x| x.error.clear());
+            }
+            // a video file (not a live stream) ended by itself: don't record it again
+            if clean && !stopped && !live {
+                st.rec.update(&id, |x| {
+                    x.status = "done".into();
+                    x.end = Some(now_ms());
+                });
+                return Ok(());
+            }
+            // generic HLS: a stream that ended cleanly and quickly is a video file too
+            if clean && !stopped && !yt && started.elapsed().as_secs() < (secs.unwrap_or(600) as u64) / 2 {
+                st.rec.update(&id, |x| {
+                    x.status = "done".into();
+                    x.end = Some(now_ms());
+                });
+                return Ok(());
+            }
+        } else {
+            std::fs::remove_file(&part).ok();
+            let (dt, ft) = (tail_vec(&dl_tail), tail_vec(&ff_tail));
+            let reason = fail_reason(&dt, &ft);
+            tracing::warn!(
+                "recording {id}: no data in piece {name} ({size} bytes, {} s) from {what}; ffmpeg exit {status:?}{}\n  ffmpeg stderr:\n    {}{}",
+                started.elapsed().as_secs(),
+                if piped { format!(", yt-dlp exit {dl_status:?}") } else { String::new() },
+                if ft.is_empty() { "(nothing)".into() } else { ft.join("\n    ") },
+                if piped { format!("\n  yt-dlp stderr:\n    {}", if dt.is_empty() { "(nothing)".into() } else { dt.join("\n    ") }) } else { String::new() },
+            );
+            if stopped {
+                last_reason = reason;
+                break;
+            }
+            if yt {
+                // try the other way next time; the direct URL may have expired
+                resolved = None;
+                mode = if mode == YtMode::Direct { YtMode::Pipe } else { YtMode::Direct };
+            }
+            failed!(reason)
+        }
+    }
+    if st.rec.get(&id).map(|x| x.files).unwrap_or(0) == 0 {
+        bail!("Nothing was recorded{}", if last_reason.is_empty() { String::new() } else { format!(": {last_reason}") });
+    }
+    Ok(())
+}
+
 async fn camera_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<()> {
     let c = r.camera.clone().unwrap_or_default();
     let dir = st.rec.rec_dir(&r.id);
-    let yt = is_youtube(&c.url);
-    if c.kind == "hls" || yt {
-        // copy the stream in 10-minute pieces so a dropped connection loses little
-        let mut fails = 0;
-        let mut short_runs = 0;
-        while !stop.load(Ordering::SeqCst) {
-            // the end can change while recording (Record for… / until stopped): read it each piece
-            let end = st.rec.get(&r.id).map(|x| x.end).unwrap_or(r.end);
-            let left = piece_secs(end, now_ms());
-            let name = format!("{}.mp4", now_ms());
-            let part = dir.join(format!("{name}.part"));
-            // YouTube: yt-dlp resolves and downloads the stream, ffmpeg remuxes it into the same
-            // 10-minute .mp4 pieces as other video cameras (so playback/export/timelapse just work)
-            let (mut child, mut feeder) = if yt {
-                let mut dl = crate::platform::command("yt-dlp")
-                    .args(["-q", "--no-warnings", "--no-part", "--no-playlist", "-f", "best[height<=1080]/best", "-o", "-", &c.url])
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::null())
-                    .kill_on_drop(true)
-                    .spawn()?;
-                let out: std::process::Stdio = dl.stdout.take().ok_or_else(|| anyhow!("yt-dlp pipe"))?.try_into()?;
-                let ff = crate::platform::command("ffmpeg")
-                    .args(["-y", "-loglevel", "error", "-i", "pipe:0", "-c", "copy", "-t", &left.to_string(), "-f", "mp4", "-movflags", "+faststart"])
-                    .arg(&part)
-                    .stdin(out)
-                    .kill_on_drop(true)
-                    .spawn()?;
-                (ff, Some(dl))
-            } else {
-                let ff = crate::platform::command("ffmpeg")
-                    .args(["-y", "-loglevel", "error", "-rw_timeout", "15000000", "-i", &c.url, "-c", "copy", "-t", &left.to_string(), "-f", "mp4", "-movflags", "+faststart"])
-                    .arg(&part)
-                    // Windows: "q" on stdin is how ffmpeg is asked to finish the file (no SIGINT)
-                    .stdin(if cfg!(unix) { std::process::Stdio::null() } else { std::process::Stdio::piped() })
-                    .kill_on_drop(true)
-                    .spawn()?;
-                (ff, None)
-            };
-            let started = std::time::Instant::now();
-            let mut clean_exit = false;
-            loop {
-                if stop.load(Ordering::SeqCst) {
-                    // ask ffmpeg to finish the file cleanly; when yt-dlp feeds it, ending the feed
-                    // (EOF on its stdin) does the same on every platform
-                    if let Some(dl) = feeder.as_mut() {
-                        if cfg!(unix) {
-                            crate::platform::ffmpeg_finish(&mut child).await;
-                        } else {
-                            dl.start_kill().ok();
-                        }
-                    } else {
-                        crate::platform::ffmpeg_finish(&mut child).await;
-                    }
-                    let _ = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
-                    break;
-                }
-                if let Ok(Some(status)) = child.try_wait() {
-                    clean_exit = status.success();
-                    break;
-                }
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
-            // ffmpeg is done with this piece; yt-dlp is restarted for the next one
-            if let Some(mut dl) = feeder.take() {
-                dl.start_kill().ok();
-                let _ = tokio::time::timeout(Duration::from_secs(5), dl.wait()).await;
-            }
-            let size = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-            if size > 10_000 {
-                std::fs::rename(&part, dir.join(&name))?;
-                note_file(st, &r.id, size, now_ms());
-                fails = 0;
-                // the stream ended by itself (a video file, not a live feed): don't record it again
-                if clean_exit && !stop.load(Ordering::SeqCst) && started.elapsed().as_secs() < (left as u64) / 2 {
-                    short_runs += 1;
-                    if short_runs >= 1 {
-                        st.rec.update(&r.id, |x| {
-                            x.status = "done".into();
-                            x.end = Some(now_ms());
-                        });
-                        return Ok(());
-                    }
-                }
-            } else {
-                std::fs::remove_file(&part).ok();
-                fails += 1;
-                if fails >= 5 {
-                    bail!("the stream couldn't be recorded (5 failed attempts)");
-                }
-                tokio::time::sleep(Duration::from_secs(20)).await;
-            }
-            if started.elapsed() < Duration::from_secs(5) && fails > 0 {
-                tokio::time::sleep(Duration::from_secs(10)).await;
-            }
-        }
-        return Ok(());
+    if c.kind == "hls" || is_youtube(&c.url) {
+        return video_worker(st, r, stop).await;
     }
     // still images: one per refresh; identical images (camera not updated) are skipped
     let every = Duration::from_secs(c.refresh.clamp(10, 900) as u64);
@@ -821,6 +1276,10 @@ async fn camera_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result
         while t0.elapsed() < every && !stop.load(Ordering::SeqCst) {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
+    }
+    // 0.8.2: never end as an empty "done" recording
+    if st.rec.get(&r.id).map(|x| x.files).unwrap_or(0) == 0 {
+        bail!("Nothing was recorded: the camera image didn't load");
     }
     Ok(())
 }
@@ -1024,6 +1483,121 @@ mod tests {
         assert!(file_time("KTLX20251009_084320_V06") > 0);
     }
 
+    fn mp4_box(t: &[u8; 4], payload: usize) -> Vec<u8> {
+        let mut v = ((payload + 8) as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(t);
+        v.extend(std::iter::repeat_n(0u8, payload));
+        v
+    }
+
+    #[test]
+    fn youtube_args() {
+        let a = ytdlp_resolve_args("https://www.youtube.com/watch?v=abc");
+        assert!(a.windows(2).any(|w| w[0] == "-f" && w[1] == YT_FORMAT));
+        assert!(a.contains(&"-j".to_string()));
+        assert_eq!(&a[a.len() - 2..], &["--".to_string(), "https://www.youtube.com/watch?v=abc".to_string()]);
+        assert!(!a.contains(&"-q".to_string()) && !a.contains(&"--no-warnings".to_string()), "keep yt-dlp's messages for the log");
+        assert!(YT_FORMAT.starts_with("best[protocol^=m3u8]"), "live HLS first");
+        let p = ytdlp_pipe_args("https://youtu.be/x", &["--ffmpeg-location".into(), "/opt/ffmpeg".into()]);
+        let j = p.join(" ");
+        assert!(j.contains("--downloader ffmpeg --hls-use-mpegts"));
+        assert!(j.contains("--ffmpeg-location /opt/ffmpeg"));
+        assert!(j.ends_with("-o - -- https://youtu.be/x"));
+        assert!(p.contains(&"--no-part".to_string()));
+
+        // ffmpeg: copy into fragmented MP4 (playable when cut short), never +faststart
+        let h = vec![("User-Agent".to_string(), "UA/1".to_string()), ("Accept".to_string(), "*/*".to_string())];
+        let f = ffmpeg_piece_args(&PieceInput::Url { url: "https://m/x.m3u8", headers: &h, hls: true }, Some(600), "/r/1.mp4.part", true);
+        let fj = f.join(" ");
+        assert!(fj.contains("-user_agent UA/1"));
+        assert!(fj.contains("-headers Accept: */*\r\n"));
+        assert!(fj.contains("-extension_picky 0 -i https://m/x.m3u8"));
+        assert!(fj.contains("-c copy -t 600 -f mp4 -movflags +frag_keyframe+default_base_moof /r/1.mp4.part"));
+        assert!(!fj.contains("faststart") && !fj.contains("empty_moov"));
+        // -headers / -user_agent are input options: before -i
+        assert!(f.iter().position(|x| x == "-headers").unwrap() < f.iter().position(|x| x == "-i").unwrap());
+        let f = ffmpeg_piece_args(&PieceInput::Url { url: "https://m/x.m3u8", headers: &[], hls: true }, None, "o", false);
+        assert!(!f.contains(&"-extension_picky".to_string()) && !f.contains(&"-t".to_string()) && !f.contains(&"-headers".to_string()));
+        let f = ffmpeg_piece_args(&PieceInput::Pipe, Some(90), "o", true);
+        assert!(f.join(" ").contains("-i pipe:0 -c copy -t 90"));
+        assert!(!f.contains(&"-rw_timeout".to_string()));
+    }
+
+    #[test]
+    fn youtube_resolve_output() {
+        let out = r#"{"id":"abc","url":"https://manifest.googlevideo.com/api/manifest/hls_playlist/id/abc/index.m3u8","protocol":"m3u8_native","is_live":true,"live_status":"is_live","format_id":"95","height":720,"http_headers":{"User-Agent":"Mozilla/5.0","Accept":"*/*","Bad":"a\r\nb"}}"#;
+        let s = parse_resolve(&format!("[youtube] noise\n{out}\n")).unwrap();
+        assert!(s.is_live);
+        assert_eq!(s.protocol, "m3u8_native");
+        assert_eq!(s.format, "95 720p");
+        assert_eq!(s.headers.len(), 2, "headers with line breaks are dropped");
+        let vod = parse_resolve(r#"{"url":"https://rr1.googlevideo.com/videoplayback?x","protocol":"https","is_live":false,"live_status":"was_live","format_id":"18"}"#).unwrap();
+        assert!(!vod.is_live);
+        assert_eq!(vod.live_status, "was_live");
+        assert!(parse_resolve(r#"{"format_id":"137+140","requested_formats":[]}"#).is_err());
+        assert!(parse_resolve("").is_err());
+        assert!(parse_resolve("not json {").is_err());
+    }
+
+    #[test]
+    fn empty_pieces_are_detected() {
+        use std::io::Cursor;
+        let header = [mp4_box(b"ftyp", 20), mp4_box(b"moov", 600)].concat();
+        // what ffmpeg writes before any data arrives: the header only
+        assert!(!mp4_has_media(Cursor::new(&header), header.len() as u64));
+        let mut ok = header.clone();
+        ok.extend(mp4_box(b"moof", 100));
+        ok.extend(mp4_box(b"mdat", 5000));
+        assert!(mp4_has_media(Cursor::new(&ok), ok.len() as u64));
+        // a fragment cut off mid-way still counts
+        let cut = &ok[..ok.len() - 3000];
+        assert!(mp4_has_media(Cursor::new(cut), cut.len() as u64));
+        let mut e = header.clone();
+        e.extend(mp4_box(b"mdat", 0));
+        assert!(!mp4_has_media(Cursor::new(&e), e.len() as u64), "empty mdat");
+        // an old-style (+faststart) piece killed before its moov was written
+        let killed = [mp4_box(b"ftyp", 20), mp4_box(b"free", 0), mp4_box(b"mdat", 9000)].concat();
+        assert!(!mp4_has_media(Cursor::new(&killed), killed.len() as u64));
+        // mdat with size 0 (to the end of the file) and with a 64-bit size
+        let mut z = header.clone();
+        z.extend([0, 0, 0, 0]);
+        z.extend(b"mdat");
+        z.extend([1u8; 50]);
+        assert!(mp4_has_media(Cursor::new(&z), z.len() as u64));
+        let mut l = header.clone();
+        l.extend(1u32.to_be_bytes());
+        l.extend(b"mdat");
+        l.extend((16u64 + 40).to_be_bytes());
+        l.extend([1u8; 40]);
+        assert!(mp4_has_media(Cursor::new(&l), l.len() as u64));
+        assert!(!mp4_has_media(Cursor::new(&[0u8; 4]), 4));
+        assert!(!mp4_has_media(Cursor::new(&[0u8; 64]), 64), "garbage");
+
+        // leftover .part pieces: playable ones are kept, empty ones deleted
+        let d = std::env::temp_dir().join(format!("tbwrec-parts-{}", rand::random::<u32>()));
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("1760000000000.mp4.part"), &ok).unwrap();
+        std::fs::write(d.join("1760000600000.mp4.part"), &header).unwrap();
+        std::fs::write(d.join("1760000900000.mp4.part"), b"").unwrap();
+        let kept = recover_parts(&d);
+        assert_eq!(kept, vec![("1760000000000.mp4".to_string(), ok.len() as u64)]);
+        let mut left: Vec<String> = std::fs::read_dir(&d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        left.sort();
+        assert_eq!(left, vec!["1760000000000.mp4"]);
+        assert!(file_has_media(&d.join("1760000000000.mp4")));
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn failure_reasons() {
+        let dl = vec!["[youtube] abc123: Downloading webpage".to_string(), "ERROR: [youtube] abc123: Sign in to confirm you're not a bot".to_string()];
+        assert_eq!(fail_reason(&dl, &["pipe:0: Invalid data found when processing input".into()]), "Sign in to confirm you're not a bot");
+        assert_eq!(fail_reason(&[], &["[hls @ 0x1] Opening 'x' for reading".into(), "https://m/x.m3u8: Server returned 403 Forbidden (access denied)".into()]), "https://m/x.m3u8: Server returned 403 Forbidden (access denied)");
+        assert_eq!(fail_reason(&[], &[]), "no data from the stream");
+        assert_eq!(fail_reason(&["ERROR: Requested format is not available".into()], &[]), "Requested format is not available");
+        assert!(fail_reason(&[], &["x".repeat(500)]).chars().count() <= 221);
+    }
+
     #[test]
     fn export_import_roundtrip() {
         let tmp = std::env::temp_dir().join(format!("tbwrec-{}", rand::random::<u32>()));
@@ -1035,6 +1609,8 @@ mod tests {
         let ids = rec.import(&z).unwrap();
         assert_eq!(ids.len(), 1);
         assert_ne!(ids[0], r.id);
+        assert!(rec.get(&ids[0]).unwrap().imported);
+        assert!(!rec.get(&r.id).unwrap().imported);
         assert_eq!(rec.frames(&ids[0]).unwrap().len(), 1);
         std::fs::remove_dir_all(&tmp).ok();
     }

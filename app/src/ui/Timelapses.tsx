@@ -7,7 +7,7 @@
 
 import { signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { Clapperboard, RefreshCw, Trash2, Hammer } from "lucide-preact";
+import { Clapperboard, RefreshCw, Trash2, Hammer, ChevronRight } from "lucide-preact";
 import { api, ApiError } from "../api";
 import { toast } from "../store";
 import { fileUrl } from "./panels/RecordPanel";
@@ -197,7 +197,7 @@ const fmtSize = (b: number) => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math
 const fmtDur = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
 
 /** Recordings panel section: timelapse cameras, their days and a player */
-export function TimelapseSection() {
+export function TimelapseSection({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void } = {}) {
   const [cam, setCam] = useState<string>("");
   const [items, setItems] = useState<TlItem[] | null>(null);
   const [play, setPlay] = useState<TlItem | null>(null);
@@ -241,17 +241,32 @@ export function TimelapseSection() {
   };
   const st = cur ? tlStatus.value[cur.id] : undefined;
   return (
-    <section class="tl-sec">
+    <section class={`tl-sec${collapsed ? " closed" : ""}`}>
       <div class="row">
-        <label class="lbl" style={{ flex: 1 }}>
-          <Clapperboard size={11} /> Timelapses · {cams.length}
-        </label>
-        <button class="icon-btn" title="Refresh" onClick={() => (loadTl(), load())}>
-          <RefreshCw size={13} />
-        </button>
+        {onToggle ? (
+          // 0.8.2: collapsible like the other Recordings sections
+          <button class="rec-sec-head tl-head" aria-expanded={!collapsed} onClick={onToggle} title={collapsed ? "Expand" : "Collapse"}>
+            <ChevronRight size={12} class={collapsed ? "" : "rot"} />
+            <span class="rec-sec-name">
+              <Clapperboard size={11} /> Timelapses
+            </span>
+            <span class="rec-sec-count">
+              {cams.length} cam{cams.length === 1 ? "" : "s"}
+            </span>
+          </button>
+        ) : (
+          <label class="lbl" style={{ flex: 1 }}>
+            <Clapperboard size={11} /> Timelapses · {cams.length}
+          </label>
+        )}
+        {!collapsed && (
+          <button class="icon-btn" title="Refresh" onClick={() => (loadTl(), load())}>
+            <RefreshCw size={13} />
+          </button>
+        )}
       </div>
-      {!tlFfmpeg.value && <div class="muted small">Install ffmpeg on the server to build the daily videos.</div>}
-      {!cams.length ? (
+      {collapsed ? null : !tlFfmpeg.value && <div class="muted small">Install ffmpeg on the server to build the daily videos.</div>}
+      {collapsed ? null : !cams.length ? (
         <div class="muted small">No timelapse cameras. Open a snapshot camera and press TL in its title bar.</div>
       ) : (
         <>
