@@ -766,7 +766,9 @@ app.whenReady().then(() => {
   setupDisplayMedia();
   // 0.8.2: grant Web MIDI ("midi", "midiSysex") for Settings → MIDI. Every other permission keeps
   // Electron's default (granted), exactly as before this handler existed.
-  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(true));
+  // 0.8.2: only the permissions the app uses (MIDI, location, notifications, clipboard, fullscreen, media for screen/radio capture)
+  const ALLOWED_PERMS = new Set(["midi", "midiSysex", "geolocation", "notifications", "fullscreen", "clipboard-read", "clipboard-sanitized-write", "media", "display-capture", "pointerLock", "window-management"]);
+  session.defaultSession.setPermissionRequestHandler((_wc, perm, cb) => cb(ALLOWED_PERMS.has(perm)));
   protocol.handle("app", (req) => {
     const u = new URL(req.url);
     let p = path.normalize(decodeURIComponent(u.pathname)).replace(/^([/\\])+/, "");
