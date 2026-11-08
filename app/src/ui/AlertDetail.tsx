@@ -10,6 +10,63 @@ import { History } from "lucide-preact"; // history 0.6
 import { beforeAfter } from "../histsearch"; // history 0.6
 import { useState } from "preact/hooks"; // p7
 import { ReplayPopover } from "./HistStorms"; // p7: replay window popover
+import { Languages } from "lucide-preact"; // 0.8.3
+import { settings } from "../store"; // 0.8.3
+import { api } from "../api"; // 0.8.3
+import { offerTranslate } from "../trlang"; // 0.8.3
+import "./alerts083.css"; // 0.8.3
+
+/* ---------- 0.8.3: Translate non-English alert text (server: free endpoint → glossary fallback) ---------- */
+type TrRes = { parts?: string[]; engine?: string; engine_name?: string; partial?: boolean; error?: string };
+const trCache = new Map<string, TrRes>();
+
+function AlertText({ p }: { p: any }) {
+  const cfg = settings.value.alertCfg;
+  const lang = offerTranslate(cfg.trShow, p);
+  const engine = cfg.trEngine ?? "mymemory";
+  const ck = `${p.id}|${engine}|${p.sent ?? ""}`;
+  const [res, setRes] = useState<TrRes | null>(() => trCache.get(ck) ?? null);
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const body = p.description || (p.headline && p.headline !== p.event ? p.headline : "");
+  const run = async () => {
+    if (res) return setOn(!on);
+    setBusy(true);
+    setErr("");
+    try {
+      const r: TrRes = await api.send("POST", "/api/alerts/translate", { parts: [p.areaDesc ?? "", body, p.instruction ?? ""], from: lang === "auto" ? "" : lang, engine });
+      trCache.set(ck, r);
+      setRes(r);
+      setOn(true);
+    } catch (e: any) {
+      setErr(e?.status === 404 ? "Update the server to translate" : e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const t = on && res?.parts ? res.parts : null;
+  return (
+    <>
+      <p class="area">{t?.[0] || p.areaDesc}</p>
+      {lang && (
+        <div class="ad-tr">
+          <button class={`btn sm ghost ${on ? "on" : ""}`} onClick={run} disabled={busy} title={on ? "Show the original text" : "Translate to English"}>
+            <Languages size={13} /> {busy ? "Translating…" : on ? "Original" : "Translate"}
+          </button>
+          {on && res && (
+            <span class={`muted ad-tr-note ${res.error ? "ad-tr-err" : ""}`} title={res.error ? `${res.engine_name ?? "Service"} failed: ${res.error}` : undefined}>
+              {res.partial ? `Glossary (partial)${res.error ? " · service unavailable" : ""}` : `Machine translation · ${res.engine_name}`}
+            </span>
+          )}
+          {err && <span class="ad-tr-note ad-tr-err">{err}</span>}
+        </div>
+      )}
+      <pre>{t?.[1] || body}</pre>
+      {p.instruction && <pre class="instr">{t?.[2] || p.instruction}</pre>}
+    </>
+  );
+}
 
 function AlertBody({ id, nav }: { id: string; nav: any }) {
   const a = alerts.value.get(id);
@@ -67,9 +124,7 @@ function AlertBody({ id, nav }: { id: string; nav: any }) {
       )}
       <div class="ad-body">
         {p.nws_headline && <p class="hl">{p.nws_headline}</p>}
-        <p class="area">{p.areaDesc}</p>
-        <pre>{p.description || (p.headline && p.headline !== p.event ? p.headline : "")}</pre>
-        {p.instruction && <pre class="instr">{p.instruction}</pre>}
+        <AlertText key={p.id} p={p} /> {/* 0.8.3: area, text, instruction + Translate */}
         {/* 0.8.2: Canada / international: source, unmapped areas, links */}
         {p.geom_note && <p class="muted small">{p.geom_note}</p>}
         {p.attribution && <p class="muted small ad-attr">Source: {p.attribution}</p>}

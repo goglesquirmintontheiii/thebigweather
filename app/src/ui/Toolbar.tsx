@@ -42,6 +42,9 @@ import { Pin, PinOff, ChevronLeft, ChevronRight } from "lucide-preact";
 import { togglePin, movePin, cleanPins, fitCount } from "./tbpins";
 import type { PanelId } from "../store";
 import "./tb082.css";
+import { Layers } from "lucide-preact"; // 0.8.3: pinned layers in the "…" menu
+import { pinnedLayerItems, toggleLayerPin } from "./OverlayList"; // 0.8.3
+import "./layers083.css"; // 0.8.3
 
 let locMarker: maplibregl.Marker | null = null;
 
@@ -193,6 +196,7 @@ export function Toolbar() {
     </button>
   );
   const shown = pins.slice(0, fit);
+  const layerRows = more ? pinnedLayerItems() : []; // 0.8.3
   const menuItem = (it: TbItem) => {
     const pinned = pins.includes(it.id);
     const Icon = it.icon;
@@ -239,6 +243,24 @@ export function Toolbar() {
         <>
           <div class="ws-scrim" onPointerDown={() => setMore(false)} />
           <div class="tb-more glass">
+            {/* 0.8.3: layers pinned in the Layers tab (toolbar icon on a row) as on/off switches */}
+            {layerRows.length > 0 && (
+              <>
+                <div class="tb-more-h">Layers</div>
+                {layerRows.map((l) => (
+                  <div key={l.key} class="tb-more-row pinned">
+                    <button class={`tb-more-item ${l.on ? "on" : ""}`} role="switch" aria-checked={l.on} disabled={!!l.disabled && !l.on} title={l.disabled && !l.on ? l.disabled : undefined} onClick={() => l.set(!l.on)}>
+                      <Layers size={16} />
+                      <span>{l.name}</span>
+                      <i class="tb-lsw" />
+                    </button>
+                    <button class="tb-pin-btn on" title="Remove from this menu" aria-label={`Remove ${l.name} from this menu`} onClick={(e) => (e.stopPropagation(), toggleLayerPin(l.key))}>
+                      <PinOff size={13} />
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
             {SECS.map((sec) => (
               <Fragment key={sec}>
                 <div class={`tb-more-h ${sec === "Share" ? "p6-owner" : ""}`}>{sec}</div>

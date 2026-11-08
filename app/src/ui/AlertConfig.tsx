@@ -12,6 +12,7 @@ import { ALERT_CATS, alertCategory, alertStyle } from "../alertstyle";
 import { ALERT_SOUNDS, playNamed } from "../sound";
 import { StyleControls } from "./OverlayList";
 import { Search, Play, RotateCcw } from "lucide-preact";
+import { TR_ENGINES } from "../trlang"; // 0.8.3
 
 /* ---------- 0.8.2: right-click an alert → "Layer options for "<type>"..." ---------- */
 /** the type to scroll to and highlight when the window opens (n changes on every request) */
@@ -337,6 +338,28 @@ export function AlertConfig() {
         <section>
           <label class="lbl">Countries</label>
           <Regions />
+        </section>
+        {/* 0.8.3: Translate button on non-English alerts */}
+        <section>
+          <label class="lbl">Translation</label>
+          <div class="row">
+            <span>Translate button</span>
+            <select value={settings.value.alertCfg.trShow ?? "ru"} onChange={(e) => setCfg((c) => (c.trShow = (e.target as HTMLSelectElement).value as any))}>
+              <option value="ru">Russian alerts</option>
+              <option value="all">Every non-English alert</option>
+              <option value="off">Off</option>
+            </select>
+          </div>
+          <div class="row" title="The server calls this free service (no key). If it fails, a built-in glossary of Russian warning terms is used. Translations are cached on the server.">
+            <span>Service</span>
+            <select value={settings.value.alertCfg.trEngine ?? "mymemory"} onChange={(e) => setCfg((c) => (c.trEngine = (e.target as HTMLSelectElement).value as any))}>
+              {TR_ENGINES.map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </div>
         </section>
         <section>
           <label class="lbl">All alerts</label>

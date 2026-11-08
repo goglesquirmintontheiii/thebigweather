@@ -6,6 +6,7 @@ mod admin;
 mod alerts;
 mod alerts_cap; // 0.8.2
 mod alerts_intl; // 0.8.2
+mod alerts_tr; // 0.8.3: alert translation
 mod caches;
 mod export;
 mod logbuf;

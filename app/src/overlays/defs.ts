@@ -2,6 +2,7 @@
 
 import type { LayerSpecification, ExpressionSpecification } from "maplibre-gl";
 import { settings } from "../store";
+import { ltgSpan, ltgWindow, ltgPaint, ltgFilter } from "../radar/ltgpaint"; // 0.8.3: lightning legend
 
 /** set by the satellite module (avoids an import cycle) */
 let selectSat: (name: string) => void = () => {};
@@ -429,12 +430,18 @@ export const OVERLAYS: OverlayDef[] = [
     options: [{ key: "minutes", label: "Last", choices: [["5", "5 min"], ["10", "10 min"], ["15", "15 min"], ["20", "20 min"], ["30", "30 min"]], def: "15" }],
     style: { opacity: 1, size: 1 },
     layers: (s, st, o) => {
-      const span = (+(o.minutes ?? 15) || 15) * 60;
+      const span = ltgSpan(o.minutes);
+      // 0.8.3: the legend's age window filters the flashes and sets the brightness ramp
+      const gs = settings.peek().gates?.["p:glm"];
+      const g: [number, number] | null = gs && !gs.off && (gs.lo !== undefined || gs.hi !== undefined) ? [gs.lo ?? 0, gs.hi ?? 1] : null;
+      const paint = ltgPaint(ltgWindow(span, g), st.opacity);
+      const filter = ltgFilter(span, g);
       return [
         {
           id: `${s}-icon`,
           type: "symbol",
           source: s,
+          ...(filter ? { filter } : {}),
           layout: {
             "icon-image": "bolt",
             "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.45 * st.size, 7, 0.7 * st.size, 10, 0.95 * st.size],
@@ -444,8 +451,8 @@ export const OVERLAYS: OverlayDef[] = [
           },
           paint: {
             // new strikes are white-yellow and fully opaque, then turn orange/red and fade out
-            "icon-color": ["interpolate", ["linear"], ["get", "age"], 0, "#ffffff", 60, "#fff59d", span * 0.3, "#ffb300", span * 0.65, "#f4511e", span, "#8d2a1a"],
-            "icon-opacity": ["*", st.opacity, ["interpolate", ["linear"], ["get", "age"], 0, 1, span * 0.5, 0.75, span, 0.15]],
+            "icon-color": paint.color,
+            "icon-opacity": paint.opacity,
             "icon-halo-color": "rgba(0,0,0,.85)",
             "icon-halo-width": 1,
           },

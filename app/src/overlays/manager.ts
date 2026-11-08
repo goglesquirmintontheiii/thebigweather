@@ -25,7 +25,7 @@ const refreshKey = new Map<string, string>();
 const EMPTY = { type: "FeatureCollection", features: [] };
 
 function setStatus(id: string, s: { loading?: boolean; error?: string; count?: number; note?: string }) {
-  ovlStatus.value = { ...ovlStatus.value, [id]: s };
+  ovlStatus.value = { ...ovlStatus.peek(), [id]: s }; // 0.8.3: peek — called from effects (a read here made them depend on what they write: "Cycle detected")
 }
 
 export function isOn(id: string) {
@@ -126,7 +126,7 @@ async function fetchOverlay(id: string) {
   // cameras: sources switched off are filtered on the server (before clustering)
   const off = settings.value.ovl[id]?.opts?.off;
   if (id === "cameras" && off !== undefined) q.set("off", off);
-  setStatus(id, { ...ovlStatus.value[id], loading: true, error: undefined });
+  setStatus(id, { ...ovlStatus.peek()[id], loading: true, error: undefined }); // 0.8.3: peek
   try {
     let fc = await api.get(`${def.path ?? `/api/ovl/${def.feed ?? id}`}?${q}`);
     if (!isOn(id)) return;

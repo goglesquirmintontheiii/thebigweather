@@ -17,7 +17,7 @@ const EMPTY = { type: "FeatureCollection", features: [] };
 const on = (id: string) => !!settings.value.ovl[id]?.on;
 const bold = ["Noto Sans Bold"];
 function status(id: string, s: { loading?: boolean; error?: string; count?: number; note?: string }) {
-  ovlStatus.value = { ...ovlStatus.value, [id]: s };
+  ovlStatus.value = { ...ovlStatus.peek(), [id]: s }; // 0.8.3: peek — called from effects (a read here made them depend on what they write: "Cycle detected")
 }
 
 // ---------- rotation in the selected radar ----------
@@ -58,7 +58,7 @@ function show(key: string) {
 async function load(key: string) {
   if (inflight === key) return;
   inflight = key;
-  status("rotation", { ...ovlStatus.value.rotation, loading: true, error: undefined });
+  status("rotation", { ...ovlStatus.peek().rotation, loading: true, error: undefined }); // 0.8.3: peek
   try {
     const fc = await api.get(`/api/radar/rotation?key=${encodeURIComponent(key)}`);
     cache.set(key, fc);

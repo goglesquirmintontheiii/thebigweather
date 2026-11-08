@@ -9,31 +9,27 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import { ChartGantt, RefreshCw, ZoomIn, ZoomOut, Play, MapPin, X } from "lucide-preact";
 import { api } from "../api";
 import { settings } from "../store";
-import { alerts, decorateAlert, alertColor } from "../alerts";
+import { alerts, decorateAlert, alertOwnColor } from "../alerts";
+import { alertStyle } from "../alertstyle"; // 0.8.3
+import { groupItems, applyFilter, cycleFilter, typeChips, spanEnd, packRows, vtecKey, type TypeFilter } from "../atlgroup"; // 0.8.3
 import { mapRef } from "../map/mapview";
 import { pointInGeometry, distance, fmtDist } from "../util";
 import { CenterModal } from "./CenterModal";
 import { openHistory, bboxOf, bboxCenter, fitBox, showPreview, type BBox } from "../histsearch";
 import { histRange } from "../history";
+import "./alerts083.css"; // 0.8.3
 
 export const timelineOpen = signal(false);
 
-type Lane = "tor" | "svr" | "ffw" | "warn" | "adv" | "watch" | "md" | "lsr" | "ml";
-const LANES: { id: Lane; name: string; color: string }[] = [
-  { id: "tor", name: "Tornado warnings", color: "#ff1744" },
-  { id: "svr", name: "Severe t-storm warnings", color: "#ffa500" },
-  { id: "ffw", name: "Flash flood warnings", color: "#16a34a" },
-  { id: "warn", name: "Other warnings", color: "#f472b6" },
-  { id: "adv", name: "Advisories & statements", color: "#94a3b8" },
-  { id: "watch", name: "Watches", color: "#facc15" },
-  { id: "md", name: "Mesoscale discussions", color: "#3b82f6" },
-  { id: "lsr", name: "Storm reports", color: "#22d3ee" },
-  { id: "ml", name: "Model detections", color: "#c084fc" },
-];
+/* 0.8.3: lanes are alert types (one group per type, labelled at its start), plus MDs, storm
+ * reports and model detections; colours follow Alerts → layer options (same as the map). */
+const KIND_COLOR: Record<string, string> = { md: "#3b82f6", lsr: "#22d3ee", ml: "#c084fc" };
+const typeColor = (type: string, own?: string) => KIND_COLOR[type] ?? alertStyle(type, own).color;
 
 interface Item {
   key: string;
-  lane: Lane;
+  /** 0.8.3: group — the alert type, or "md" / "lsr" / "ml" */
+  type: string;
   t0: number;
   t1: number;
   point: boolean;
@@ -55,15 +51,6 @@ const RANGES: [number, string][] = [
 const iso = (t: number) => new Date(t).toISOString().slice(0, 19) + "Z";
 const tms = (v: any) => (typeof v === "number" ? (v < 1e12 ? v * 1000 : v) : v ? Date.parse(v) : NaN);
 
-function warnLane(ev: string): Lane {
-  const e = ev.toLowerCase();
-  if (e.includes("tornado warning")) return "tor";
-  if (e.includes("severe thunderstorm warning")) return "svr";
-  if (e.includes("flash flood warning")) return "ffw";
-  if (e.endsWith("warning") || e.includes("emergency")) return "warn";
-  if (e.endsWith("watch")) return "watch";
-  return "adv";
-}
 function lsrColor(t: string) {
   const u = t.toUpperCase();
   return u.includes("TORNADO") ? "#ef4444" : u.includes("FUNNEL") ? "#f87171" : u.includes("HAIL") ? "#22c55e" : u.includes("WIND") || u.includes("WND") ? "#3b82f6" : u.includes("FLOOD") ? "#15803d" : u.includes("SNOW") ? "#a5b4fc" : "#9ca3af";
@@ -108,11 +95,13 @@ async function loadItems(from: number, to: number, area: Area): Promise<{ items:
   const items: Item[] = [];
   const errors: string[] = [];
   const seen = new Set<string>();
+  // 0.8.3: live alerts may start later (winter storm warning from tomorrow): no upper bound for them
   const add = (it: Item) => {
-    if (seen.has(it.key) || it.t1 < from || it.t0 > to) return;
+    if (seen.has(it.key) || it.t1 < from || (it.src !== "live" && it.t0 > to)) return;
     seen.add(it.key);
     items.push(it);
   };
+  const liveVtec = new Set<string>();
   const warnItem = (f: any, src: string) => {
     const p = f.properties ?? {};
     const ev = String(p.event ?? p.ps ?? "Alert");
@@ -120,8 +109,12 @@ async function loadItems(from: number, to: number, area: Area): Promise<{ items:
     const t1 = tms(p.t1 ?? p.ends ?? p.expires ?? p.expire);
     if (!Number.isFinite(t0)) return;
     if (!inArea(area, f.geometry)) return;
-    const lane = warnLane(ev);
-    add({ key: `w:${p.vtec_id ?? p.id ?? `${ev}${t0}`}`, lane, t0, t1: Number.isFinite(t1) ? t1 : t0 + 3600_000, point: false, title: ev, sub: p.senderName ?? p.wfo ?? "", color: p.color ?? alertColor(ev), geom: f.geometry, props: p, src });
+    // 0.8.3: an archived copy of a live warning shows once (live segments sharing a VTEC all stay)
+    const vk = vtecKey(p.vtec);
+    if (vk && src === "live") liveVtec.add(vk);
+    else if (vk && liveVtec.has(vk)) return;
+    // 0.8.3: colour from the user's alert style (as on the map)
+    add({ key: `w:${p.vtec_id ?? p.id ?? `${ev}${t0}`}`, type: ev, t0, t1: Number.isFinite(t1) ? t1 : t0 + 3600_000, point: false, title: ev, sub: p.senderName ?? p.wfo ?? "", color: typeColor(ev, alertOwnColor(p)), geom: f.geometry, props: p, src });
   };
   // live alerts first (they carry the richest text)
   for (const a of alerts.value.values()) warnItem(a, "live");
@@ -136,7 +129,8 @@ async function loadItems(from: number, to: number, area: Area): Promise<{ items:
           const tor = String(p.type ?? p.sel ?? "").toUpperCase().includes("TOR");
           const t0 = tms(p.t0 ?? p.issue), t1 = tms(p.t1 ?? p.expire);
           if (!Number.isFinite(t0)) return;
-          add({ key: `wa:${p.num ?? p.number ?? t0}`, lane: "watch", t0, t1: Number.isFinite(t1) ? t1 : t0 + 4 * 3600_000, point: false, title: `${tor ? "Tornado" : "Severe T-storm"} Watch ${p.num ?? p.number ?? ""}`, sub: p.is_pds ? "PDS" : "", color: tor ? "#ff1744" : "#facc15", geom: f.geometry, props: p, src: "history" });
+          const type = tor ? "Tornado Watch" : "Severe Thunderstorm Watch";
+          add({ key: `wa:${p.num ?? p.number ?? t0}`, type, t0, t1: Number.isFinite(t1) ? t1 : t0 + 4 * 3600_000, point: false, title: `${tor ? "Tornado" : "Severe T-storm"} Watch ${p.num ?? p.number ?? ""}`, sub: p.is_pds ? "PDS" : "", color: typeColor(type), geom: f.geometry, props: p, src: "history" });
         }),
     ],
     [
@@ -147,7 +141,7 @@ async function loadItems(from: number, to: number, area: Area): Promise<{ items:
           if (!inArea(area, f.geometry)) return;
           const t0 = tms(p.t0 ?? p.issue), t1 = tms(p.t1 ?? p.expire);
           if (!Number.isFinite(t0)) return;
-          add({ key: `md:${p.num ?? t0}`, lane: "md", t0, t1: Number.isFinite(t1) ? t1 : t0 + 2 * 3600_000, point: false, title: `MD ${p.num ?? ""}`, sub: p.concerning ?? "", color: "#3b82f6", geom: f.geometry, props: p, src: "history" });
+          add({ key: `md:${p.num ?? t0}`, type: "md", t0, t1: Number.isFinite(t1) ? t1 : t0 + 2 * 3600_000, point: false, title: `MD ${p.num ?? ""}`, sub: p.concerning ?? "", color: "#3b82f6", geom: f.geometry, props: p, src: "history" });
         }),
     ],
     [
@@ -159,7 +153,7 @@ async function loadItems(from: number, to: number, area: Area): Promise<{ items:
           const t = tms(p.t ?? p.valid);
           if (!Number.isFinite(t)) return;
           const ty = String(p.typetext ?? "Report");
-          add({ key: `lsr:${p.id ?? `${t}${f.geometry?.coordinates}`}`, lane: "lsr", t0: t, t1: t, point: true, title: `${ty}${p.mag != null && p.mag !== "" ? ` ${p.mag} ${p.unit ?? ""}` : ""}`, sub: [p.city, p.st].filter(Boolean).join(", "), color: lsrColor(ty), geom: f.geometry, props: p, src: "history" });
+          add({ key: `lsr:${p.id ?? `${t}${f.geometry?.coordinates}`}`, type: "lsr", t0: t, t1: t, point: true, title: `${ty}${p.mag != null && p.mag !== "" ? ` ${p.mag} ${p.unit ?? ""}` : ""}`, sub: [p.city, p.st].filter(Boolean).join(", "), color: lsrColor(ty), geom: f.geometry, props: p, src: "history" });
         }),
     ],
   ];
@@ -185,7 +179,7 @@ async function loadItems(from: number, to: number, area: Area): Promise<{ items:
           let prob = +(p.prob ?? p.max_prob);
           if (prob > 1) prob /= 100;
           const line = Array.isArray(p.track) && p.track.length > 1 ? { type: "LineString", coordinates: p.track.map((q: any) => [q.lon, q.lat]) } : null;
-          add({ key: `ml:${p.id ?? x?.id ?? `${p.model_id}${t}${lon}`}`, lane: "ml", t0: t, t1: Number.isFinite(t1) && t1 > t ? t1 : t, point: !(Number.isFinite(t1) && t1 > t), title: `${p.model_name ?? "Model"} · ${p.target ?? ""}`, sub: Number.isFinite(prob) ? `${Math.round(prob * 100)}%` : "", color: "#c084fc", geom: line ?? { type: "Point", coordinates: [lon, lat] }, props: p, src: "ml" });
+          add({ key: `ml:${p.id ?? x?.id ?? `${p.model_id}${t}${lon}`}`, type: "ml", t0: t, t1: Number.isFinite(t1) && t1 > t ? t1 : t, point: !(Number.isFinite(t1) && t1 > t), title: `${p.model_name ?? "Model"} · ${p.target ?? ""}`, sub: Number.isFinite(prob) ? `${Math.round(prob * 100)}%` : "", color: "#c084fc", geom: line ?? { type: "Point", coordinates: [lon, lat] }, props: p, src: "ml" });
         }
       })
       .catch((e) => (e?.status === 404 ? null : errors.push(`model reports: ${e.message}`))),
@@ -195,22 +189,8 @@ async function loadItems(from: number, to: number, area: Area): Promise<{ items:
 
 // ---------- layout ----------
 const ROW_H = 18;
-function stack(items: Item[], pxPerMs: number): Map<string, number> {
-  const rows: number[] = [];
-  const out = new Map<string, number>();
-  for (const it of items) {
-    const x0 = it.t0 * pxPerMs;
-    const x1 = Math.max(x0 + (it.point ? 10 : 6), it.t1 * pxPerMs) + (it.point ? 0 : 2);
-    let r = rows.findIndex((end) => end <= x0);
-    if (r < 0) {
-      r = rows.length;
-      rows.push(0);
-    }
-    rows[r] = x1;
-    out.set(it.key, r);
-  }
-  return out;
-}
+/** 0.8.3: label column width (sticky on the left of the scroller) */
+const LW = 210;
 
 function ticks(from: number, to: number, pph: number): { t: number; major: boolean; label: string }[] {
   const stepH = [1, 2, 3, 6, 12, 24].find((h) => h * pph >= 64) ?? 24;
@@ -234,13 +214,32 @@ export function AlertTimeline() {
   return <Body />;
 }
 
+const FKEY = "tbw.atl.filter";
+function loadFilter(): TypeFilter {
+  try {
+    const v = JSON.parse(localStorage.getItem(FKEY) ?? "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+}
+
 function Body() {
   const pts = settings.value.points;
   const [areaSel, setAreaSel] = useState<string>("view");
   const [radius, setRadius] = useState(80);
   const [hours, setHours] = useState(24);
   const [pph, setPph] = useState(60);
-  const [off, setOff] = useState<Record<string, boolean>>({});
+  // 0.8.3: type filter (chips: only / hidden), kept between sessions
+  const [filt, setFiltS] = useState<TypeFilter>(loadFilter);
+  const setFilt = (f: TypeFilter) => {
+    setFiltS(f);
+    try {
+      localStorage.setItem(FKEY, JSON.stringify(f));
+    } catch {
+      /* private mode */
+    }
+  };
   const [data, setData] = useState<{ items: Item[]; errors: string[]; loading: boolean; area?: Area }>({ items: [], errors: [], loading: true });
   const [sel, setSel] = useState<Item | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -271,34 +270,41 @@ function Body() {
     const t = window.setInterval(() => setNonce((n) => n + 1), 5 * 60_000);
     return () => clearInterval(t);
   }, []);
-  const width = Math.max(600, (hours * pph) | 0);
+  // 0.8.3: the canvas reaches past "now" as far as the active alerts go (max 7 days)
+  const end = useMemo(() => spanEnd(data.items, to), [data.items, to]);
   const pxPerMs = pph / 3600_000;
+  const width = Math.max(600, Math.ceil((end - from) * pxPerMs));
   const xAt = (t: number) => (t - from) * pxPerMs;
-  const shown = data.items.filter((i) => !off[i.lane]);
-  const lanes = useMemo(() => {
-    return LANES.map((l) => {
-      const its = shown.filter((i) => i.lane === l.id);
-      const rows = stack(its, pxPerMs);
-      const n = Math.max(1, ...[...rows.values()].map((r) => r + 1));
-      return { ...l, its, rows, n };
-    });
-  }, [data, off, pph, hours]);
-  // start scrolled to "now"
+  const styleKey = settings.value.alertCfg; // colours follow Alerts → layer options
+  const chips = useMemo(() => typeChips(data.items), [data.items, styleKey]);
+  const groups = useMemo(
+    () =>
+      groupItems(applyFilter(data.items, filt)).map((g) => {
+        const rows = packRows(g.items, pxPerMs);
+        let n = 1;
+        for (const r of rows.values()) n = Math.max(n, r + 1);
+        return { ...g, rows, n };
+      }),
+    [data.items, filt, pph, styleKey],
+  );
+  const nShown = groups.reduce((a, g) => a + g.items.length, 0);
+  const nFilt = Object.keys(filt).length;
+  // start with "now" three quarters across
   useLayoutEffect(() => {
     const s = scroller.current;
-    if (s) s.scrollLeft = s.scrollWidth;
+    if (s) s.scrollLeft = Math.max(0, xAt(Date.now()) - (s.clientWidth - LW) * 0.75);
   }, [hours, data.loading]);
   const zoom = (f: number, anchorX?: number) => {
     const s = scroller.current;
-    const ax = anchorX ?? (s ? s.clientWidth / 2 : 0);
-    const tAt = s ? from + (s.scrollLeft + ax) / pxPerMs : to;
+    const ax = Math.max(LW, anchorX ?? (s ? LW + (s.clientWidth - LW) / 2 : LW));
+    const tAt = s ? from + (s.scrollLeft + ax - LW) / pxPerMs : to;
     const np = Math.max(6, Math.min(600, pph * f));
     setPph(np);
     requestAnimationFrame(() => {
-      if (s) s.scrollLeft = (tAt - from) * (np / 3600_000) - ax;
+      if (s) s.scrollLeft = (tAt - from) * (np / 3600_000) - ax + LW;
     });
   };
-  const tk = ticks(from, to, pph);
+  const tk = ticks(from, end, pph);
   const hr = histRange.value;
   const replay = (it: Item) => {
     const b = it.geom ? bboxOf(it.geom) : null;
@@ -312,13 +318,13 @@ function Body() {
     if (it.geom.type !== "Point") showPreview({ kind: "warning", fc: { type: "FeatureCollection", features: [{ type: "Feature", geometry: it.geom, properties: {} }] }, id: it.key, pinned: false, title: it.title });
     fitBox(it.geom.type === "Point" ? [b[0] - 0.4, b[1] - 0.3, b[2] + 0.4, b[3] + 0.3] : [b[0] - 0.2, b[1] - 0.2, b[2] + 0.2, b[3] + 0.2], 9);
   };
-  const counts = Object.fromEntries(LANES.map((l) => [l.id, data.items.filter((i) => i.lane === l.id).length]));
+  const now = Date.now();
   return (
     <CenterModal
       cls="atl"
       icon={<ChartGantt size={19} />}
       title="Alert timeline"
-      sub={`${data.items.length} items · ${area.pt ? `within ${fmtDist(area.pt.r)} of ${area.pt.name}` : "current map view"} · last ${RANGES.find((r) => r[0] === hours)?.[1] ?? `${hours} h`}${data.loading ? " · loading…" : ""}`}
+      sub={`${nShown === data.items.length ? data.items.length : `${nShown} of ${data.items.length}`} items · ${area.pt ? `within ${fmtDist(area.pt.r)} of ${area.pt.name}` : "current map view"} · last ${RANGES.find((r) => r[0] === hours)?.[1] ?? `${hours} h`}${data.loading ? " · loading…" : ""}`}
       onClose={() => (timelineOpen.value = false)}
       actions={
         <>
@@ -358,17 +364,34 @@ function Body() {
         </>
       }
     >
-      <div class="atl-wrap">
-        <div class="atl-lanes">
-          <div class="atl-axis-h" />
-          {lanes.map((l) => (
-            <button key={l.id} class={`atl-lname ${off[l.id] ? "off" : ""}`} style={{ height: `${l.n * ROW_H + 8}px` }} title={off[l.id] ? "Show this lane" : "Hide this lane"} onClick={() => setOff({ ...off, [l.id]: !off[l.id] })}>
-              <i style={{ background: l.color }} />
-              <span>{l.name}</span>
-              <small class="muted">{counts[l.id]}</small>
+      {/* 0.8.3: type filter — click: only this type (add more), again: hide it, again: normal */}
+      {chips.length > 0 && (
+        <div class="atl-chips" role="group" aria-label="Filter by type">
+          <span class="muted small atl-chips-h">Types</span>
+          {chips.map((c) => {
+            const st = filt[c.type];
+            return (
+              <button
+                key={c.type}
+                class={`atl-chip ${st ?? ""}`}
+                aria-pressed={!!st}
+                title={st === "in" ? "Only checked types are shown · click to hide this type" : st === "out" ? "Hidden · click to show again" : "Click: show only this type (pick more to add them); again: hide it"}
+                onClick={() => setFilt(cycleFilter(filt, c.type))}
+              >
+                <i style={{ background: c.color }} />
+                <span>{c.name}</span>
+                <small>{c.n}</small>
+              </button>
+            );
+          })}
+          {nFilt > 0 && (
+            <button class="btn xs ghost" onClick={() => setFilt({})} title="Show every type">
+              Reset
             </button>
-          ))}
+          )}
         </div>
+      )}
+      <div class="atl-wrap">
         <div
           ref={scroller}
           class="atl-scroll"
@@ -379,37 +402,51 @@ function Body() {
             zoom(e.deltaY < 0 ? 1.25 : 0.8, e.clientX - r.left);
           }}
         >
-          <div class="atl-canvas" style={{ width: `${width}px` }}>
-            <div class="atl-axis">
-              {tk.map((t) => (
-                <span key={t.t} class={`atl-tick ${t.major ? "major" : ""}`} style={{ left: `${xAt(t.t)}px` }}>
-                  {t.label}
-                </span>
-              ))}
-            </div>
-            <div class="atl-grid">
+          <div class="atl-canvas" style={{ width: `${width + LW}px` }}>
+            <div class="atl-grid" style={{ left: `${LW}px`, width: `${width}px` }}>
               {tk.map((t) => (
                 <i key={t.t} class={t.major ? "major" : ""} style={{ left: `${xAt(t.t)}px` }} />
               ))}
-              {hr && hr.end > from && <b class="atl-hist" style={{ left: `${xAt(Math.max(from, hr.start))}px`, width: `${xAt(Math.min(to, hr.end)) - xAt(Math.max(from, hr.start))}px` }} title="History mode range" />}
-              <i class="atl-now" style={{ left: `${xAt(Date.now())}px` }} title="Now" />
+              {hr && hr.end > from && <b class="atl-hist" style={{ left: `${xAt(Math.max(from, hr.start))}px`, width: `${xAt(Math.min(end, hr.end)) - xAt(Math.max(from, hr.start))}px` }} title="History mode range" />}
+              <b class="atl-future" style={{ left: `${xAt(now)}px`, width: `${Math.max(0, xAt(end) - xAt(now))}px` }} />
+              <i class="atl-now" style={{ left: `${xAt(now)}px` }} title="Now" />
             </div>
-            {lanes.map((l) => (
-              <div key={l.id} class={`atl-lane ${off[l.id] ? "off" : ""}`} style={{ height: `${l.n * ROW_H + 8}px` }}>
-                {l.its.map((it) => {
-                  const x0 = xAt(it.t0);
-                  const w = it.point ? 0 : Math.max(6, xAt(it.t1) - x0);
-                  const top = 4 + (l.rows.get(it.key) ?? 0) * ROW_H;
-                  return it.point ? (
-                    <button key={it.key} class={`atl-pt ${sel?.key === it.key ? "sel" : ""}`} style={{ left: `${x0 - 5}px`, top: `${top + 3}px`, background: it.color }} title={`${it.title} · ${new Date(it.t0).toLocaleString()}`} onClick={() => setSel(it)} />
-                  ) : (
-                    <button key={it.key} class={`atl-bar ${sel?.key === it.key ? "sel" : ""} ${it.src === "live" && it.t1 > Date.now() ? "active" : ""}`} style={{ left: `${x0}px`, width: `${w}px`, top: `${top}px`, background: it.color }} title={`${it.title}${it.sub ? ` · ${it.sub}` : ""}`} onClick={() => setSel(it)}>
-                      {w > 60 && <span>{it.title}</span>}
-                    </button>
-                  );
-                })}
+            <div class="atl-row atl-head">
+              <div class="atl-lname atl-corner" />
+              <div class="atl-axis" style={{ width: `${width}px` }}>
+                {tk.map((t) => (
+                  <span key={t.t} class={`atl-tick ${t.major ? "major" : ""}`} style={{ left: `${xAt(t.t)}px` }}>
+                    {t.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {groups.map((g) => (
+              <div key={g.type} class="atl-row" style={{ height: `${g.n * ROW_H + 8}px` }}>
+                <div class="atl-lname">
+                  <button class="atl-lname-in" title={`${g.name} · ${g.items.length}\nClick to hide this type`} onClick={() => setFilt({ ...filt, [g.type]: "out" })}>
+                    <i style={{ background: g.color }} />
+                    <span>{g.name}</span>
+                    <small class="muted">{g.items.length}</small>
+                  </button>
+                </div>
+                <div class="atl-lane" style={{ width: `${width}px` }}>
+                  {g.items.map((it) => {
+                    const x0 = xAt(it.t0);
+                    const w = it.point ? 0 : Math.max(6, xAt(it.t1) - x0);
+                    const top = 4 + (g.rows.get(it.key) ?? 0) * ROW_H;
+                    return it.point ? (
+                      <button key={it.key} class={`atl-pt ${sel?.key === it.key ? "sel" : ""}`} style={{ left: `${x0 - 5}px`, top: `${top + 3}px`, background: it.color }} title={`${it.title} · ${new Date(it.t0).toLocaleString()}`} onClick={() => setSel(it)} />
+                    ) : (
+                      <button key={it.key} class={`atl-bar ${sel?.key === it.key ? "sel" : ""} ${it.src === "live" && it.t1 > now ? "active" : ""}`} style={{ left: `${x0}px`, width: `${w}px`, top: `${top}px`, background: it.color }} title={`${it.title}${it.sub ? ` · ${it.sub}` : ""}`} onClick={() => setSel(it)}>
+                        {w > 60 && <span>{it.sub && it.type === it.title ? it.sub : it.title}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ))}
+            {!groups.length && data.items.length > 0 && <div class="muted small atl-none">Every type is filtered out.</div>}
           </div>
         </div>
       </div>
@@ -443,9 +480,7 @@ function Body() {
           <div class="atl-dtext">{sel.props.headline ?? sel.props.areaDesc ?? sel.props.remark ?? sel.props.concerning ?? sel.props.text ?? ""}</div>
         </div>
       )}
-      <div class="muted small atl-help">
-        Ctrl+wheel zooms (hours ↔ days); click a lane name to hide it; bars are warnings/watches/MDs from issue to expiry, dots are reports and model detections.
-      </div>
+      <div class="muted small atl-help">Ctrl+wheel zooms (hours ↔ days); click a type's name to hide it; bars run from issue to expiry (past "now" for active alerts), dots are reports and model detections.</div>
     </CenterModal>
   );
 }

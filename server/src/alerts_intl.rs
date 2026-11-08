@@ -268,6 +268,8 @@ pub struct Intl {
     want: RwLock<HashMap<&'static str, Instant>>,
     state: Mutex<HashMap<&'static str, SrcState>>,
     wake: tokio::sync::Notify,
+    /// 0.8.3: translations of non-English alert text (cached)
+    pub tr: crate::alerts_tr::Translator,
 }
 
 const WANT_TTL: Duration = Duration::from_secs(20 * 60);
@@ -275,7 +277,7 @@ const DROP_AFTER: Duration = Duration::from_secs(30 * 60);
 
 impl Intl {
     pub fn new(canada: bool, international: bool) -> Self {
-        Self { canada: AtomicBool::new(canada), international: AtomicBool::new(international), want: RwLock::new(HashMap::new()), state: Mutex::new(HashMap::new()), wake: tokio::sync::Notify::new() }
+        Self { canada: AtomicBool::new(canada), international: AtomicBool::new(international), want: RwLock::new(HashMap::new()), state: Mutex::new(HashMap::new()), wake: tokio::sync::Notify::new(), tr: Default::default() }
     }
 
     /// config: `[alerts] canada` / `international`
@@ -400,6 +402,31 @@ impl Alerts {
                 self.health.ok(key, name, format!("{n} active · {}/{} sources failing ({first})", bad.len(), xs.len()));
             }
         }
+    }
+
+    /// 0.8.3: `POST /api/alerts/translate` `{text, from?, engine?}` → English (see alerts_tr.rs).
+    /// `parts` (headline, description, instruction …) instead of `text`: each is translated and
+    /// they come back in order as `parts`.
+    pub async fn translate(&self, b: &Value) -> Value {
+        let engine = crate::alerts_tr::Engine::parse(b["engine"].as_str().unwrap_or(""));
+        let from = b["from"].as_str().unwrap_or("");
+        if let Some(parts) = b["parts"].as_array() {
+            let mut out = vec![];
+            let mut meta = json!({});
+            for p in parts.iter().take(8) {
+                let r = self.intl.tr.translate(&self.http, p.as_str().unwrap_or(""), from, engine).await;
+                out.push(r["text"].clone());
+                if meta.get("engine").is_none() || r["partial"] == true {
+                    meta = r;
+                }
+            }
+            meta["parts"] = json!(out);
+            if let Some(o) = meta.as_object_mut() {
+                o.remove("text");
+            }
+            return meta;
+        }
+        self.intl.tr.translate(&self.http, b["text"].as_str().unwrap_or(""), from, engine).await
     }
 
     async fn get_text(&self, url: &str) -> anyhow::Result<String> {

@@ -20,6 +20,10 @@ import { LayerExtra } from "./LayerExtras"; // layers 0.5
 import { LocateFixed } from "lucide-preact"; // 0.8.1
 import { identify, identifying, zoomToLayer } from "../overlays/identify"; // 0.8.1
 import "./hotfix081.css"; // 0.8.1
+import { PanelBottom } from "lucide-preact"; // 0.8.3: toolbar-menu pin
+import { togglePin } from "./tbpins"; // 0.8.3
+import { detUnavailable } from "./ml/ProbGate"; // 0.8.3
+import "./layers083.css"; // 0.8.3
 import { WinButtons, IN_OS_WIN, isMin, isMax, minimize, toggleMax, forget, useEscClose, canPop, popWindow, onBarDbl } from "./winframe"; // 0.8.2
 
 /** 0.8.1: identify button (pulse the layer's items on the map) + "Zoom to" when none are in view */
@@ -565,6 +569,21 @@ interface Item {
   set: (v: boolean) => void;
   gear?: string;
   status?: any;
+  /** 0.8.3: why it can't be turned on (checkbox disabled while off) */
+  disabled?: string | null;
+}
+
+/* ---------- 0.8.3: rows pinned to the toolbar's "…" menu (on/off toggles there) ---------- */
+export const layerPins = () => settings.value.layerPins ?? [];
+export function toggleLayerPin(key: string) {
+  update((s) => (s.layerPins = togglePin(s.layerPins ?? [], key)));
+}
+/** pinned rows that still exist, in pin order (for the toolbar menu) */
+export function pinnedLayerItems(): { key: string; name: string; on: boolean; disabled?: string | null; set: (v: boolean) => void }[] {
+  const pins = layerPins();
+  if (!pins.length) return [];
+  const all = items();
+  return pins.map((k) => all.find((i) => i.key === k)).filter((x): x is Item => !!x);
 }
 
 function items(): Item[] {
@@ -581,15 +600,17 @@ function items(): Item[] {
   }));
   for (const d of OVERLAYS) {
     if (d.hidden) continue;
+    const disabled = d.id === "mldetect" ? detUnavailable() : null; // 0.8.3: needs a reachable model
     out.push({
       key: d.id,
       name: d.name,
       desc: d.note ?? "",
       group: menuGroup(d),
       on: !!s.ovl[d.id]?.on,
-      set: (v) => setOvl(d.id, (x) => (x.on = v)),
+      set: (v) => (!v || !disabled) && setOvl(d.id, (x) => (x.on = v)),
       gear: d.id,
       status: <Status id={d.id} />,
+      disabled,
     });
   }
   for (const f of fileOverlays.value) out.push(fileItem(f));
@@ -612,20 +633,26 @@ function fileItem(f: { id: string; name: string; count: number }): Item {
 
 function ItemRow({ it, sub }: { it: Item; sub?: boolean }) {
   const fav = !!settings.value.ovl[it.key]?.fav;
+  const pinned = layerPins().includes(it.key); // 0.8.3
+  const off = !!it.disabled && !it.on; // 0.8.3
   return (
-    <div class={`ovl-row ${it.on ? "is-on" : ""}`} onContextMenu={(e) => (e.preventDefault(), (captureFor.value = it.key))}>
+    <div class={`ovl-row ${it.on ? "is-on" : ""} ${off ? "is-disabled" : ""}`} onContextMenu={(e) => (e.preventDefault(), (captureFor.value = it.key))}>
       <div class="ovl-line">
         <button class={`ovl-star ${fav ? "on" : ""}`} title={fav ? "Remove from favourites" : "Add to favourites"} onClick={() => setOvl(it.key, (x) => (x.fav = fav ? undefined : true))}>
           <Star size={15} /> {/* 0.8.2: bigger (was 12) */}
         </button>
-        <label class="ovl-toggle" title={`${it.name} · ${it.group}${it.desc ? `\n${it.desc}` : ""}\nRight-click to set a keyboard shortcut`}>
-          <input type="checkbox" checked={it.on} onChange={(e) => it.set((e.target as HTMLInputElement).checked)} />
+        <label class="ovl-toggle" title={off ? it.disabled! : `${it.name} · ${it.group}${it.desc ? `\n${it.desc}` : ""}\nRight-click to set a keyboard shortcut`}>
+          <input type="checkbox" checked={it.on} disabled={off} onChange={(e) => it.set((e.target as HTMLInputElement).checked)} />
           <span>{it.name}</span>
           {sub && <small class="ovl-sub muted">{it.group}</small>}
         </label>
         <KbdBadge id={it.key} />
         {it.status}
         {it.on && !it.key.startsWith("base:") && !overlayDef(it.key)?.raster && <IdentifyButton id={it.key} /> /* 0.8.1 */}
+        {/* 0.8.3: pin to the toolbar's "…" menu as an on/off toggle */}
+        <button class={`icon-btn ovl-tbpin ${pinned ? "on" : ""}`} title={pinned ? "In the toolbar menu · click to remove" : "Add to the toolbar menu"} aria-pressed={pinned} onClick={() => toggleLayerPin(it.key)}>
+          <PanelBottom size={13} />
+        </button>
         {it.gear && (
           <button class={`icon-btn gear ${configModal.value === it.gear ? "on" : ""}`} title="Settings" onClick={() => (configModal.value = it.gear!)}>
             <Settings2 size={13} />

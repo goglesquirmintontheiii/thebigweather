@@ -13,7 +13,10 @@ import { gateDrag, type Gate } from "../../gate";
 import { isOn } from "../../overlays/manager";
 import { probGate, setProbGate, pgKey, scrub, PG_DET, PG_OUT, pmLayer, setPerModel, setGateBy } from "../../ml/probgate";
 import { detProbs, detProbsBy, detConfs } from "../../overlays/mldefs";
-import { models, modelsEps } from "../../ml/client";
+import { ovlData, ovlDataVer } from "../../overlays/manager"; // 0.8.3
+import { LTG, ltgSpan, ltgTicks } from "../../radar/ltgpaint"; // 0.8.3
+import "../../radar/ltggate"; // 0.8.3: applies the lightning window to the map
+import { models, modelsEps, modelsErr, modelsLoading, detections, ensureModels } from "../../ml/client"; // 0.8.3: + reachability
 import { dropDetections } from "../../ml/m8";
 import { CONF_HELP } from "../../ml/summary";
 import { targetIconUrl } from "../../ml/targets";
@@ -47,22 +50,48 @@ function useAnchor() {
   return pos;
 }
 
+/** 0.8.3: why the detections layer can't be turned on (no model reachable on the server or this
+ * computer), or null when it can. Loads the model list once when it hasn't been. */
+let firstAsk = 0;
+export function detUnavailable(): string | null {
+  ensureModels();
+  firstAsk ||= Date.now();
+  if (models.value.some((m) => !m.training) || detections.value.length) return null;
+  if (modelsLoading.value || (!modelsEps.value.size && !modelsErr.value && Date.now() - firstAsk < 5000)) return "Checking for detection models…";
+  return "No detection models reachable (server or this computer). Train or import one in Models.";
+}
+
 export function ProbGates() {
   void settings.value.ovl;
-  const det = isOn(PG_DET);
+  const det = isOn(PG_DET) && !detUnavailable(); // 0.8.3: no "0/0" legend without models
   const out = isOn(PG_OUT);
+  const ltg = isOn(LTG); // 0.8.3: lightning legend
   const pos = useAnchor();
-  if (!det && !out) return null;
+  if (!det && !out && !ltg) return null;
   return (
     <div class="mlg-stack" style={{ right: `${pos.right}px`, bottom: `${pos.bottom}px` }}>
       {out && <OutlookCard />}
       {det && <DetGates />}
+      {ltg && <LtgLegend />}
     </div>
   );
 }
 
+/** 0.8.3: lightning legend — flashes by age (newest left); the window hides older / newer flashes
+ * and sets the icons' brightness (its newest edge brightest) */
+const LTG_GRAD = "linear-gradient(90deg, #ffffff 0%, #fff59d 8%, #ffb300 30%, #f4511e 65%, #8d2a1a 100%)";
+function LtgLegend() {
+  void ovlDataVer.value;
+  const span = ltgSpan(settings.value.ovl[LTG]?.opts?.minutes);
+  const fc = ovlData(LTG);
+  const ages: number[] = (fc?.features ?? []).map((f: any) => Math.max(0, Math.min(1, (+f.properties?.age || 0) / span)));
+  const m = span / 60;
+  const fmt = (v: number) => (v <= 0.001 ? "now" : `${Math.round(v * m * 10) / 10} min`);
+  return <GateBar layer={LTG} title="Lightning · age" probs={ages} unit="flashes" grad={LTG_GRAD} fmt={fmt} ticks={ltgTicks(span)} what="the flash ages" tips={["Hide newer flashes", "Hide older flashes"]} />;
+}
+
 const pct = (f: number) => `${(Math.max(0, Math.min(1, f)) * 100).toFixed(2)}%`;
-const P = (v: number) => `${Math.round(v * 100)}%`;
+const Pct = (v: number) => `${Math.round(v * 100)}%`;
 const GRAD = `linear-gradient(90deg, #64748b 0%, ${LEVEL_COLOR.low} 30%, ${LEVEL_COLOR.med} 55%, ${LEVEL_COLOR.high} 80%, #ff2ab4 100%)`;
 
 /** models 0.8: combined gate, or (expanded) one row + gate per model */
@@ -141,7 +170,8 @@ function DetGates() {
   );
 }
 
-export function GateBar({ layer, title, probs, unit, compact, extra, icon }: { layer: string; title?: string; probs: number[]; unit: string; compact?: boolean; extra?: ComponentChildren; icon?: string }) {
+export function GateBar({ layer, title, probs, unit, compact, extra, icon, grad = GRAD, fmt, ticks: tickLabels, what = "the probabilities", tips }: { layer: string; tips?: [string, string]; title?: string; probs: number[]; unit: string; compact?: boolean; extra?: ComponentChildren; icon?: string; /** 0.8.3: bar colours, value labels, scale labels, what a sweep moves through (lightning legend) */ grad?: string; fmt?: (v: number) => string; ticks?: string[]; what?: string }) {
+  const P = fmt ?? Pct; // 0.8.3
   const key = pgKey(layer);
   const { lo, hi, on, g } = probGate(layer);
   const saved: Gate = settings.value.gates?.[key] ?? {};
@@ -238,7 +268,7 @@ export function GateBar({ layer, title, probs, unit, compact, extra, icon }: { l
 
   const n = probs.length;
   const inside = probs.filter((p) => p >= lo - 1e-9 && p <= hi + 1e-9).length;
-  const text = !on ? "All" : g.lo !== undefined && g.hi !== undefined ? `${Math.round(lo * 100)}–${P(hi)}` : g.lo !== undefined ? `≥ ${P(lo)}` : `≤ ${P(hi)}`;
+  const text = !on ? "All" : g.lo !== undefined && g.hi !== undefined ? fmt ? `${P(lo)}–${P(hi)}` : `${Math.round(lo * 100)}–${P(hi)}` : g.lo !== undefined ? `≥ ${P(lo)}` : `≤ ${P(hi)}`;
   // distribution ticks (one per 2%)
   const hist = new Array(50).fill(0);
   for (const p of probs) hist[Math.min(49, Math.floor(p * 50))]++;
@@ -254,10 +284,10 @@ export function GateBar({ layer, title, probs, unit, compact, extra, icon }: { l
             {inside}/{n}
           </span>
           <span class="mlg-btns">
-            <button class={`lg-btn ${sc ? "on" : ""}`} title="Scrub: lock the window width — dragging a handle (or the window) sweeps it through the probabilities" onClick={() => (scrub.value = { ...scrub.value, [layer]: !sc })}>
+            <button class={`lg-btn ${sc ? "on" : ""}`} title={`Scrub: lock the window width — dragging a handle (or the window) sweeps it through ${what}`} onClick={() => (scrub.value = { ...scrub.value, [layer]: !sc })}>
               <MoveHorizontal size={12} />
             </button>
-            <button class={`lg-btn ${playing ? "on" : ""}`} title={playing ? "Stop the sweep" : "Sweep the window through the probabilities"} onClick={play}>
+            <button class={`lg-btn ${playing ? "on" : ""}`} title={playing ? "Stop the sweep" : `Sweep the window through ${what}`} onClick={play}>
               {playing ? <Pause size={11} /> : <Play size={11} />}
             </button>
             {(on || g.off) && (
@@ -275,15 +305,15 @@ export function GateBar({ layer, title, probs, unit, compact, extra, icon }: { l
         </div>
       )}
       <div class="mlg-bar lbar" ref={bar} onWheel={wheel("win") as any}>
-        <div class="bar" style={{ background: GRAD }} />
+        <div class="bar" style={{ background: grad }} />
         <div class="mlg-hist">
           {hist.map((h, i) => (h ? <i key={i} style={{ left: `${i * 2}%`, height: `${3 + (h / hmax) * 11}px` }} /> : null))}
         </div>
         {on && !g.off && lo > 0 && <div class="lg-mask" style={{ left: 0, width: pct(lo) }} />}
         {on && !g.off && hi < 1 && <div class="lg-mask" style={{ left: pct(hi), width: pct(1 - hi) }} />}
         {on && !g.off && <div class="mlg-win" style={{ left: pct(lo), width: pct(hi - lo) }} onPointerDown={startDrag("win") as any} title="Drag to move the window" />}
-        <div class={`lg-h lo ${g.lo !== undefined && !g.off ? "set" : ""}`} style={{ left: pct(lo) }} title="Hide below (drag, scroll)" onPointerDown={startDrag("lo") as any} onWheel={wheel("lo") as any} />
-        <div class={`lg-h hi ${g.hi !== undefined && !g.off ? "set" : ""}`} style={{ left: pct(hi) }} title="Hide above (drag, scroll)" onPointerDown={startDrag("hi") as any} onWheel={wheel("hi") as any} />
+        <div class={`lg-h lo ${g.lo !== undefined && !g.off ? "set" : ""}`} style={{ left: pct(lo) }} title={`${tips?.[0] ?? "Hide below"} (drag, scroll)`} onPointerDown={startDrag("lo") as any} onWheel={wheel("lo") as any} />
+        <div class={`lg-h hi ${g.hi !== undefined && !g.off ? "set" : ""}`} style={{ left: pct(hi) }} title={`${tips?.[1] ?? "Hide above"} (drag, scroll)`} onPointerDown={startDrag("hi") as any} onWheel={wheel("hi") as any} />
         {tip !== null && (
           <div class="lg-tip" style={{ left: pct(Math.max(0.08, Math.min(0.92, tip))) }}>
             {text}
@@ -291,8 +321,8 @@ export function GateBar({ layer, title, probs, unit, compact, extra, icon }: { l
         )}
       </div>
       <div class="lticks">
-        {[0, 25, 50, 75, 100].map((v) => (
-          <span key={v}>{v}%</span>
+        {(tickLabels ?? ["0%", "25%", "50%", "75%", "100%"]).map((v, i) => (
+          <span key={i}>{v}</span>
         ))}
       </div>
     </div>
