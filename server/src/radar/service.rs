@@ -726,6 +726,29 @@ impl RadarService {
         Ok(b)
     }
 
+    /// 0.8.3 3d: 3D grid of a live (in-progress) volume. Cached per number of sweeps received, so a
+    /// volume that grows is re-encoded once per new tilt instead of on every request, and encoded
+    /// under the decode limiter (it used to run unbounded, holding the live site's lock each time).
+    pub async fn volume3d_live(&self, live: Arc<super::live::LiveManager>, key: &str, moment: &str, res: &str) -> Result<Bytes> {
+        let res = if res.eq_ignore_ascii_case("hi") { "hi" } else { "lo" };
+        let moment = moment.to_ascii_uppercase();
+        let nsw = live.with_volume(key, |v| Ok(v.sweeps.len()))?;
+        let ck = live3d_key(key, &moment, res, nsw);
+        if let Some(b) = self.vol3d.lock().get(&ck) {
+            return Ok(b);
+        }
+        let _permit = self.decode.sem.clone().acquire_owned().await?;
+        if let Some(b) = self.vol3d.lock().get(&ck) {
+            return Ok(b);
+        }
+        let (k, m) = (key.to_string(), moment.clone());
+        let (b, n) = tokio::task::spawn_blocking(move || live.with_volume(&k, |v| Ok((super::volume3d::encode(v, &m, res)?, v.sweeps.len())))).await??;
+        let b = Bytes::from(b);
+        // stored under the sweep count it was built from (more may have arrived meanwhile)
+        self.vol3d.lock().put(live3d_key(key, &moment, res, n), b.clone(), b.len());
+        Ok(b)
+    }
+
     /// Rotation detections (GeoJSON) for a volume.
     pub async fn rotation(&self, key: &str) -> Result<Bytes> {
         let (id, odim) = self.cache_id(key).await?;
@@ -925,6 +948,24 @@ fn evict(dir: &std::path::Path, cap: u64) {
         if std::fs::remove_file(&p).is_ok() {
             total -= len;
         }
+    }
+}
+
+/// 0.8.3 3d: cache key of a live volume's 3D grid (changes with every new sweep).
+fn live3d_key(key: &str, moment: &str, res: &str, sweeps: usize) -> String {
+    format!("{key}#{sweeps}|{moment}|{res}")
+}
+
+#[cfg(test)]
+mod live3d_tests {
+    use super::*;
+    #[test]
+    fn live_3d_key_follows_sweep_count() {
+        let a = live3d_key("live:KTLX:12", "REF", "lo", 3);
+        assert_ne!(a, live3d_key("live:KTLX:12", "REF", "lo", 4), "a new tilt means a new grid");
+        assert_ne!(a, live3d_key("live:KTLX:12", "VEL", "lo", 3));
+        assert_ne!(a, live3d_key("live:KTLX:12", "REF", "hi", 3));
+        assert_eq!(a, live3d_key("live:KTLX:12", "REF", "lo", 3));
     }
 }
 

@@ -27,6 +27,7 @@ import { OVERLAYS } from "../overlays/defs";
 import { fileOverlays } from "../overlays/files";
 import { dropPane } from "../map/panesync";
 import "./panes082.css";
+import { Pane3DBtn } from "./View3D"; // 0.8.3 3d
 
 /** Product dropdown options: Level II moments, Level III families (for the site's radar type), gridded layers.
  * 0.8.2: as data for the searchable dropdown (same groups and labels as before). */
@@ -496,6 +497,7 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
           <>
             <LinkControls onLayers={(x, y) => setMenu({ x, y })} />
             <span class="lk8-icons">
+              <Pane3DBtn idx={idx} /* 0.8.3 3d */ />
               <MlToggle idx={idx} what="This window" />
             </span>
           </>
@@ -503,6 +505,7 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
           <span class="ph-tools">
             {!swipe && <LinkToggles lk={lk} set={(l) => setPaneLink(idx, l)} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
             {swipe && <LinkToggles lk={{ ...lk, pos: true }} set={(l) => setPaneLink(idx, { ...l, pos: true })} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
+            <Pane3DBtn idx={idx} /* 0.8.3 3d */ />
             <MlToggle idx={idx} what={`Pane ${idx + 1}`} />
             <button class="lk8 pane-out" title="Pop this pane out into its own window" aria-label={`Pop out pane ${idx + 1}`} onClick={() => popOutPane(idx)}>
               <ExternalLink size={11} />

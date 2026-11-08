@@ -973,7 +973,11 @@ export class Volume3DLayer implements CustomLayerInterface {
   }
 
   setVolume(v: Volume | null) {
-    if (v !== this.vol) this.tops.clear();
+    if (v !== this.vol) {
+      this.tops.clear();
+      // 0.8.3 3d: an upload error (too big for this GPU) belonged to that volume, not to the next one
+      if (v && this.error && !this.error.startsWith("3D shader")) this.error = null;
+    }
     this.vol = v;
     this.map?.triggerRepaint();
   }

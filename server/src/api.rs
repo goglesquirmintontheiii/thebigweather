@@ -597,13 +597,8 @@ async fn radar_volume3d(State(st): St, Query(q): Query<Vol3dQ>) -> Result<Respon
     let res = q.res.unwrap_or_else(|| "lo".into());
     let live = q.key.starts_with("live:");
     let body = if live {
-        let lm = st.live.clone();
-        let k = q.key.clone();
-        Bytes::from(
-            tokio::task::spawn_blocking(move || lm.with_volume(&k, |v| crate::radar::volume3d::encode(v, &moment, &res)))
-                .await
-                .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??,
-        )
+        // 0.8.3 3d: cached per sweep count and run under the decode limiter (see volume3d_live)
+        st.radar.volume3d_live(st.live.clone(), &q.key, &moment, &res).await?
     } else {
         st.radar.volume3d(&q.key, &moment, &res).await?
     };
