@@ -153,6 +153,56 @@ pub fn field_value(o: &Obs, field: &str) -> f32 {
 const RES: f64 = 0.1;
 const RADIUS_DEG: f64 = 1.6;
 
+/// One Barnes weighting pass: (weight sum, weighted value sum) per cell. 0.8.3: computed row by
+/// row in parallel (each row gathers the stations within the radius) instead of one thread
+/// scattering every station; a global analysis frame took seconds and stalled loops.
+fn barnes_pass(values: &[(f64, f64, f32)], k: f64, nx: usize, ny: usize, lat_n: f64) -> (Vec<f32>, Vec<f32>) {
+    let r_cells = (RADIUS_DEG / RES).ceil() as isize;
+    // stations bucketed by their row (rows -r..ny+r can reach the grid)
+    let nb = ny + 2 * r_cells as usize;
+    let mut rows: Vec<Vec<(f64, f64, f32, isize, isize, f64)>> = vec![vec![]; nb];
+    for &(lat, lon, v) in values {
+        let cj = ((lat_n - lat) / RES) as isize;
+        let b = cj + r_cells;
+        if b < 0 || b >= nb as isize {
+            continue;
+        }
+        let ci = ((lon + 180.0) / RES) as isize;
+        let coslat = lat.to_radians().cos().max(0.2);
+        let ri = (r_cells as f64 / coslat).ceil() as isize;
+        rows[b as usize].push((lat, lon, v, ci, ri, coslat));
+    }
+    let mut wsum = vec![0f32; nx * ny];
+    let mut vsum = vec![0f32; nx * ny];
+    wsum.par_chunks_mut(nx).zip(vsum.par_chunks_mut(nx)).enumerate().for_each(|(j, (wr, vr))| {
+        let glat = lat_n - (j as f64 + 0.5) * RES;
+        // bucket b holds row cj = b - r; rows j-r..=j+r reach row j
+        for b in j..=j + 2 * r_cells as usize {
+            for &(lat, lon, v, ci, ri, coslat) in &rows[b] {
+                for di in -ri..=ri {
+                    let i = (ci + di).rem_euclid(nx as isize);
+                    let glon = -180.0 + (i as f64 + 0.5) * RES;
+                    let mut dlon = glon - lon;
+                    if dlon > 180.0 {
+                        dlon -= 360.0;
+                    }
+                    if dlon < -180.0 {
+                        dlon += 360.0;
+                    }
+                    let d2 = (glat - lat).powi(2) + (dlon * coslat).powi(2);
+                    if d2 > RADIUS_DEG * RADIUS_DEG {
+                        continue;
+                    }
+                    let w = (-d2 / k).exp() as f32;
+                    wr[i as usize] += w;
+                    vr[i as usize] += w * v;
+                }
+            }
+        }
+    });
+    (wsum, vsum)
+}
+
 /// Two-pass Barnes analysis on a global 0.1° grid (cells far from any station stay empty).
 pub fn analyze(obs: &[Obs], field: &str, time: i64) -> Grid {
     let pts: Vec<(f64, f64, f32)> = obs
@@ -172,44 +222,7 @@ pub fn analyze(obs: &[Obs], field: &str, time: i64) -> Grid {
     let ny = ((lat_n - lat_s) / RES) as usize;
     let proj = Proj::LatLon { lat0: lat_n - RES / 2.0, lon0: -180.0 + RES / 2.0, dlat: -RES, dlon: RES, nx, global: true };
     let k0 = (0.6f64).powi(2); // weight length scale (deg²)
-    let pass = |values: &[(f64, f64, f32)], k: f64| -> (Vec<f32>, Vec<f32>) {
-        let mut wsum = vec![0f32; nx * ny];
-        let mut vsum = vec![0f32; nx * ny];
-        let r_cells = (RADIUS_DEG / RES).ceil() as isize;
-        for &(lat, lon, v) in values {
-            let cj = ((lat_n - lat) / RES) as isize;
-            let ci = ((lon + 180.0) / RES) as isize;
-            let coslat = lat.to_radians().cos().max(0.2);
-            let ri = (r_cells as f64 / coslat).ceil() as isize;
-            for dj in -r_cells..=r_cells {
-                let j = cj + dj;
-                if j < 0 || j >= ny as isize {
-                    continue;
-                }
-                let glat = lat_n - (j as f64 + 0.5) * RES;
-                for di in -ri..=ri {
-                    let i = (ci + di).rem_euclid(nx as isize);
-                    let glon = -180.0 + (i as f64 + 0.5) * RES;
-                    let mut dlon = glon - lon;
-                    if dlon > 180.0 {
-                        dlon -= 360.0;
-                    }
-                    if dlon < -180.0 {
-                        dlon += 360.0;
-                    }
-                    let d2 = (glat - lat).powi(2) + (dlon * coslat).powi(2);
-                    if d2 > RADIUS_DEG * RADIUS_DEG {
-                        continue;
-                    }
-                    let w = (-d2 / k).exp() as f32;
-                    let idx = j as usize * nx + i as usize;
-                    wsum[idx] += w;
-                    vsum[idx] += w * v;
-                }
-            }
-        }
-        (wsum, vsum)
-    };
+    let pass = |values: &[(f64, f64, f32)], k: f64| barnes_pass(values, k, nx, ny, lat_n);
     let (w1, v1) = pass(&pts, k0);
     let first: Vec<f32> = w1.par_iter().zip(&v1).map(|(&w, &v)| if w > 0.005 { v / w } else { f32::NAN }).collect();
     // residuals at stations (nearest cell)
@@ -667,6 +680,53 @@ mod tests {
         let v = g.sample(40.0, -100.0).unwrap();
         assert!((v - 10.0).abs() < 3.0, "{v}");
         assert!(g.sample(0.0, 0.0).is_none());
+    }
+
+    /// 0.8.3: the row-parallel pass matches the original single-thread scatter
+    #[test]
+    fn barnes_pass_matches_scatter() {
+        let (nx, ny, lat_n) = (3600usize, 1350usize, 75.0f64);
+        let (res, rad) = (super::RES, super::RADIUS_DEG);
+        let pts: Vec<(f64, f64, f32)> = vec![(40.0, -100.0, 10.0), (40.05, -99.95, 12.0), (74.9, 179.9, -20.0), (76.0, 10.0, -5.0), (-59.0, -179.95, 3.0), (0.0, 0.0, 1.0)];
+        let k = 0.36;
+        let (w, v) = super::barnes_pass(&pts, k, nx, ny, lat_n);
+        let mut ws = vec![0f32; nx * ny];
+        let mut vs = vec![0f32; nx * ny];
+        let r = (rad / res).ceil() as isize;
+        for &(lat, lon, val) in &pts {
+            let cj = ((lat_n - lat) / res) as isize;
+            let ci = ((lon + 180.0) / res) as isize;
+            let c = lat.to_radians().cos().max(0.2);
+            let ri = (r as f64 / c).ceil() as isize;
+            for dj in -r..=r {
+                let j = cj + dj;
+                if j < 0 || j >= ny as isize {
+                    continue;
+                }
+                let glat = lat_n - (j as f64 + 0.5) * res;
+                for di in -ri..=ri {
+                    let i = (ci + di).rem_euclid(nx as isize);
+                    let mut dlon = -180.0 + (i as f64 + 0.5) * res - lon;
+                    if dlon > 180.0 {
+                        dlon -= 360.0;
+                    }
+                    if dlon < -180.0 {
+                        dlon += 360.0;
+                    }
+                    let d2 = (glat - lat).powi(2) + (dlon * c).powi(2);
+                    if d2 > rad * rad {
+                        continue;
+                    }
+                    let wt = (-d2 / k).exp() as f32;
+                    ws[j as usize * nx + i as usize] += wt;
+                    vs[j as usize * nx + i as usize] += wt * val;
+                }
+            }
+        }
+        for i in 0..nx * ny {
+            assert!((w[i] - ws[i]).abs() < 1e-5 && (v[i] - vs[i]).abs() < 1e-4, "cell {i}: {} {} vs {} {}", w[i], v[i], ws[i], vs[i]);
+        }
+        assert!(w.iter().filter(|x| **x > 0.0).count() > 1000);
     }
 
     #[test]

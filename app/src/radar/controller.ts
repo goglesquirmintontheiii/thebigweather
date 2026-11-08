@@ -184,13 +184,32 @@ const sweepCache = new Map<string, Sweep>();
 const SWEEP_CACHE_MAX = 60;
 
 function cacheSweep(k: string, s: Sweep) {
+  sweepCache.delete(k);
   sweepCache.set(k, s);
   if (sweepCache.size > SWEEP_CACHE_MAX) {
     const first = sweepCache.keys().next().value!;
     const old = sweepCache.get(first);
     sweepCache.delete(first);
-    if (old && layer) layer.release(old);
+    // 0.8.3: panes share this cache; their sweeps pushed the main loop's out and freed its GPU
+    // copies while the loop still showed them (every reflectivity frame re-uploaded, playback crawled)
+    if (old && layer && !sweepInUse(old)) layer.release(old);
   }
+}
+/** 0.8.3: is a sweep still drawn by the main map (loop frames, live sweep, extra radars)? */
+function sweepInUse(s: Sweep): boolean {
+  if (liveSweep.peek() === s) return true;
+  if (frames.peek().some((f) => f.sweep === s)) return true;
+  for (const fs of Object.values(extraFrames.peek())) if (fs.some((f) => f.sweep === s)) return true;
+  return false;
+}
+/** 0.8.3: cache hit = most recently used (it was first-in-first-out, so the oldest loop frames were dropped first) */
+function cachedSweep(k: string): Sweep | undefined {
+  const c = sweepCache.get(k);
+  if (c) {
+    sweepCache.delete(k);
+    sweepCache.set(k, c);
+  }
+  return c;
 }
 
 let layer: RadarLayer | null = null;
@@ -274,7 +293,7 @@ async function loadL2Sweep(key: string, moment0: string, angle: number, fresh = 
   if (!t) return undefined;
   const ck = `${key}|${t.index}|${moment}${p8q}`;
   if (!fresh) {
-    const c = sweepCache.get(ck);
+    const c = cachedSweep(ck);
     if (c) return c;
   }
   const buf = await api.bin(`/api/radar/sweep?key=${encodeURIComponent(key)}&tilt=${t.index}&moment=${moment}${p8q}`);
@@ -284,7 +303,7 @@ async function loadL2Sweep(key: string, moment0: string, angle: number, fresh = 
 }
 
 async function loadL3(key: string): Promise<Sweep> {
-  const c = sweepCache.get(key);
+  const c = cachedSweep(key);
   if (c) return c;
   const buf = await api.bin(`/api/l3/data?key=${encodeURIComponent(key)}`);
   const s = parseSweep(buf, key);

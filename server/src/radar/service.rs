@@ -181,6 +181,9 @@ pub struct RadarService {
     denied: Mutex<std::collections::HashMap<String, std::time::Instant>>,
     /// day listings: (site/day) → (fetched, entries)
     list_cache: Mutex<lru::LruCache<String, (std::time::Instant, Arc<Vec<VolEntry>>)>>,
+    /// 0.8.3: one download + decode per volume at a time (the main map and panes on the same
+    /// site used to fetch and decode the same file side by side)
+    vol_inflight: Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// Current buckets first: NOAA moved the Level II archive to `unidata-nexrad-level2` (the
@@ -274,6 +277,7 @@ impl RadarService {
             l3_catalog,
             denied: Mutex::new(std::collections::HashMap::new()),
             list_cache: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(4096).unwrap())),
+            vol_inflight: Mutex::new(std::collections::HashMap::new()),
         }
         .with_budget(memory_mb)
     }
@@ -561,6 +565,26 @@ impl RadarService {
         if let Some(v) = self.volumes.lock().get(id) {
             return Ok(v);
         }
+        let lock = self.vol_inflight.lock().entry(id.to_string()).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone();
+        let res = {
+            let _g = lock.lock().await;
+            let hit = self.volumes.lock().get(id);
+            match hit {
+                Some(v) => Ok(v),
+                None => self.volume_load(key, id, odim).await,
+            }
+        };
+        {
+            let mut m = self.vol_inflight.lock();
+            // the map's own reference and ours: nobody else is waiting
+            if Arc::strong_count(&lock) <= 2 {
+                m.remove(id);
+            }
+        }
+        res
+    }
+
+    async fn volume_load(&self, key: &str, id: &str, odim: Option<OdimFiles>) -> Result<Arc<Volume>> {
         if let Some((src, site, files)) = odim {
             let raws = self.odim.fetch(src, &files).await?;
             let _permit = self.decode.sem.clone().acquire_owned().await?;

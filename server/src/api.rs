@@ -216,6 +216,7 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/camimg", get(camimg))
         .route("/intlradar", get(intl_list))
         .route("/intlradar/img", get(intl_img))
+        .route("/rainviewer/radars", get(rainviewer_radars)) // 0.8.3
         .route("/shake/channels", get(shake_channels))
         .route("/shake/data", get(shake_data))
         .route("/hist/warnings", get(hist_warnings))
@@ -832,6 +833,11 @@ struct IntlQ {
 /// International radar sources drawn as raster frames (tiles / images / WMS).
 async fn intl_list(State(st): St, Query(q): Query<IntlQ>) -> Result<Json<Value>, ApiError> {
     Ok(Json(st.intl.list(q.id.as_deref().filter(|s| !s.is_empty())).await?))
+}
+
+/// 0.8.3: RainViewer single-site radars outside the US (positions, whether the index lists them).
+async fn rainviewer_radars(State(st): St) -> Json<Value> {
+    Json(st.intl.rv.radars().await)
 }
 
 #[derive(Deserialize)]

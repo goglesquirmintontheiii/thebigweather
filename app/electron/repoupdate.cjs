@@ -312,4 +312,68 @@ function portableSwapScript(newExe, exe) {
   ].join("\r\n");
 }
 
-module.exports = { REPO, BRANCH, parseSemver, cmpVersion, pickUpdate, parseManifest, ASSET_PREFIX, OLD_ASSET_PREFIX, appAssetName, appAssetNames, pickAssetName, ymlVersion, parseSums, getText, buildsInfo, hashRange, downloadAsset, installAppImage, dirWritable, portableSwapScript };
+// ---------- 0.8.3: restarting after an update ----------
+/** env var naming the old process; the new instance waits for it to exit before taking the
+ * single-instance lock (otherwise it starts while the old one still holds it, hands its
+ * arguments to the dying instance and quits: "had to open the app again after the update") */
+const WAIT_PID_ENV = "TBW_WAIT_PID";
+const RELAUNCH_FLAG = "--updated-relaunch";
+
+/**
+ * How to start the replaced AppImage: the AppImage file itself ($APPIMAGE; process.execPath
+ * points into the old, soon unmounted squashfs), the same arguments, and an environment
+ * without the old mount's variables.
+ * @returns {{cmd: string, args: string[], env: Record<string, string>} | null}
+ */
+function appImageRelaunch({ appImage, argv = [], env = {}, pid }) {
+  if (!appImage || typeof appImage !== "string" || !path.isAbsolute(appImage)) return null;
+  const appDir = env.APPDIR || "";
+  const out = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v == null) continue;
+    // the AppImage runtime sets these for the mount it starts; Electron/Chromium internals
+    if (["APPDIR", "APPIMAGE", "ARGV0", "OWD", "ELECTRON_RUN_AS_NODE", "ELECTRON_NO_ATTACH_CONSOLE", "CHROME_DESKTOP", "ORIGINAL_XDG_CURRENT_DESKTOP"].includes(k)) continue;
+    out[k] = String(v);
+  }
+  // library / binary paths into the old mount would point at nothing once it's gone
+  if (appDir)
+    for (const k of ["LD_LIBRARY_PATH", "PATH", "XDG_DATA_DIRS", "PYTHONPATH", "GSETTINGS_SCHEMA_DIR", "QT_PLUGIN_PATH", "PERLLIB"]) {
+      if (out[k] == null) continue;
+      const kept = out[k].split(":").filter((p) => p && p !== appDir && !p.startsWith(appDir.endsWith("/") ? appDir : appDir + "/"));
+      if (kept.length) out[k] = kept.join(":");
+      else delete out[k];
+    }
+  if (pid) out[WAIT_PID_ENV] = String(pid);
+  const args = argv.filter((a) => a !== RELAUNCH_FLAG && !/^--(type|inspect|remote-debugging-port)=/.test(a));
+  args.push(RELAUNCH_FLAG);
+  return { cmd: appImage, args, env: out };
+}
+
+/**
+ * Wait (synchronously, it runs before the single-instance lock) until process `pid` is gone.
+ * @param {{pid: number, self?: number, timeoutMs?: number, alive?: (pid: number) => boolean, sleep?: (ms: number) => void, now?: () => number}} o
+ * @returns {"none" | "exited" | "timeout"}
+ */
+function waitForExit({ pid, self = process.pid, timeoutMs = 20000, alive = pidAlive, sleep = sleepSync, now = Date.now }) {
+  if (!Number.isInteger(pid) || pid <= 1 || pid === self) return "none";
+  if (!alive(pid)) return "exited";
+  const end = now() + timeoutMs;
+  while (now() < end) {
+    sleep(100);
+    if (!alive(pid)) return "exited";
+  }
+  return "timeout";
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return !!(e && e.code === "EPERM");
+  }
+}
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+module.exports = { WAIT_PID_ENV, RELAUNCH_FLAG, appImageRelaunch, waitForExit, REPO, BRANCH, parseSemver, cmpVersion, pickUpdate, parseManifest, ASSET_PREFIX, OLD_ASSET_PREFIX, appAssetName, appAssetNames, pickAssetName, ymlVersion, parseSums, getText, buildsInfo, hashRange, downloadAsset, installAppImage, dirWritable, portableSwapScript };
