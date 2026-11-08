@@ -3,7 +3,7 @@
 import { details, type DetailItem } from "../store";
 import { alerts } from "../alerts";
 import { fmtTime } from "../util";
-import { zoomToGeometry } from "./panels/AlertsPanel";
+import { zoomToGeometry, alertTypeMenu } from "./panels/AlertsPanel"; // 0.8.2: alertTypeMenu
 import { X, Maximize2, ChevronLeft, ChevronRight, ExternalLink } from "lucide-preact";
 import { useEffect } from "preact/hooks";
 import { History } from "lucide-preact"; // history 0.6
@@ -26,7 +26,14 @@ function AlertBody({ id, nav }: { id: string; nav: any }) {
   if (fl.max_wind) facts.push(["Max wind", fl.max_wind]);
   return (
     <div class="alert-detail glass" style={{ "--c": p.color }}>
-      <div class="ad-head">
+      {/* 0.8.2: right-click → layer options for this type */}
+      <div
+        class="ad-head"
+        onContextMenu={(e) => {
+          e.preventDefault();
+          alertTypeMenu.value = { x: e.clientX, y: e.clientY, types: [p.event] };
+        }}
+      >
         <span class="bar" />
         <div>
           <h3>{p.event}</h3>
@@ -37,8 +44,8 @@ function AlertBody({ id, nav }: { id: string; nav: any }) {
           {nav}
         </div>
         {/* history 0.6: replay this alert's event ± before/after */}
-        <button class="btn sm ghost ad-replay" title={`Replay this in history mode: pick the window (default ${beforeAfter().before} min before it began to ${beforeAfter().after} min after it ended), on the nearest radar`} aria-expanded={replay} onClick={() => setReplay(!replay)}>
-          <History size={13} /> Replay this
+        <button class="btn sm ghost ad-replay" title={`Replay in history mode: pick the window (default ${beforeAfter().before} min before it began to ${beforeAfter().after} min after it ended), on the nearest radar`} aria-expanded={replay} onClick={() => setReplay(!replay)}>
+          <History size={13} /> Replay
         </button>
         {replay && <ReplayPopover a={a} onClose={() => setReplay(false)} />}
         <button class="icon-btn" title="Zoom to" onClick={() => zoomToGeometry(a.geometry)}>
@@ -61,8 +68,25 @@ function AlertBody({ id, nav }: { id: string; nav: any }) {
       <div class="ad-body">
         {p.nws_headline && <p class="hl">{p.nws_headline}</p>}
         <p class="area">{p.areaDesc}</p>
-        <pre>{p.description}</pre>
+        <pre>{p.description || (p.headline && p.headline !== p.event ? p.headline : "")}</pre>
         {p.instruction && <pre class="instr">{p.instruction}</pre>}
+        {/* 0.8.2: Canada / international: source, unmapped areas, links */}
+        {p.geom_note && <p class="muted small">{p.geom_note}</p>}
+        {p.attribution && <p class="muted small ad-attr">Source: {p.attribution}</p>}
+        {(p.link || p.cap_url) && (
+          <div class="pop-actions">
+            {p.link && (
+              <button class="btn sm ghost" onClick={() => window.open(p.link, "_blank")}>
+                <ExternalLink size={13} /> Details
+              </button>
+            )}
+            {p.cap_url && (
+              <button class="btn sm ghost" onClick={() => window.open(p.cap_url, "_blank")}>
+                <ExternalLink size={13} /> CAP message
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,7 +1,10 @@
 // Weather alert settings: show/hide by category or type, colors, borders, fill patterns, sounds
 // and flashing for new alerts.
 
-import { useState, useMemo } from "preact/hooks";
+import { useState, useMemo, useEffect, useRef } from "preact/hooks";
+import { signal } from "@preact/signals"; // 0.8.2
+import { configModal } from "./OverlayList"; // 0.8.2
+import { REGIONS, REGION_LABEL, regionOf, type AlertRegion } from "../alertlist"; // 0.8.2
 import { VoiceSettings } from "./VoiceSettings"; // radio/dash 0.8
 import { settings, update, type AlertTypeCfg } from "../store";
 import { ALERT_COLORS, alerts } from "../alerts";
@@ -9,6 +12,34 @@ import { ALERT_CATS, alertCategory, alertStyle } from "../alertstyle";
 import { ALERT_SOUNDS, playNamed } from "../sound";
 import { StyleControls } from "./OverlayList";
 import { Search, Play, RotateCcw } from "lucide-preact";
+
+/* ---------- 0.8.2: right-click an alert → "Layer options for "<type>"..." ---------- */
+/** the type to scroll to and highlight when the window opens (n changes on every request) */
+export const alertCfgFocus = signal<{ name: string; n: number } | null>(null);
+let focusHandled = 0;
+export function openAlertLayerOptions(event: string) {
+  alertCfgFocus.value = { name: event, n: (alertCfgFocus.peek()?.n ?? 0) + 1 };
+  configModal.value = "base:alerts";
+}
+
+/** United States / Canada / International switches */
+function Regions() {
+  const r = settings.value.alertCfg.regions ?? {};
+  const n: Record<AlertRegion, number> = { us: 0, ca: 0, intl: 0 };
+  for (const a of alerts.value.values()) n[regionOf(a.properties)]++;
+  return (
+    <div class="al-regsw">
+      {REGIONS.map((k) => (
+        <label key={k} class="chk" title={k === "intl" ? "Fetched only while the map looks there or the International alerts tab is open" : undefined}>
+          <input type="checkbox" checked={r[k] !== false} onChange={(e) => setCfg((c) => (c.regions = { ...(c.regions ?? {}), [k]: (e.target as HTMLInputElement).checked }))} />
+          {REGION_LABEL[k]}
+          {n[k] > 0 && <small class="muted">{n[k]}</small>}
+        </label>
+      ))}
+    </div>
+  );
+}
+/* ---------- end 0.8.2 ---------- */
 
 function setCfg(fn: (c: typeof settings.value.alertCfg) => void) {
   update((s) => {
@@ -224,14 +255,30 @@ export function AlertConfig() {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<{ kind: "cat" | "type"; name: string }>({ kind: "cat", name: ALERT_CATS[0] });
   const [open, setOpen] = useState<Record<string, boolean>>({ [ALERT_CATS[0]]: true });
+  // 0.8.2: jump to a type (from an alert's right-click menu): select it, open its category,
+  // scroll it into view and flash it
+  const [flash, setFlash] = useState("");
+  const listRef = useRef<HTMLDivElement>(null);
+  const focus = alertCfgFocus.value;
+  useEffect(() => {
+    if (!focus || focus.n === focusHandled) return;
+    focusHandled = focus.n;
+    const t = focus.name;
+    setQ("");
+    setSel({ kind: "type", name: t });
+    setOpen((o) => ({ ...o, [alertCategory(t)]: true }));
+    setFlash(t);
+    requestAnimationFrame(() => requestAnimationFrame(() => listRef.current?.querySelector(`[data-type="${CSS.escape(t)}"]`)?.scrollIntoView({ block: "center" })));
+    window.setTimeout(() => setFlash((f) => (f === t ? "" : f)), 2600);
+  }, [focus?.n]);
   // every known type plus whatever is active right now
   const active = new Map<string, number>();
   for (const a of alerts.value.values()) active.set(a.properties.event, (active.get(a.properties.event) ?? 0) + 1);
-  const types = useMemo(() => [...new Set([...Object.keys(ALERT_COLORS), ...active.keys()])].sort(), [alerts.value]);
+  const types = useMemo(() => [...new Set([...Object.keys(ALERT_COLORS), ...active.keys(), ...(sel.kind === "type" ? [sel.name] : [])])].sort(), [alerts.value, sel.name]);
   const qq = q.trim().toLowerCase();
   return (
     <div class="al-config">
-      <div class="al-list">
+      <div class="al-list" ref={listRef}>
         <div class="search">
           <Search size={13} />
           <input placeholder="Find an alert type" value={q} onInput={(e) => setQ((e.target as HTMLInputElement).value)} />
@@ -262,7 +309,7 @@ export function AlertConfig() {
               </div>
               {(open[cat] || qq) &&
                 list.map((t) => (
-                  <div key={t} class={`al-row type ${sel.kind === "type" && sel.name === t ? "sel" : ""} ${catHidden ? "dim" : ""}`}>
+                  <div key={t} data-type={t} class={`al-row type ${sel.kind === "type" && sel.name === t ? "sel" : ""} ${catHidden ? "dim" : ""} ${flash === t ? "al-flash" : ""}`}>
                     <input
                       type="checkbox"
                       checked={!cfg.hidden.includes(t)}
@@ -287,6 +334,10 @@ export function AlertConfig() {
       </div>
       <div class="al-side">
         <Editor target={sel} />
+        <section>
+          <label class="lbl">Countries</label>
+          <Regions />
+        </section>
         <section>
           <label class="lbl">All alerts</label>
           <StyleControls id="base:alerts" def={{ opacity: 1 }} generic={false} />

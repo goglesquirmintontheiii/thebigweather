@@ -6,7 +6,8 @@ import { api } from "./api";
 import { settings, toast } from "./store";
 import { pointInGeometry } from "./util";
 import { playAlertSound, playNamed } from "./sound";
-import { alertStyle, alertVisible } from "./alertstyle";
+import { alertStyle, alertVisible, regionOn } from "./alertstyle";
+import { regionOf, levelColor, levelBoost } from "./alertlist"; // 0.8.2
 
 export const ALERT_COLORS: Record<string, string> = {
   "Tornado Warning": "#ff0000",
@@ -62,8 +63,19 @@ export const ALERT_COLORS: Record<string, string> = {
   "Blowing Dust Advisory": "#bdb76b",
 };
 
+/** 0.8.2: default colours of non-NWS types (from the most severe level seen) for swatches */
+const EXTRA_COLORS = new Map<string, { c: string; rank: number }>();
+const LEVEL_RANK: Record<string, number> = { red: 5, orange: 4, yellow: 3, green: 2, minor: 1 };
+
 export function alertColor(event: string): string {
-  return ALERT_COLORS[event] ?? "#a0a0a0";
+  return ALERT_COLORS[event] ?? EXTRA_COLORS.get(event)?.c ?? "#a0a0a0";
+}
+
+/** 0.8.2: an alert's own default colour: NWS types by type, others (Canada / international) by
+ * awareness level / severity unless the type has an NWS colour. */
+export function alertOwnColor(p: any): string | undefined {
+  if (ALERT_COLORS[p.event] || regionOf(p) === "us") return undefined;
+  return levelColor(p.level, p.severity);
 }
 
 /** Higher draws on top and sorts first. */
@@ -79,6 +91,7 @@ export function alertPriority(f: any): number {
   else if (e.endsWith("Watch")) n = 40;
   else if (e.endsWith("Advisory")) n = 25;
   else if (e.endsWith("Statement")) n = 15;
+  if (regionOf(p) !== "us") n += levelBoost(p.level); // 0.8.2
   const fl = p.flags ?? {};
   if (fl.tornado_emergency || fl.flash_flood_emergency) n += 20;
   else if (fl.pds) n += 8;
@@ -125,7 +138,14 @@ export function decorateAlert(f: any) {
 }
 
 function decorate(f: any) {
-  f.properties.color = alertColor(f.properties.event);
+  // 0.8.2: non-NWS types get a level colour (kept per type for swatches: most severe seen)
+  const own = alertOwnColor(f.properties);
+  if (own) {
+    const r = LEVEL_RANK[f.properties.level] ?? 0;
+    const cur = EXTRA_COLORS.get(f.properties.event);
+    if (!cur || r > cur.rank) EXTRA_COLORS.set(f.properties.event, { c: own, rank: r });
+  }
+  f.properties.color = own ?? alertColor(f.properties.event);
   f.properties.priority = alertPriority(f);
   f.properties.tag = alertTag(f);
   return f;
@@ -169,7 +189,18 @@ function speak(fs: any[]) {
   if (parts.length) say(parts.join(" "), { rate: 1 });
 }
 
-function notifyNew(fs: any[]) {
+/** 0.8.2: regions switched off never notify; international alerts only when they cover a saved
+ * point (a yellow warning somewhere in Europe shouldn't ring) */
+function notifiable(f: any): boolean {
+  const r = regionOf(f.properties);
+  if (!regionOn(r)) return false;
+  if (r !== "intl") return true;
+  return settings.value.points.some((pt) => pointInGeometry(pt.lon, pt.lat, f.geometry));
+}
+
+function notifyNew(all: any[]) {
+  const fs = all.filter(notifiable); // 0.8.2
+  if (!fs.length) return;
   const s = settings.value;
   const played = typeSounds(fs);
   setTimeout(() => speak(fs), played ? 2600 : 0);
@@ -212,6 +243,7 @@ export function startAlerts() {
   };
   api.on("connected", load);
   load();
+  import("./alertdemand").then((m) => m.startAlertDemand()); // 0.8.2: Canada / international on demand
   api.on("alerts", (msg) => {
     const m = new Map(live);
     for (const id of msg.removed ?? []) m.delete(id);

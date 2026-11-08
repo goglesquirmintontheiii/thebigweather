@@ -3,17 +3,19 @@
 import type { Map as MLMap } from "maplibre-gl";
 import { settings, type AlertTypeCfg } from "./store";
 import { alertColor } from "./alerts";
+import { regionOf, type AlertRegion } from "./alertlist"; // 0.8.2
 
 export const ALERT_CATS = ["Tornado & severe", "Flood", "Tropical & marine", "Winter & cold", "Heat & fire", "Wind & dust", "Other"] as const;
 export type AlertCat = (typeof ALERT_CATS)[number];
 
 export function alertCategory(event: string): AlertCat {
   const e = event.toLowerCase();
-  if (/flood|hydrologic/.test(e)) return "Flood";
-  if (/tornado|severe thunderstorm|extreme wind|severe weather/.test(e)) return "Tornado & severe";
+  if (/freezing (rain|drizzle)/.test(e)) return "Winter & cold"; // 0.8.2
+  if (/flood|hydrologic|rain/.test(e)) return "Flood"; // 0.8.2: rain (international types)
+  if (/tornado|thunderstorm|extreme wind|severe weather|hail/.test(e)) return "Tornado & severe";
   if (/hurricane|tropical|typhoon|storm surge|marine|gale|small craft|storm warning|storm watch|hazardous seas|rip current|beach|tsunami|surf|seas|low water|brisk wind|freezing spray/.test(e)) return "Tropical & marine";
-  if (/winter|blizzard|ice|snow|freeze|frost|chill|cold|lake effect|sleet/.test(e)) return "Winter & cold";
-  if (/heat|red flag|fire/.test(e)) return "Heat & fire";
+  if (/winter|blizzard|ice|snow|freeze|frost|chill|cold|lake effect|sleet|avalanche|low temperature/.test(e)) return "Winter & cold";
+  if (/heat|red flag|fire|high temperature/.test(e)) return "Heat & fire";
   if (/wind|dust/.test(e)) return "Wind & dust";
   return "Other";
 }
@@ -23,9 +25,9 @@ export function alertKind(event: string): "warning" | "watch" | "other" {
 }
 
 /** Defaults before any user overrides. */
-function base(event: string): Required<AlertTypeCfg> {
+function base(event: string, own?: string): Required<AlertTypeCfg> {
   const k = alertKind(event);
-  const c = alertColor(event);
+  const c = own ?? alertColor(event);
   return {
     color: c,
     border: c,
@@ -38,10 +40,11 @@ function base(event: string): Required<AlertTypeCfg> {
   };
 }
 
-/** Effective style for an event: defaults ← category settings ← type settings. */
-export function alertStyle(event: string): Required<AlertTypeCfg> {
+/** Effective style for an event: defaults ← category settings ← type settings. `own` (0.8.2) is
+ * the alert's own default colour (Canada / international: by awareness level). */
+export function alertStyle(event: string, own?: string): Required<AlertTypeCfg> {
   const cfg = settings.value.alertCfg;
-  const out: any = { ...base(event) };
+  const out: any = { ...base(event, own) };
   const cat = cfg.cats[alertCategory(event)] ?? {};
   const t = cfg.types[event] ?? {};
   for (const src of [cat, t]) for (const [k, v] of Object.entries(src)) if (v !== undefined && v !== null && v !== "") out[k] = v;
@@ -53,6 +56,15 @@ export function alertStyle(event: string): Required<AlertTypeCfg> {
 export function alertVisible(event: string): boolean {
   const cfg = settings.value.alertCfg;
   return !cfg.hidden.includes(event) && !cfg.hiddenCats.includes(alertCategory(event));
+}
+
+/** 0.8.2: per-country switches (alert layer options); all on by default */
+export function regionOn(r: AlertRegion): boolean {
+  return settings.value.alertCfg.regions?.[r] !== false;
+}
+/** 0.8.2: drawn on the map: type / category shown and its region switched on */
+export function alertShown(p: any): boolean {
+  return alertVisible(p.event) && regionOn(regionOf(p));
 }
 
 /** Pattern image id for striped / checkered fills (drawn on demand by registerPatterns). */

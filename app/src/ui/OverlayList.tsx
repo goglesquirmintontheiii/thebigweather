@@ -211,7 +211,7 @@ function MyCamList() {
   const cams = settings.value.myCams;
   return (
     <div class="cam-srcs">
-      {cams.length === 0 && <div class="muted small">None yet. Right-click the map → Add camera here.</div>}
+      {cams.length === 0 && <div class="muted small">None yet. Right-click the map → + Camera.</div>} {/* 0.8.2 */}
       {cams.map((c) => (
         <div key={c.id} class="cam-src">
           <span title={c.url}>{c.name}</span>

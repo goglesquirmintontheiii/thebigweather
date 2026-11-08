@@ -11,10 +11,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub struct Alerts {
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     url: String,
     hub: Hub,
-    health: Arc<Health>,
+    pub(crate) health: Arc<Health>,
+    /// 0.8.2: Canada / international sources (alerts_intl.rs)
+    pub intl: crate::alerts_intl::Intl,
     zone_dir: PathBuf,
     /// id -> GeoJSON feature (with resolved geometry)
     pub current: RwLock<HashMap<String, Value>>,
@@ -24,7 +26,12 @@ pub struct Alerts {
 
 const NAME: &str = "NWS alerts";
 
-fn simplify_ring(pts: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
+/// 0.8.2: NWS alerts carry no `src` (older fixtures) or "nws"
+fn is_nws(f: &Value) -> bool {
+    matches!(f["properties"]["src"].as_str(), None | Some("nws"))
+}
+
+pub fn simplify_ring(pts: &[[f64; 2]], tol: f64) -> Vec<[f64; 2]> {
     if pts.len() <= 4 {
         return pts.to_vec();
     }
@@ -118,6 +125,7 @@ impl Alerts {
             current: RwLock::new(HashMap::new()),
             zone_cache: RwLock::new(HashMap::new()),
             poll_secs,
+            intl: crate::alerts_intl::Intl::new(true, true),
         })
     }
 
@@ -242,6 +250,10 @@ impl Alerts {
                 "nws_headline": p["parameters"]["NWSheadline"][0],
                 "from_zones": from_zones,
                 "flags": flags(p),
+                // 0.8.2: where it comes from (Alerts tab: United States / Canada / International)
+                "src": "nws",
+                "region": "us",
+                "country": "US",
             });
             let feat = json!({"type": "Feature", "id": id, "geometry": geom, "properties": props});
             if prev.is_some() {
@@ -251,14 +263,57 @@ impl Alerts {
             }
             next.insert(id, feat);
         }
-        let removed: Vec<String> = self.current.read().keys().filter(|k| !next.contains_key(*k)).cloned().collect();
+        // 0.8.2: only NWS alerts are replaced here (Canada / international come from alerts_intl.rs)
         let total = next.len();
-        *self.current.write() = next;
+        let removed: Vec<String> = {
+            let mut cur = self.current.write();
+            let removed: Vec<String> = cur.iter().filter(|(k, v)| is_nws(v) && !next.contains_key(*k)).map(|(k, _)| k.clone()).collect();
+            for k in &removed {
+                cur.remove(k);
+            }
+            cur.extend(next);
+            removed
+        };
         if !added.is_empty() || !updated.is_empty() || !removed.is_empty() {
             self.hub.send(json!({"type": "alerts", "added": added, "updated": updated, "removed": removed}));
         }
         self.health.ok("nws-alerts", NAME, format!("{total} active"));
         Ok(())
+    }
+
+    /// 0.8.2: replace one non-NWS source's alerts (`src` property) with `feats`; pushes the delta.
+    /// Unchanged alerts (same sent / expires / areas) aren't re-sent. Returns the active count.
+    pub fn apply_source(&self, src: &str, feats: Vec<Value>) -> usize {
+        let sig = |f: &Value| {
+            let p = &f["properties"];
+            format!("{}|{}|{}|{}|{}", p["sent"], p["expires"], p["areaDesc"].as_str().map(|s| s.len()).unwrap_or(0), p["event"], f["geometry"]["coordinates"].as_array().map(|a| a.len()).unwrap_or(0))
+        };
+        let mut added = vec![];
+        let mut updated = vec![];
+        let n = feats.len();
+        let removed: Vec<String> = {
+            let mut cur = self.current.write();
+            let mut keep = std::collections::HashSet::new();
+            for f in feats {
+                let Some(id) = f["properties"]["id"].as_str().map(String::from) else { continue };
+                keep.insert(id.clone());
+                match cur.get(&id) {
+                    Some(old) if sig(old) == sig(&f) => continue,
+                    Some(_) => updated.push(f.clone()),
+                    None => added.push(f.clone()),
+                }
+                cur.insert(id, f);
+            }
+            let removed: Vec<String> = cur.iter().filter(|(k, v)| v["properties"]["src"].as_str() == Some(src) && !keep.contains(*k)).map(|(k, _)| k.clone()).collect();
+            for k in &removed {
+                cur.remove(k);
+            }
+            removed
+        };
+        if !added.is_empty() || !updated.is_empty() || !removed.is_empty() {
+            self.hub.send(json!({"type": "alerts", "added": added, "updated": updated, "removed": removed}));
+        }
+        n
     }
 
     pub fn collection(&self) -> Value {

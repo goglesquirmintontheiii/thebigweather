@@ -4,6 +4,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod admin;
 mod alerts;
+mod alerts_cap; // 0.8.2
+mod alerts_intl; // 0.8.2
 mod caches;
 mod export;
 mod logbuf;
@@ -315,6 +317,10 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
     if let Some(f) = &cli.alerts_fixture {
         alerts.load_fixture(f)?;
         tracing::info!("loaded alert fixture {}", f.display());
+    }
+    alerts.intl.set_regions(cfg.alerts.canada, cfg.alerts.international); // 0.8.2
+    if cfg.alerts.canada || cfg.alerts.international {
+        alerts.spawn_intl(); // 0.8.2: Canada / international (on demand)
     }
     if cfg.alerts.enabled {
         alerts.spawn();

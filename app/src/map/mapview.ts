@@ -22,7 +22,8 @@ import { attachSoundingMap } from "../sounding/maplayer";
 import { frameIndex } from "../anim";
 import { sampleAt } from "../radar/sweep";
 import { alerts } from "../alerts";
-import { alertStyle, alertVisible, alertKind, patternId, registerPatterns } from "../alertstyle";
+import { alertStyle, alertShown, alertKind, patternId, registerPatterns } from "../alertstyle";
+import { alertOwnColor } from "../alerts"; // 0.8.2
 import { api } from "../api";
 import { distance, bearing, compass, fmtDist, circle, destination } from "../util";
 /* workflow 0.6: offline tiles, terrain, route/plugin layers, precip effect */
@@ -37,6 +38,8 @@ export const centerReadout = signal<{ value: number; range: number; az: number; 
 export const measurePts = signal<[number, number][]>([]);
 export const bearingInfo = signal<{ dist: number; brg: number } | null>(null);
 export const contextMenu = signal<{ x: number; y: number; lat: number; lon: number } | null>(null);
+/** 0.8.2: layers that pick an alert under the cursor (click / right-click) */
+export const ALERT_HIT_LAYERS = ["ovl-alerts-fill", "ovl-alerts-pattern", "ovl-alerts-pt"];
 /** map frames rendered in the last second (null = idle) */
 export const fps = signal<number | null>(null);
 /* ---------- workflow: map click hooks (return true to consume the click) ---------- */
@@ -117,6 +120,14 @@ function addOverlays(map: MLMap) {
       "line-width": ["case", ["has", "tag"], ["+", ["get", "lw"], 1.1], ["get", "lw"]],
       "line-dasharray": ["match", ["get", "ls"], "dashed", ["literal", [3, 2]], "dotted", ["literal", [0.6, 1.6]], ["literal", [1, 0]]],
     },
+  }, before);
+  // 0.8.2: alerts whose areas can't be mapped (some international feeds): a dot at the country centre
+  map.addLayer({
+    id: "ovl-alerts-pt",
+    type: "circle",
+    source: "alerts",
+    filter: ["==", ["geometry-type"], "Point"],
+    paint: { "circle-color": ["get", "fc"], "circle-radius": ["case", hover, 8, 6], "circle-stroke-color": ["get", "lc"], "circle-stroke-width": 1.5, "circle-opacity": 0.8 },
   }, before);
   // new alerts flash for a while (per-type setting)
   map.addLayer({
@@ -290,7 +301,7 @@ function refreshOverlayVisibility(map: MLMap) {
   const vis = (id: string, v: boolean) => map.getLayer(id) && map.setLayoutProperty(id, "visibility", v ? "visible" : "none");
   vis("ovl-counties", o.counties);
   vis("ovl-states", o.states);
-  for (const id of ["ovl-alerts-fill", "ovl-alerts-pattern", "ovl-alerts-casing", "ovl-alerts-line", "ovl-alerts-flash"]) vis(id, o.alerts);
+  for (const id of ["ovl-alerts-fill", "ovl-alerts-pattern", "ovl-alerts-casing", "ovl-alerts-line", "ovl-alerts-flash", "ovl-alerts-pt" /* 0.8.2 */]) vis(id, o.alerts);
   vis("ovl-rings", o.rings);
 }
 
@@ -309,11 +320,11 @@ function refreshAlerts(map: MLMap) {
   if (all.length) alertsPrimed = true;
   let flashing = false;
   const feats = all
-    .filter((f) => f.geometry && alertVisible(f.properties.event))
+    .filter((f) => f.geometry && alertShown(f.properties)) // 0.8.2: region switches
     .sort((a, b) => a.properties.priority - b.properties.priority)
     .map((f, i) => {
       const e: string = f.properties.event;
-      const st = alertStyle(e);
+      const st = alertStyle(e, alertOwnColor(f.properties)); // 0.8.2: level colour for non-NWS
       const seen = alertSeen.get(f.properties.id) ?? 0;
       const fl = st.flash > 0 && seen > 0 && now - seen < st.flash * 1000 ? 1 : 0;
       if (fl) flashing = true;
@@ -537,6 +548,7 @@ export function createMap(container: HTMLElement): MLMap {
   };
   map.on("mousemove", "ovl-alerts-fill", onAlertMove);
   map.on("mousemove", "ovl-alerts-pattern", onAlertMove);
+  map.on("mousemove", "ovl-alerts-pt", onAlertMove); // 0.8.2
   const onAlertLeave = () => {
     map.getCanvas().style.cursor = "";
     if (hovered !== undefined) map.setFeatureState({ source: "alerts", id: hovered }, { hover: false });
@@ -544,6 +556,7 @@ export function createMap(container: HTMLElement): MLMap {
   };
   map.on("mouseleave", "ovl-alerts-fill", onAlertLeave);
   map.on("mouseleave", "ovl-alerts-pattern", onAlertLeave);
+  map.on("mouseleave", "ovl-alerts-pt", onAlertLeave); // 0.8.2
 
   map.on("click", (e) => {
     contextMenu.value = null;
@@ -558,7 +571,7 @@ export function createMap(container: HTMLElement): MLMap {
     const pick = pickOverlay(e);
     if (pick.handled) return;
     // every alert under the cursor, most urgent first, then watches/storms/MDs from overlays
-    const layers = ["ovl-alerts-fill", "ovl-alerts-pattern"].filter((l) => map.getLayer(l));
+    const layers = ALERT_HIT_LAYERS.filter((l) => map.getLayer(l)); // 0.8.2
     const ids = [...new Set(map.queryRenderedFeatures(e.point, { layers }).map((f) => String(f.properties.id)))];
     const al = ids.map((id) => alerts.value.get(id)).filter(Boolean).sort((a: any, b: any) => b.properties.priority - a.properties.priority || String(b.properties.sent).localeCompare(String(a.properties.sent)));
     const items: DetailItem[] = [...al.map((a: any) => ({ kind: "alert" as const, id: a.properties.id })), ...pick.panel];

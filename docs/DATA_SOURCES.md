@@ -75,6 +75,17 @@ Every feed is public and keyless unless marked **key**. The server caches each o
 | YouTube recording | yt-dlp on the server (optional) | Check the stream owner's terms before recording |
 | Map search | Overpass API (overpass-api.de, overpass.private.coffee) | |
 
+## Weather alerts (0.8.2)
+
+| Alerts | Source | Notes |
+|---|---|---|
+| United States | api.weather.gov (NWS) | Polled all the time |
+| Canada | ECCC MSC GeoMet OGC API `weather-alerts` (Open Government Licence – Canada) | Fetched while Canada alerts are switched on in an app |
+| Europe (38 countries) | MeteoAlarm / EUMETNET "legacy" Atom feeds (CC BY 4.0 equivalent; content not modified) | EMMA_ID areas drawn from a simplified copy of MeteoAlarm's geocode set bundled with the server |
+| Other countries (~90 national services) | Official CAP 1.2 feeds from the WMO Register of Alerting Authorities (many mirrored on `cap-sources.s3.amazonaws.com` and `severeweather.wmo.int`) | Each alert names its issuing service. Areas: CAP polygons / circles; BoM AMOC codes from a bundled table; otherwise a dot at the country's centre |
+
+International sources are only fetched while an app looks at that country or has the Alerts tab's International list open; nobody asking for 30 minutes drops them.
+
 ## Not used, and why
 
 - **Blitzortung:** their terms limit raw data to project participants and forbid storm-warning use. GOES GLM covers lightning instead.

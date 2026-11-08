@@ -1213,7 +1213,7 @@ type Settings = typeof settings.value;
 
 function RecentTab() {
   const list = settings.value.histRecent ?? [];
-  if (!list.length) return <div class="hs-empty muted">History ranges you open (from here, “Replay this” on alerts, or the history picker) are listed here.</div>;
+  if (!list.length) return <div class="hs-empty muted">History ranges you open (from here, “Replay” on alerts, or the history picker) are listed here.</div>;
   return (
     <div class="hs-tab">
       <table class="hs-table hs-recent">

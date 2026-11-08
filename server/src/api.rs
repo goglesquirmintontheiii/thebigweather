@@ -188,6 +188,8 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/l3/{site}/{prod}/list", get(l3_list))
         .route("/l3/data", get(l3_data))
         .route("/alerts", get(alerts))
+        .route("/alerts/sources", get(alert_sources)) // 0.8.2
+        .route("/alerts/want", post(alert_want)) // 0.8.2
         .route("/sources", get(sources))
         .route("/keys", get(keys_get).put(keys_put))
         .route("/stats", get(stats))
@@ -653,6 +655,15 @@ async fn l3_data(State(st): St, headers: HeaderMap, Query(q): Query<KeyQ>) -> Re
 
 async fn alerts(State(st): St) -> Json<Value> {
     Json(st.alerts.collection())
+}
+
+/* 0.8.2: Canada / international alert sources (fetched on demand) */
+async fn alert_sources(State(st): St) -> Json<Value> {
+    Json(st.alerts.intl.list())
+}
+async fn alert_want(State(st): St, Json(b): Json<Value>) -> Json<Value> {
+    let ids: Vec<String> = b["sources"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).take(400).collect()).unwrap_or_default();
+    Json(json!({"ok": true, "sources": st.alerts.intl.want(&ids)}))
 }
 
 async fn sources(State(st): St) -> Json<Value> {

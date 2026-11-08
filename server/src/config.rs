@@ -94,6 +94,11 @@ pub struct AlertsCfg {
     pub url: String,
     /// NWS asks for a contact in the User-Agent.
     pub user_agent: String,
+    /// 0.8.2: Canada alerts (ECCC), fetched while an app has them switched on
+    pub canada: bool,
+    /// 0.8.2: international alerts (MeteoAlarm, national CAP feeds), fetched only while an app
+    /// looks at that country or has the International alerts tab open
+    pub international: bool,
 }
 
 /// Detection models (training jobs and live runs, `/api/ml/*`).
@@ -270,6 +275,8 @@ impl Default for AlertsCfg {
             poll_secs: 0,
             url: "https://api.weather.gov/alerts/active?status=actual".into(),
             user_agent: "TheBigWeather/0.1 (self-hosted weather app)".into(),
+            canada: true,        // 0.8.2
+            international: true, // 0.8.2
         }
     }
 }
@@ -353,6 +360,10 @@ poll_secs = 0
 url = "https://api.weather.gov/alerts/active?status=actual"
 # NWS asks for a contact in the User-Agent.
 user_agent = "TheBigWeather/0.1 (self-hosted weather app)"
+# Canada alerts (ECCC), fetched while an app has them on
+canada = true
+# International alerts (MeteoAlarm, national CAP feeds), fetched only while an app looks there
+international = true
 
 [ml]
 # Detection models: train on historical radar / gridded data and run them live

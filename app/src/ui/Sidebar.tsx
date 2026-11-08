@@ -44,9 +44,8 @@ import { WidgetsPanel } from "./WidgetHost";
 import { Sun } from "lucide-preact"; // p7
 import { spaceOpen } from "./SpacePanel"; // p7
 /* radio/dash 0.8 */
-import { LayoutDashboard, ChartGantt } from "lucide-preact";
+import { LayoutDashboard } from "lucide-preact"; // 0.8.2: ChartGantt (timeline) moved to the Alerts tab
 import { dashOpen } from "./Dashboard";
-import { timelineOpen } from "./AlertTimeline";
 /* end radio/dash 0.8 */
 
 const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
@@ -114,7 +113,7 @@ const RAIL: RailEntry[] = [
   { id: "ml", icon: BrainCircuit, label: "Detection models", on: () => mlOpen.value, click: () => (mlOpen.value = !mlOpen.value), extra: () => activeJobs.value.length > 0 && <span class="dot online" title="Training in progress" /> }, // detection models
   { id: "space", icon: Sun, label: "Space weather", on: () => spaceOpen.value, click: () => (spaceOpen.value = !spaceOpen.value) }, // p7
   { id: "dash", icon: LayoutDashboard, label: "Dashboard", on: () => dashOpen.value, click: () => (dashOpen.value = !dashOpen.value) }, // radio/dash 0.8
-  { id: "timeline", icon: ChartGantt, label: "Alert timeline", on: () => timelineOpen.value, click: () => (timelineOpen.value = !timelineOpen.value) }, // radio/dash 0.8
+  // 0.8.2: Alert timeline moved to Alerts → Timelines
 ];
 export const RAIL_DEFAULT = RAIL.map((r) => r.id);
 

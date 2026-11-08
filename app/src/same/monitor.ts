@@ -49,6 +49,13 @@ function readFlag(k: string, def: boolean) {
     return def;
   }
 }
+/* 0.8.2: the pin is shared by every window (a popped-out radio window read it once at start, so
+ * turning it on in the main window didn't reach a decoder running there) */
+if (typeof window !== "undefined")
+  window.addEventListener("storage", (e) => {
+    if (e.key === "tbw.same.automap") sameAutoMap.value = e.newValue == null ? true : e.newValue === "1";
+    if (e.key === "tbw.same.sound") sameSound.value = e.newValue !== "0";
+  });
 export function setSameAutoMap(v: boolean) {
   sameAutoMap.value = v;
   try {
