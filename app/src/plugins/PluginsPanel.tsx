@@ -5,11 +5,12 @@ import { signal } from "@preact/signals";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { Puzzle, Search, RefreshCw, Download, Trash2, ChevronLeft, ChevronRight, AlertTriangle, Upload, ClipboardPaste, Link, FolderOpen, Settings2, ExternalLink, Check, CircleArrowUp, Plus, X, GitFork } from "lucide-preact";
+import { ToggleLeft, ToggleRight, Info } from "lucide-preact"; // 0.8.3
 import { settings, toast, type PluginCfg } from "../store";
 import { CenterModal } from "../ui/CenterModal";
 import { pluginStatus, addPlugin, reloadPlugin, pluginFolder } from "./host";
 import { market, installedMeta, busy, refreshMarket, loadInstalledMeta, install, uninstall, setEnabled, updates, description, registries, setRegistries, type MarketItem, type InstalledMeta } from "./market";
-import { assetUrl, matches, PERMISSIONS, DEFAULT_REGISTRY, cmpVersion, type Manifest } from "./marketcore";
+import { assetUrl, matches, PERMISSIONS, DEFAULT_REGISTRY, cmpVersion, cardBgUrl, type Manifest } from "./marketcore";
 import { Markdown } from "./MdView";
 import { firstText, type Resolver } from "./mdparse";
 import "./plugins.css";
@@ -32,6 +33,8 @@ interface View {
   meta?: InstalledMeta;
   update?: boolean;
   error?: string;
+  /** 0.8.3: card background image */
+  bg?: string | null;
 }
 
 function views(): View[] {
@@ -56,6 +59,7 @@ function views(): View[] {
       meta: cfg ? meta[cfg.id] : undefined,
       update: !!(m && cfg?.market && cmpVersion(m.version, cfg.market.version) > 0),
       error: it.error,
+      bg: cardBgUrl(m, it.base) ?? (cfg ? meta[cfg.id]?.cardBg : null), // 0.8.3
     });
   }
   for (const p of list) {
@@ -70,6 +74,7 @@ function views(): View[] {
       icon: mm?.icon ?? (mm?.manifest.icon ? assetUrl(mm.base, mm.manifest.icon) : null),
       cfg: p,
       meta: mm,
+      bg: mm?.cardBg ?? (mm ? cardBgUrl(mm.manifest, mm.base) : null), // 0.8.3
     });
   }
   return out;
@@ -92,10 +97,96 @@ function statusOf(cfg?: PluginCfg): { cls: string; text: string } | null {
   return { cls: "on", text: "Installed" };
 }
 
+/* ---------- 0.8.3: right-click menu on a plugin card (like the map's) ---------- */
+const cardMenu = signal<{ key: string; x: number; y: number } | null>(null);
+const openDetail = (v: View) => (pluginDetail.value = v.item ? { key: v.key } : { id: v.cfg!.id });
+
+function CardMenu() {
+  const m = cardMenu.value;
+  const [sure, setSure] = useState(false);
+  useEffect(() => {
+    setSure(false);
+    if (!m) return;
+    const close = (e: Event) => {
+      if (!(e.target as HTMLElement)?.closest?.(".plgm-menu")) cardMenu.value = null;
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && (cardMenu.value = null);
+    const off = () => (cardMenu.value = null);
+    window.addEventListener("pointerdown", close, true);
+    window.addEventListener("keydown", esc);
+    window.addEventListener("blur", off);
+    window.addEventListener("resize", off);
+    return () => {
+      window.removeEventListener("pointerdown", close, true);
+      window.removeEventListener("keydown", esc);
+      window.removeEventListener("blur", off);
+      window.removeEventListener("resize", off);
+    };
+  }, [m]);
+  if (!m) return null;
+  const v = views().find((x) => x.key === m.key);
+  if (!v) return null;
+  const cfg = v.cfg;
+  const act = (fn: () => any) => () => {
+    cardMenu.value = null;
+    Promise.resolve()
+      .then(fn)
+      .catch((e) => toast(`${v.name}: ${e?.message ?? e}`, "error", 7000));
+  };
+  const n = 2 + (cfg ? 2 : 0) + (v.update || (!cfg && v.item?.manifest) ? 1 : 0);
+  return createPortal(
+    <div class="ctx glass plgm-menu" role="menu" style={{ left: `${Math.min(m.x + 4, window.innerWidth - 210)}px`, top: `${Math.min(m.y + 4, window.innerHeight - 34 * n - 40)}px` }}>
+      <div class="ctx-title">
+        <b>{v.name}</b>
+        {v.m?.version ? ` · v${v.m.version}` : ""}
+      </div>
+      {cfg && (
+        <button role="menuitem" onClick={act(() => (setEnabled(cfg.id, !cfg.on), toast(`${v.name} ${cfg.on ? "disabled" : "enabled"}`, "info", 1500)))}>
+          {cfg.on ? <ToggleRight size={13} /> : <ToggleLeft size={13} />} {cfg.on ? "Disable" : "Enable"}
+        </button>
+      )}
+      {!cfg && v.item?.manifest && (
+        <button role="menuitem" onClick={act(() => install(v.item!).then(() => toast(`${v.name} installed`)))}>
+          <Download size={13} /> Install
+        </button>
+      )}
+      {cfg && v.update && v.item && (
+        <button role="menuitem" onClick={act(() => install(v.item!).then(() => toast(`${v.name} updated`)))}>
+          <CircleArrowUp size={13} /> Update to v{v.m?.version}
+        </button>
+      )}
+      <button role="menuitem" onClick={act(() => openDetail(v))}>
+        <Info size={13} /> Details
+      </button>
+      {cfg && <div class="ctx-sep" />}
+      {cfg &&
+        (sure ? (
+          <button role="menuitem" class="danger" onClick={act(() => uninstall(cfg.id).then(() => toast(`${v.name} uninstalled`, "info", 1800)))}>
+            <Trash2 size={13} /> Click again to uninstall
+          </button>
+        ) : (
+          <button role="menuitem" class="danger" onClick={() => setSure(true)}>
+            <Trash2 size={13} /> Uninstall…
+          </button>
+        ))}
+    </div>,
+    document.body,
+  );
+}
+
 function Card({ v }: { v: View }) {
   const s = statusOf(v.cfg);
   return (
-    <button class={`plgm-card${v.error ? " bad" : ""}`} onClick={() => (pluginDetail.value = v.item ? { key: v.key } : { id: v.cfg!.id })} title="Details">
+    <button
+      class={`plgm-card${v.error ? " bad" : ""}${v.bg ? " has-bg" : ""}`}
+      style={v.bg ? { "--plgm-bg": `url("${v.bg.replace(/["\\\n]/g, "")}")` } : undefined}
+      onClick={() => openDetail(v)}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        cardMenu.value = { key: v.key, x: e.clientX, y: e.clientY };
+      }}
+      title="Details · right-click for more"
+    >
       <Icon src={v.icon} />
       <span class="plgm-card-txt">
         <b>{v.name}</b>
@@ -176,6 +267,8 @@ export function PluginsPanel() {
         Plugin API and how to publish: <a href="https://github.com/goglesquirmintontheiii/thebigweather/tree/main/plugins" target="_blank" rel="noopener noreferrer">plugins/README.md</a>
       </div>
       {pluginDetail.value && createPortal(<Detail />, document.body)}
+      <CardMenu />
+
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { signal, computed } from "@preact/signals";
 import { get as idbGet, set as idbSet, del as idbDel } from "idb-keyval";
 import { settings, update, type PluginCfg } from "../store";
 import { setCode, removePlugin, restartPlugin } from "./host";
-import { DEFAULT_REGISTRY, parseRegistry, entryBase, assetUrl, validateManifest, verifyHash, cmpVersion, descIsFile, type Manifest, type RegistryEntry } from "./marketcore";
+import { DEFAULT_REGISTRY, parseRegistry, entryBase, assetUrl, validateManifest, verifyHash, cmpVersion, descIsFile, cardBgUrl, type Manifest, type RegistryEntry } from "./marketcore";
 
 export interface MarketItem {
   /** registry url + "#" + plugin id */
@@ -25,6 +25,8 @@ export interface InstalledMeta {
   base: string;
   /** small data: URL so the installed list works offline */
   icon?: string;
+  /** 0.8.3: the card background as a data: URL (offline) */
+  cardBg?: string;
   description?: string;
   at: number;
 }
@@ -178,6 +180,10 @@ export async function install(it: MarketItem): Promise<void> {
       manifest: m,
       base: it.base,
       icon: iconUrl ? await toDataUrl(iconUrl) : undefined,
+      cardBg: await (async () => {
+        const u = cardBgUrl(m, it.base); // 0.8.3
+        return u ? ((await toDataUrl(u)) ?? (/^https:/.test(u) ? u : undefined)) : undefined;
+      })(),
       description: await description(m, it.base).catch(() => m.summary ?? ""),
       at: Date.now(),
     };

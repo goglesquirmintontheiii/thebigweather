@@ -53,14 +53,33 @@ function validate(where, m, fileExists, fileSize) {
   for (const p of m.permissions ?? []) if (!PERMS.includes(p)) warn(where, `unknown permission "${p}" (known: ${PERMS.join(", ")})`);
   if (m.homepage != null && !/^https:\/\//.test(m.homepage)) err(where, '"homepage" must be an https:// link');
   if (m.minAppVersion != null && !/^\d+(\.\d+){0,2}$/.test(m.minAppVersion)) err(where, '"minAppVersion" must look like 0.8.2');
+  // 0.8.3: card background image + command palette commands
+  const bg = m.card?.background;
+  if (m.card != null && (typeof m.card !== "object" || Array.isArray(m.card))) err(where, '"card" must be an object, e.g. { "background": "card.webp" }');
+  else if (bg != null) {
+    const https = typeof bg === "string" && /^https:\/\//i.test(bg);
+    if (https ? !/^https:\/\/[^\s"'()\\]+$/i.test(bg) || bg.length >= 500 : !isRel(bg) || !/\.(png|jpe?g|webp|gif|svg)$/i.test(bg)) err(where, '"card.background" must be an image file in the plugin folder (.png .jpg .webp .gif .svg) or an https:// link');
+    else if (https) warn(where, '"card.background" is a link: it is not kept offline (a file in the plugin folder is)');
+  }
+  if (m.commands != null && !Array.isArray(m.commands)) err(where, '"commands" must be a list');
+  const cmdIds = new Set();
+  for (const c of Array.isArray(m.commands) ? m.commands : []) {
+    if (!c || typeof c.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(c.id)) err(where, `command ${JSON.stringify(c?.id)}: "id" must be letters, digits, . _ : -`);
+    else if (cmdIds.has(c.id)) err(where, `duplicate command id "${c.id}"`);
+    else cmdIds.add(c.id);
+    if (!c || typeof c.title !== "string" || !c.title || c.title.length > 80) err(where, `command ${JSON.stringify(c?.id)}: "title" is required (≤ 80 chars)`);
+    if (c?.keywords != null && typeof c.keywords !== "string") err(where, `command ${JSON.stringify(c.id)}: "keywords" must be text`);
+  }
+  if (Array.isArray(m.commands) && m.commands.length > 50) warn(where, "only the first 50 commands are listed");
   const descFile = typeof m.description === "string" && /\.(md|markdown|txt)$/i.test(m.description) && !m.description.includes("\n") ? m.description : null;
   if (!fileExists) return;
-  const files = [m.entry, m.icon, m.banner, descFile, ...(m.screenshots ?? []).map((s) => (typeof s === "string" ? s : s?.src))].filter((f) => isRel(f));
+  const files = [m.entry, m.icon, m.banner, descFile, isRel(bg) ? bg : null, ...(m.screenshots ?? []).map((s) => (typeof s === "string" ? s : s?.src))].filter((f) => isRel(f));
   for (const f of files) {
     if (!fileExists(f)) err(where, `missing file ${f}`);
     else if (fileSize && /\.(png|jpe?g|webp|gif)$/i.test(f) && fileSize(f) > 1_500_000) warn(where, `${f} is over 1.5 MB — consider shrinking it`);
   }
   if (fileSize && m.icon && fileExists(m.icon) && fileSize(m.icon) > 256 * 1024) warn(where, `icon over 256 KB is not kept offline`);
+  if (fileSize && isRel(bg) && fileExists(bg) && fileSize(bg) > 256 * 1024) warn(where, `card.background over 256 KB is not kept offline — aim for < 80 KB (e.g. 720×180 WebP)`);
 }
 
 function loadRegistry() {

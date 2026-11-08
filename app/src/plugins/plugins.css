@@ -429,3 +429,67 @@
   padding: 4px 8px;
   text-align: left;
 }
+
+/* ---------- 0.8.3: card background images (manifest card.background) ---------- */
+.plgm-card.has-bg {
+  position: relative;
+  min-height: 72px;
+  background-color: #0d1117;
+  background-image: linear-gradient(90deg, rgba(9, 12, 18, 0.9) 0%, rgba(9, 12, 18, 0.66) 50%, rgba(9, 12, 18, 0.18) 100%), var(--plgm-bg);
+  background-size: cover;
+  background-position: center right;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.plgm-card.has-bg:hover {
+  background-image: linear-gradient(90deg, rgba(9, 12, 18, 0.84) 0%, rgba(9, 12, 18, 0.55) 50%, rgba(9, 12, 18, 0.05) 100%), var(--plgm-bg);
+}
+.plgm-card.has-bg .plgm-card-txt b,
+.plgm-card.has-bg .plgm-sum {
+  color: #f1f5f9;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+.plgm-card.has-bg .plgm-card-txt .muted {
+  color: #b6c2cf;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+.plgm-card.has-bg .plgm-icon {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.plgm-card.has-bg .plgm-badge {
+  backdrop-filter: blur(4px);
+}
+
+/* ---------- 0.8.3: right-click menu on a card ---------- */
+.ctx.glass.plgm-menu {
+  position: fixed;
+  z-index: 1300;
+  min-width: 190px;
+  background: rgba(13, 17, 23, 0.97);
+}
+html[data-theme="light"] .ctx.glass.plgm-menu {
+  background: rgba(255, 255, 255, 0.98);
+}
+.plgm-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.plgm-menu button.danger {
+  color: var(--err, #f87171);
+}
+.plgm-menu .ctx-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--line-2);
+}
+
+/* ---------- 0.8.3: plugin buttons in the rail ---------- */
+.plg-rail-img {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.rail-btn.plg-rail-btn.on .plg-rail-img {
+  box-shadow: 0 0 0 2px rgba(4, 18, 29, 0.55);
+}

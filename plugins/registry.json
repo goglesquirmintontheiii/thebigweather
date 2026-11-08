@@ -6,22 +6,22 @@
       "path": "hail-legend",
       "id": "hail-legend",
       "name": "Hail size quick legend",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "summary": "Hail sizes as everyday objects, plus the hail estimates of storms in view.",
       "sha256": {
-        "plugin.json": "c164a065234ac93e5dd4db7da7d7e76e8d49df28348a4c20b2d833e462d2bcb5",
-        "main.js": "770c393fced3caa9b4439ec53dfbdb339ac349a6bdd1776827b52409e1a82b93"
+        "plugin.json": "8bce4ff67c14ae2448b2ccf6a5f16d716b153fa318efc53efa41f10ede3ee7cc",
+        "main.js": "dfef338fcef9dc5d9aa0e1d6b44aa4b94bec00b5e9f36f64bfdb7853ee4bb644"
       }
     },
     {
       "path": "storm-eta-chime",
       "id": "storm-eta-chime",
       "name": "Storm ETA chime",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "summary": "Plays a chime when a tracked storm is due at one of your saved points.",
       "sha256": {
-        "plugin.json": "74f6a26c71fa293585aa96e54a8a99626cd610af4690a78cc0a51bc90442832d",
-        "main.js": "d62144d30b7ae08b3607367a644b0822119d3fc4783cc1f1d2f2c6e21cc3ea87"
+        "plugin.json": "4fbca86f886683aba4e2c984cfe3acfea8a02901ceaa3dfc8cbaf26fb52b46fd",
+        "main.js": "7f02c58ceeea4faa6de913d677d21fe161006b15a110e938a2bed558f900bd66"
       }
     }
   ]

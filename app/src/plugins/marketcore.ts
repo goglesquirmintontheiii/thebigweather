@@ -50,7 +50,22 @@ export interface Manifest {
   minAppVersion?: string;
   homepage?: string;
   tags?: string[];
+  /** 0.8.3: plugin list card look — background: an image in the plugin folder or an https:// URL */
+  card?: { background?: string };
+  /** 0.8.3: command palette entries, listed even while the plugin is disabled (running one enables it);
+   *  the plugin runs them with tbw.addCommand({ id, title, run }) */
+  commands?: { id: string; title: string; keywords?: string }[];
 }
+
+/** 0.8.3: is `v` a usable card background (file in the plugin folder, or an https:// image URL)? */
+export const isCardBg = (v: unknown): boolean => typeof v === "string" && (/^https:\/\//i.test(v) ? /^https:\/\/[^\s"'()\\]+$/i.test(v) && v.length < 500 : isRelPath(v) && /\.(png|jpe?g|webp|gif|svg)$/i.test(v));
+/** 0.8.3: URL of a manifest's card background, or null */
+export function cardBgUrl(m: Manifest | undefined, base: string): string | null {
+  const b = m?.card?.background;
+  if (!b) return null;
+  return /^https:\/\//i.test(b) ? b : base ? assetUrl(base, b) : null;
+}
+const CMD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
 export const PERMISSIONS: Record<string, string> = {
   map: "Add layers to the map",
@@ -129,7 +144,18 @@ export function validateManifest(m: any): Manifest {
   if (homepage && !/^https:\/\//.test(homepage)) throw new Error('"homepage" must be an https:// link');
   const minApp = str("minAppVersion", 20);
   if (minApp && !/^\d+(\.\d+){0,2}$/.test(minApp)) throw new Error('"minAppVersion" must look like 0.8.2');
+  // 0.8.3: card background + palette commands
+  if (m.card != null && (typeof m.card !== "object" || Array.isArray(m.card))) throw new Error('"card" must be an object');
+  if (m.card?.background != null && !isCardBg(m.card.background)) throw new Error('"card.background" must be an image file in the plugin folder or an https:// link');
+  if (m.commands != null && !Array.isArray(m.commands)) throw new Error('"commands" must be a list');
+  const commands = (m.commands as any[] | undefined)?.slice(0, 50).map((c: any) => {
+    if (!c || typeof c.id !== "string" || !CMD_ID_RE.test(c.id)) throw new Error('each command needs an "id" (letters, digits, . _ : -)');
+    if (typeof c.title !== "string" || !c.title || c.title.length > 80) throw new Error(`command "${c.id}" needs a "title" (≤ 80 chars)`);
+    return { id: c.id, title: c.title, keywords: typeof c.keywords === "string" ? c.keywords.slice(0, 200) : undefined };
+  });
   return {
+    card: m.card?.background ? { background: m.card.background } : undefined,
+    commands,
     id: m.id,
     name: m.name,
     version: m.version,

@@ -1,15 +1,22 @@
 {
   "id": "hail-legend",
   "name": "Hail size quick legend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Stormiq",
   "summary": "Hail sizes as everyday objects, plus the hail estimates of storms in view.",
   "description": "README.md",
   "icon": "icon.png",
   "banner": "banner.png",
-  "screenshots": [{ "src": "screenshots/panel.png", "caption": "Sizes from pea to softball, and the biggest hail in view." }],
+  "card": { "background": "card.webp" },
+  "screenshots": [
+    { "src": "screenshots/panel.png", "caption": "Sizes from pea to softball, and the biggest hail in view." }
+  ],
   "entry": "main.js",
   "permissions": ["server", "map", "panel"],
   "minAppVersion": "0.6.0",
-  "tags": ["hail", "legend", "reference"]
+  "tags": ["hail", "legend", "reference"],
+  "commands": [
+    { "id": "open", "title": "Open legend", "keywords": "show sizes" },
+    { "id": "refresh", "title": "Refresh hail in view", "keywords": "update storms" }
+  ]
 }

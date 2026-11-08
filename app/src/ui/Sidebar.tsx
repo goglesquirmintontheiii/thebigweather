@@ -9,6 +9,7 @@ import "./hotfix081.css"; // 0.8.1
 import { effect } from "@preact/signals"; // 0.8.2
 import { WinButtons, IN_OS_WIN, isMin, isMax, isPopped, minimize, unminimize, toggleMax, canPop, popWindow, onBarDbl, winAware, animOn, ANIM_MS } from "./winframe"; // 0.8.2
 import { railWinId } from "./wincore"; // 0.8.2
+import { PluginRailButtons } from "../plugins/PluginRail"; // 0.8.3 plugins
 import { sourcesOpen } from "./SourcesWindow"; // 0.8.2
 import { viewer } from "../share/share"; // share & collab
 import { alerts } from "../alerts";
@@ -196,6 +197,7 @@ export function Rail() {
           </button>
         );
       })}
+      <PluginRailButtons /> {/* 0.8.3 plugins: buttons that plugins add (one per plugin panel) */}
       <div class="rail-fill" />
       <button class={`rail-btn ${openPanel.value === "settings" || isMin("p:settings") || isPopped("p:settings") ? "on" : ""}`} title="Settings" onClick={winAware("p:settings", () => (openPanel.value = openPanel.value === "settings" ? null : "settings"))}>
         <Settings size={20} />
