@@ -22,7 +22,8 @@ import { attachSoundingMap } from "../sounding/maplayer";
 import { frameIndex } from "../anim";
 import { sampleAt } from "../radar/sweep";
 import { alerts } from "../alerts";
-import { alertStyle, alertVisible, alertKind, patternId, registerPatterns } from "../alertstyle";
+import { registerPatterns } from "../alertstyle";
+import { addBaseLayers, applyBaseStyles, applyBaseVisibility, alertFeatures, siteEl, markerDensity, hookAlertHover } from "./baselayers"; // 0.8.2
 import { api } from "../api";
 import { distance, bearing, compass, fmtDist, circle, destination } from "../util";
 /* workflow 0.6: offline tiles, terrain, route/plugin layers, precip effect */
@@ -80,52 +81,7 @@ function addOverlays(map: MLMap) {
   if (!map.getLayer(gridLayer.id)) map.addLayer(gridLayer, before);
   if (!map.getLayer(radarLayer.id)) map.addLayer(radarLayer, before);
   if (!map.getLayer(particleLayer.id)) map.addLayer(particleLayer, before); // intl & forecast tools
-  const dark = isDarkBasemap(settings.value.basemap, settings.value.customBasemaps);
-  map.addSource("counties", { type: "geojson", data: "geo/counties.json" });
-  map.addSource("states", { type: "geojson", data: "geo/states.json" });
-  map.addLayer({ id: "ovl-counties", type: "line", source: "counties", minzoom: 5, paint: { "line-color": dark ? "#8a96a6" : "#6b7280", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.3, 10, 1], "line-opacity": 0.55 } }, before);
-  map.addLayer({ id: "ovl-states", type: "line", source: "states", paint: { "line-color": dark ? "#c9d1d9" : "#374151", "line-width": ["interpolate", ["linear"], ["zoom"], 3, 0.7, 10, 2] } }, before);
-  map.addSource("alerts", { type: "geojson", data: EMPTY });
-  const hover: any = ["boolean", ["feature-state", "hover"], false];
-  map.addLayer({
-    id: "ovl-alerts-fill",
-    type: "fill",
-    source: "alerts",
-    filter: ["==", ["get", "pat"], ""],
-    paint: { "fill-color": ["get", "fc"], "fill-opacity": ["case", hover, ["min", 0.6, ["+", ["get", "fo"], 0.14]], ["get", "fo"]] },
-  }, before);
-  map.addLayer({
-    id: "ovl-alerts-pattern",
-    type: "fill",
-    source: "alerts",
-    filter: ["!=", ["get", "pat"], ""],
-    paint: { "fill-pattern": ["get", "pat"], "fill-opacity": ["case", hover, 1, 0.85] },
-  }, before);
-  map.addLayer({
-    id: "ovl-alerts-casing",
-    type: "line",
-    source: "alerts",
-    filter: ["==", ["get", "kind"], "warning"],
-    paint: { "line-color": "#000", "line-width": ["+", ["get", "lw"], ["case", ["has", "tag"], 3.6, 1.6]], "line-opacity": 0.7 },
-  }, before);
-  map.addLayer({
-    id: "ovl-alerts-line",
-    type: "line",
-    source: "alerts",
-    paint: {
-      "line-color": ["case", ["==", ["get", "tag"], "TORNADO EMERGENCY"], "#ff00ff", ["get", "lc"]],
-      "line-width": ["case", ["has", "tag"], ["+", ["get", "lw"], 1.1], ["get", "lw"]],
-      "line-dasharray": ["match", ["get", "ls"], "dashed", ["literal", [3, 2]], "dotted", ["literal", [0.6, 1.6]], ["literal", [1, 0]]],
-    },
-  }, before);
-  // new alerts flash for a while (per-type setting)
-  map.addLayer({
-    id: "ovl-alerts-flash",
-    type: "line",
-    source: "alerts",
-    filter: ["==", ["get", "fl"], 1],
-    paint: { "line-color": "#ffffff", "line-width": ["+", ["get", "lw"], 3], "line-opacity": 0, "line-blur": 1 },
-  }, before);
+  addBaseLayers(map, before); // 0.8.2: shared with the map panes (map/baselayers.ts)
   // RapidSweep progress: the current beam position
   map.addSource("sweepline", { type: "geojson", data: EMPTY });
   map.addLayer({ id: "ovl-sweep-glow", type: "line", source: "sweepline", paint: { "line-color": "#7ee0ff", "line-width": 7, "line-opacity": 0.18, "line-blur": 3 } });
@@ -259,70 +215,21 @@ function drawBeams(map: MLMap) {
   src.setData({ type: "FeatureCollection", features } as any);
 }
 
-/** Colors/widths for the built-in map overlays (Layers → gear). */
-function refreshBaseStyles(map: MLMap) {
-  const dark = isDarkBasemap(settings.value.basemap, settings.value.customBasemaps);
-  const st = (k: string) => settings.value.ovl[`base:${k}`] ?? {};
-  const set = (id: string, prop: string, v: any) => map.getLayer(id) && map.setPaintProperty(id, prop as any, v);
-  const c = st("counties");
-  set("ovl-counties", "line-color", c.color ?? (dark ? "#8a96a6" : "#6b7280"));
-  set("ovl-counties", "line-opacity", c.opacity ?? 0.55);
-  set("ovl-counties", "line-width", ["interpolate", ["linear"], ["zoom"], 5, 0.3 * (c.size ?? 1), 10, 1 * (c.size ?? 1)]);
-  const s = st("states");
-  set("ovl-states", "line-color", s.color ?? (dark ? "#c9d1d9" : "#374151"));
-  set("ovl-states", "line-opacity", s.opacity ?? 1);
-  set("ovl-states", "line-width", ["interpolate", ["linear"], ["zoom"], 3, 0.7 * (s.size ?? 1), 10, 2 * (s.size ?? 1)]);
-  const a = st("alerts");
-  const ao = a.opacity ?? 1;
-  const hov: any = ["boolean", ["feature-state", "hover"], false];
-  set("ovl-alerts-fill", "fill-opacity", ["*", ao, ["case", hov, ["min", 0.6, ["+", ["get", "fo"], 0.14]], ["get", "fo"]]]);
-  set("ovl-alerts-pattern", "fill-opacity", ["*", ao, ["case", hov, 1, 0.85]]);
-  set("ovl-alerts-line", "line-opacity", ao);
-  set("ovl-alerts-casing", "line-opacity", 0.7 * ao);
-  const r = st("rings");
-  set("ovl-rings", "line-color", r.color ?? "#9fb3c8");
-  set("ovl-rings", "line-opacity", r.opacity ?? 0.55);
-}
+/** Colors/widths for the built-in map overlays (Layers → gear). 0.8.2: shared with the panes */
+const refreshBaseStyles = applyBaseStyles;
 
 function refreshOverlayVisibility(map: MLMap) {
   refreshBaseStyles(map);
-  const o = settings.value.overlays;
-  const vis = (id: string, v: boolean) => map.getLayer(id) && map.setLayoutProperty(id, "visibility", v ? "visible" : "none");
-  vis("ovl-counties", o.counties);
-  vis("ovl-states", o.states);
-  for (const id of ["ovl-alerts-fill", "ovl-alerts-pattern", "ovl-alerts-casing", "ovl-alerts-line", "ovl-alerts-flash"]) vis(id, o.alerts);
-  vis("ovl-rings", o.rings);
+  applyBaseVisibility(map, settings.value.overlays); // 0.8.2: shared with the panes
 }
 
-/** first time each alert was seen (for flashing new ones) */
-const alertSeen = new Map<string, number>();
-let alertsPrimed = false;
 let flashTimer: number | undefined;
 
 function refreshAlerts(map: MLMap) {
   const src = map.getSource("alerts") as GeoJSONSource | undefined;
   if (!src) return;
-  const now = Date.now();
-  const all = [...alerts.value.values()];
-  // alerts present at startup don't count as new
-  for (const f of all) if (!alertSeen.has(f.properties.id)) alertSeen.set(f.properties.id, alertsPrimed ? now : 0);
-  if (all.length) alertsPrimed = true;
-  let flashing = false;
-  const feats = all
-    .filter((f) => f.geometry && alertVisible(f.properties.event))
-    .sort((a, b) => a.properties.priority - b.properties.priority)
-    .map((f, i) => {
-      const e: string = f.properties.event;
-      const st = alertStyle(e);
-      const seen = alertSeen.get(f.properties.id) ?? 0;
-      const fl = st.flash > 0 && seen > 0 && now - seen < st.flash * 1000 ? 1 : 0;
-      if (fl) flashing = true;
-      const fo = st.fill === "none" ? 0 : st.fillOpacity;
-      const props: any = { id: f.properties.id, kind: alertKind(e), event: e, fc: st.color, lc: st.border, lw: st.width, ls: st.line, fo, pat: st.fill === "none" ? "" : patternId(st.fill, st.color, st.fillOpacity), fl };
-      if (f.properties.tag) props.tag = f.properties.tag;
-      return { type: "Feature", id: i + 1, geometry: f.geometry, properties: props };
-    });
-  src.setData({ type: "FeatureCollection", features: feats } as any);
+  const { fc, flashing } = alertFeatures(); // 0.8.2: shared with the panes (map/baselayers.ts)
+  src.setData(fc);
   // blink the flash layer while any alert is still in its flash window
   clearInterval(flashTimer);
   if (flashing) {
@@ -366,18 +273,6 @@ function refreshTools(map: MLMap) {
   src.setData({ type: "FeatureCollection", features: feats } as any);
 }
 
-function siteEl(id: string, type: string, region = "US"): HTMLElement {
-  const el = document.createElement("button");
-  el.className = `site-marker ${type === "TDWR" ? "tdwr" : "nexrad"}${region !== "US" ? ` intl-site r-${region.toLowerCase()}` : ""}`;
-  el.textContent = id;
-  el.title = `${id} — click to view · Ctrl+click to add/remove alongside the current radar`;
-  el.addEventListener("click", (e) => {
-    e.stopPropagation();
-    selectSite(id, e.ctrlKey || e.metaKey);
-  });
-  return el;
-}
-
 function refreshSiteMarkers(map: MLMap) {
   // radar sites only matter while a radar layer is shown
   const show = settings.value.overlays.sites && settings.value.weather.kind === "radar";
@@ -402,12 +297,7 @@ function refreshSiteMarkers(map: MLMap) {
   updateMarkerDensity(map);
 }
 
-function updateMarkerDensity(map: MLMap) {
-  const z = map.getZoom();
-  const root = map.getContainer();
-  root.classList.toggle("sites-dots", z < 4.6);
-  root.classList.toggle("sites-hide-tdwr", z < 5.6);
-}
+const updateMarkerDensity = markerDensity; // 0.8.2: shared with the panes
 
 function refreshPointMarkers(map: MLMap) {
   for (const m of pointMarkers) m.remove();
@@ -526,24 +416,7 @@ export function createMap(container: HTMLElement): MLMap {
   });
   map.getCanvas().addEventListener("mouseleave", () => (hover.value = null));
 
-  let hovered: number | string | undefined;
-  const onAlertMove = (e: any) => {
-    if (tool.value !== "none") return;
-    map.getCanvas().style.cursor = "pointer";
-    const f = e.features?.[0];
-    if (hovered !== undefined) map.setFeatureState({ source: "alerts", id: hovered }, { hover: false });
-    hovered = f?.id;
-    if (hovered !== undefined) map.setFeatureState({ source: "alerts", id: hovered }, { hover: true });
-  };
-  map.on("mousemove", "ovl-alerts-fill", onAlertMove);
-  map.on("mousemove", "ovl-alerts-pattern", onAlertMove);
-  const onAlertLeave = () => {
-    map.getCanvas().style.cursor = "";
-    if (hovered !== undefined) map.setFeatureState({ source: "alerts", id: hovered }, { hover: false });
-    hovered = undefined;
-  };
-  map.on("mouseleave", "ovl-alerts-fill", onAlertLeave);
-  map.on("mouseleave", "ovl-alerts-pattern", onAlertLeave);
+  hookAlertHover(map, () => tool.value !== "none"); // 0.8.2: shared with the panes
 
   map.on("click", (e) => {
     contextMenu.value = null;

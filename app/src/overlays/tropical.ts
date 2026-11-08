@@ -87,6 +87,13 @@ const frameCache = new Map<string, Uint8Array[]>();
 /** p7 diagnostics: image swaps so far (the ticker repaints after each step) */
 export const tcSpin = { updates: 0 };
 const lastFrame = new Map<string, number>();
+const mapIds = new WeakMap<object, number>(); // 0.8.2
+let mapSeq = 0;
+function mapId(m: object): number {
+  let v = mapIds.get(m);
+  if (v == null) mapIds.set(m, (v = ++mapSeq));
+  return v;
+}
 function framesFor(name: string): Uint8Array[] {
   let f = frameCache.get(name);
   if (f) return f;
@@ -111,8 +118,9 @@ addAnim({
     const i = Math.floor(((t % (PERIOD / 2)) / (PERIOD / 2)) * FRAMES) % FRAMES;
     for (const name of inUse) {
       if (!m.hasImage(name)) continue;
-      if (lastFrame.get(name) === i) continue;
-      lastFrame.set(name, i);
+      const lk = `${name}|${mapId(m)}`; // 0.8.2: each map (main, panes) steps its own copy
+      if (lastFrame.get(lk) === i) continue;
+      lastFrame.set(lk, i);
       const w = TC_NOW_SIZE * R;
       m.updateImage(name, { width: w, height: w, data: framesFor(name)[i] });
       tcSpin.updates++;

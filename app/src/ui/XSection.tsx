@@ -9,7 +9,7 @@ import type { GeoJSONSource, Map as MLMap } from "maplibre-gl";
 import { settings, tool, toast } from "../store";
 import { api } from "../api";
 import { mapRef, mapClickHooks } from "../map/mapview";
-import { currentFrame, activeTable } from "../radar/controller";
+import { currentFrame, activeTable, tableById, tableKeyFor } from "../radar/controller";
 import { rasterize, TEX_SIZE, type ColorTable } from "../radar/colormaps";
 import { distance, bearing, destination, fmtValue, fmtDist } from "../util";
 import { FloatPanel } from "./FloatPanel";
@@ -35,8 +35,13 @@ const xsState = signal<{ loading?: boolean; error?: string }>({});
 /** 0–1 position along the line under the mouse (dot on the map) */
 const xsHover = signal<number | null>(null);
 
+/** 0.8.2: a cross-section picked in a map pane uses that pane's radar volume and product */
+export const xsPane = signal<{ idx: number; key: string; product: string } | null>(null);
+/** 0.8.2: is any map pane showing a Level II radar? */
+const paneL2 = () => settings.value.panes.layout !== "1" && settings.value.panes.list.some((c) => c?.weather.kind === "radar" && (c.source ?? "L2") === "L2");
+
 export function startXSection() {
-  if (settings.value.weather.kind !== "radar" || settings.value.radar.source !== "L2") {
+  if ((settings.value.weather.kind !== "radar" || settings.value.radar.source !== "L2") && !paneL2()) {
     toast("Cross-sections need a Level II radar layer", "warn");
     return;
   }
@@ -46,6 +51,7 @@ export function startXSection() {
 }
 
 export function closeXSection() {
+  xsPane.value = null; // 0.8.2
   xsLine.value = null;
   xsData.value = null;
   firstPt.value = null;
@@ -103,17 +109,25 @@ function hook() {
   map.on("style.load", () => drawMap());
   mapClickHooks.push((e) => {
     if (tool.value !== "xsect") return false;
-    const p: LL = [e.lngLat.lng, e.lngLat.lat];
-    if (!firstPt.value) {
-      firstPt.value = p;
-      return true;
-    }
-    xsLine.value = [firstPt.value, p];
-    firstPt.value = null;
-    tool.value = "none";
+    xsPick([e.lngLat.lng, e.lngLat.lat], null);
     return true;
   });
 }
+
+/** 0.8.2: one cross-section end point picked on the main map (pane = null) or in a map pane */
+export function xsPick(p: LL, pane: { idx: number; key: string; product: string } | null) {
+  if (!firstPt.value) {
+    firstPt.value = p;
+    xsPane.value = pane;
+    return;
+  }
+  if (pane) xsPane.value = pane;
+  xsLine.value = [firstPt.value, p];
+  firstPt.value = null;
+  tool.value = "none";
+}
+/** 0.8.2: the first picked point (drawn in panes too) */
+export const xsFirst = firstPt;
 
 effect(() => {
   const map = mapRef.value;
@@ -144,9 +158,10 @@ let timer: number | undefined;
 let ctrl: AbortController | null = null;
 effect(() => {
   const l = xsLine.value;
-  const f = currentFrame.value;
-  const product = settings.value.radar.product;
-  const src = settings.value.radar.source;
+  const xp = xsPane.value; // 0.8.2: picked in a pane
+  const f = xp ? { key: xp.key } : currentFrame.value;
+  const product = xp ? xp.product : settings.value.radar.product;
+  const src = xp ? "L2" : settings.value.radar.source;
   clearTimeout(timer);
   if (!l) return;
   if (src !== "L2") {
@@ -201,7 +216,8 @@ export function XSection() {
   const l = xsLine.value;
   const d = xsData.value;
   const st = xsState.value;
-  const t = activeTable.value;
+  const xp = xsPane.value; // 0.8.2: a pane's product has its own colour table
+  const t = xp ? tableById(settings.value.tables[tableKeyFor(xp.product)] ?? tableKeyFor(xp.product)) : activeTable.value;
   const cv = useRef<HTMLCanvasElement>(null);
   const [hov, setHov] = useState<{ x: number; y: number; text: string } | null>(null);
   const [size] = useState<[number, number]>([560, 260]);
