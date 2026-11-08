@@ -29,6 +29,7 @@ mod notify;
 mod radio;
 mod srules;
 mod timelapse;
+mod tooldl; // 0.8.3: one-click yt-dlp / Deno
 mod update;
 mod same;
 mod shake;

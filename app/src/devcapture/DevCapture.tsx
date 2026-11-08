@@ -1,4 +1,4 @@
-// 0.8.2 dev-only feedback capture (Ctrl+Shift+K): pick an element or drag an area, add a note,
+// 0.8.2 dev-only feedback capture (Ctrl+Shift+F since 0.8.3): pick an element or drag an area, add a note,
 // and get a compact STORMIQ-FB2 code on the clipboard to paste into the chat / checklist.
 
 import { render } from "preact";
@@ -286,7 +286,7 @@ function Root() {
 }
 
 let installed = false;
-/** Mount the tool (main window only) and listen for Ctrl+Shift+K. */
+/** Mount the tool (main window only) and listen for Ctrl+Shift+F (0.8.3: was Ctrl+Shift+K). */
 export function installDevCapture() {
   if (installed || typeof document === "undefined") return;
   installed = true;
@@ -298,7 +298,7 @@ export function installDevCapture() {
   window.addEventListener(
     "keydown",
     (e) => {
-      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey || e.code !== "KeyK") return;
+      if (!(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey || e.code !== "KeyF") return;
       if (!captureEnabled.peek()) return;
       e.preventDefault();
       e.stopPropagation();

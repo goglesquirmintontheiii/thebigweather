@@ -233,6 +233,8 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/rec/{id}/frames", get(rec_frames))
         .route("/rec/{id}/file/{name}", get(rec_file))
         .route("/rec/{id}/timelapse", get(rec_timelapse))
+        .route("/tools", get(crate::tooldl::get)) // 0.8.3: one-click yt-dlp / Deno
+        .route("/tools/{name}/install", post(crate::tooldl::install)) // 0.8.3
         .route("/ws", get(ws))
         // share links, live collaboration, notification rules (Phase 6)
         .route("/share", post(crate::share::create))

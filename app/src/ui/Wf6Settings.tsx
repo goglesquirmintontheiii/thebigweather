@@ -76,7 +76,7 @@ export function KioskSection() {
   return (
     <section>
       <label class="lbl">Wall / kiosk mode</label>
-      {ws.length === 0 && <div class="muted small">Save some workspaces first (Workspaces panel) — kiosk mode cycles through them.</div>}
+      <div class="muted small">Kiosk mode cycles through your workspaces.</div>{/* 0.8.3 */}
       <div class="ks-ws">
         {ws.map((w) => (
           <label key={w.id} class="chk">
@@ -130,7 +130,7 @@ export function OfflineSection() {
   return (
     <section>
       <label class="lbl">Offline maps</label>
-      <div class="muted small">Save a basemap area (tiles and place-name fonts) so the map works without internet: Basemap tab → right-click a basemap → draw the area on the map → Download. Click a saved area there to edit or delete it. Weather data still needs the server.</div>
+      <div class="muted small">Save a basemap area (Basemap tab → R-Click the basemap → draw an area → Download) and you'll find it here.</div>{/* 0.8.3 */}
       {prog && (
         <div class="off-prog">
           <div class="bar">

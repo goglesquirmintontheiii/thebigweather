@@ -38,7 +38,8 @@ import { winAware } from "./winframe"; // 0.8.2 integration: minimized → resto
 import { BUILTIN_LAYOUTS, openPaneWindow, defaultCfg, layoutName } from "./Panes";
 import { jumpToSetting } from "../a11y/jump";
 import { A11Y_DEFAULTS, a11y } from "../a11y/a11y";
-import { Search, CornerDownLeft, Command, Layers, CloudSun, PanelLeft, Settings as Cog, MapPin, Radar, Bookmark, Navigation, History, X } from "lucide-preact";
+import { Search, CornerDownLeft, Command, Layers, CloudSun, PanelLeft, Settings as Cog, MapPin, Radar, Navigation, History, X } from "lucide-preact";
+import { PanelsTopLeft } from "lucide-preact"; // 0.8.3: Workspaces icon
 
 export const paletteOpen = signal(false);
 const paletteQuery = signal("");
@@ -58,7 +59,7 @@ const CATS: { id: Cat | "all"; name: string; icon: any }[] = [
   { id: "place", name: "Places", icon: Navigation },
   { id: "site", name: "Radars", icon: Radar },
   { id: "point", name: "My points", icon: MapPin },
-  { id: "workspace", name: "Workspaces", icon: Bookmark },
+  { id: "workspace", name: "Workspaces", icon: PanelsTopLeft /* 0.8.3 */ },
 ];
 const CAT_NAME = Object.fromEntries(CATS.map((c) => [c.id, c.name])) as Record<string, string>;
 
@@ -151,7 +152,7 @@ function settingDefs(): SetDef[] {
     { label: "Offline maps", section: "Offline", kw: "tiles cache" },
     { label: "Data use", section: "Data use" },
     { label: "Bandwidth saver", section: "Data use", get: () => !!s.saver, set: (v) => update((x) => (x.saver = v)) },
-    { label: "Notify when a storm cell will reach my points", section: "Data use", kw: "eta", get: () => !!s.etaNotify, set: (v) => update((x) => (x.etaNotify = v)) },
+    { label: "Notify when a storm cell will reach my points", section: "Alerts & sound", kw: "eta", get: () => !!s.etaNotify, set: (v) => update((x) => (x.etaNotify = v)) },
     { label: "Units & time", section: "Units & time", kw: "miles km fahrenheit celsius" },
     { label: "Distance", section: "Units & time", kw: "units miles km nmi" },
     { label: "Temp", section: "Units & time", kw: "temperature units fahrenheit celsius" },
@@ -169,7 +170,7 @@ function settingDefs(): SetDef[] {
     { label: "Volume", section: "Alerts & sound" },
     { label: "API keys", section: "API keys" },
     { label: "Pane layouts", section: "Pane layouts", kw: "custom grid editor" },
-    { label: "MIDI", section: "MIDI", kw: "controller knob fader pad learn" }, // 0.8.2
+    // 0.8.3: MIDI is its own tab now (panel entry above)
     { label: "Accessibility", section: "Accessibility", kw: "a11y" },
     { label: "Colour vision", section: "Accessibility", kw: "colorblind deuteranopia protanopia tritanopia cvd" },
     { label: "Text size", section: "Accessibility", kw: "large font bigger" },
@@ -254,6 +255,7 @@ export function buildItems(): PItem[] {
     ["record", "Recordings", panel("record")],
     ["files", "Files & backup", panel("files"), "import export"],
     ["workspaces", "Workspaces", panel("workspaces")],
+    ["midi", "MIDI", panel("midi"), "controller knob fader pad learn"], // 0.8.3: own tab
     ["route", "Route weather", panel("route"), "drive trip"],
     ["rules", "Notification rules", panel("rules")],
     ["widgets", "Desktop widgets", panel("widgets")],

@@ -2,7 +2,7 @@ import { settings, update, uid, toast, type CustomBasemap } from "../../store";
 import { BASEMAPS, customTiles, isDarkBasemap } from "../../map/basemaps";
 import { useState } from "preact/hooks";
 import { Plus, Trash2, Pencil, Check, CloudOff, HardDriveDownload } from "lucide-preact";
-import { openOfflineAreas } from "../OfflineAreas"; // 0.8.2
+import { BasemapMenu, openBasemapMenu } from "../BasemapMenu"; // 0.8.3: right-click menu (Offline...)
 import { downloadPolicy, areasOf } from "../../offline/areas"; // 0.8.2
 import { Toggle } from "./RadarPanel";
 
@@ -92,8 +92,8 @@ function CustomBasemaps() {
             <button
               class="custom-bm-name"
               onClick={() => update((x) => (x.basemap = `custom:${c.id}`))}
-              onContextMenu={(e) => (e.preventDefault(), openOfflineAreas(`custom:${c.id}`))} // 0.8.2
-              title={`${customTiles(c)[0]}\nRight-click: download an area for offline use`}
+              onContextMenu={openBasemapMenu(`custom:${c.id}`, c.name)} // 0.8.3
+              title={`${customTiles(c)[0]}\nRight-click: more (Offline...)`}
             >
               {c.name}
             </button>
@@ -170,9 +170,9 @@ export function MapPanel() {
               key={b.id}
               class={`bm ${s.basemap === b.id ? "on" : ""}`}
               onClick={() => update((x) => (x.basemap = b.id))}
-              // 0.8.2: right-click → offline areas of this basemap
-              onContextMenu={(e) => (e.preventDefault(), openOfflineAreas(b.id))}
-              title={downloadPolicy(b.id).ok ? "Right-click: download an area for offline use" : `Can't download: ${downloadPolicy(b.id).reason}`}
+              // 0.8.3: right-click → menu (Offline... and more)
+              onContextMenu={openBasemapMenu(b.id, b.name)}
+              title="Right-click: more (Offline...)"
             >
               <span class="sw" style={{ background: SWATCH[b.id] }} />
               <span>{b.name}</span>
@@ -180,7 +180,8 @@ export function MapPanel() {
             </button>
           ))}
         </div>
-        <div class="muted small bm-hint">Right-click a basemap to download an area for offline use.</div>
+        <div class="muted small bm-hint">Right-click a basemap for more, like Offline...</div>
+        <BasemapMenu /> {/* 0.8.3 */}
         {["dark", "light", "road"].includes(s.basemap) && (
           <div class="row">
             <span>Map tiles</span>

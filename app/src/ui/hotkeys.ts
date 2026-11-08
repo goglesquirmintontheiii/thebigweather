@@ -41,6 +41,7 @@ export const BUILTIN_HOTKEYS: [string, string][] = [
   ["]", "Info panel: next item"],
   ["?", "Keyboard shortcuts"],
   ["Ctrl+K", "Command palette: search everything"], // panes/palette/a11y 0.8
+  ["Ctrl+Shift+F", "Feedback capture (when turned on in Settings)"], // 0.8.3
   [",", "Legend filter down (legend hovered)"],
   [".", "Legend filter up (legend hovered)"],
 ];

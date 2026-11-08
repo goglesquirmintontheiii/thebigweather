@@ -585,7 +585,7 @@ export function update(fn: (s: Settings) => void) {
 export const activeServer = computed(() => settings.value.servers.find((s) => s.id === settings.value.activeServer) ?? settings.value.servers[0]);
 
 // ---------- transient UI state ----------
-export type PanelId = "layers" | "map" | "radar" | "alerts" | "points" | "sources" | "settings" | "radio" | "forecast" | "search" | "files" | "draw" | "record" | "workspaces" /* workflow */ | "route" | "rules" | "widgets" /* workflow 0.6 */ | "placefiles" /* radar 0.6 */ | "plugins" /* 0.8.2 */ | null;
+export type PanelId = "layers" | "map" | "radar" | "alerts" | "points" | "sources" | "settings" | "radio" | "forecast" | "search" | "files" | "draw" | "record" | "workspaces" /* workflow */ | "route" | "rules" | "widgets" /* workflow 0.6 */ | "placefiles" /* radar 0.6 */ | "plugins" /* 0.8.2 */ | "midi" /* 0.8.3 */ | null;
 export const openPanel = signal<PanelId>("radar");
 export const tool = signal<"none" | "measure" | "bearing" | "draw" | "xsect" /* workflow */>("none");
 export const crosshair = signal(false);

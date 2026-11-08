@@ -1,0 +1,237 @@
+/* 0.8.3: Settings in categories + search (SettingsPanel.tsx) */
+.s83 {
+  container-type: inline-size;
+}
+.s83-in {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.s83 [data-sq-hide] {
+  display: none !important;
+}
+.s83-sec {
+  display: contents;
+}
+
+/* sticky search + category chips */
+.s83-bar {
+  position: sticky;
+  top: -12px; /* .panel-body padding */
+  z-index: 3;
+  margin: -12px -14px 0;
+  padding: 10px 14px 8px;
+  background: rgba(14, 18, 24, 0.97);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+html[data-theme="light"] .s83-bar {
+  background: rgba(255, 255, 255, 0.97);
+}
+.s83-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+}
+.s83-search:focus-within {
+  border-color: var(--accent);
+}
+.s83-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 6px 0 !important;
+  outline: none;
+  box-shadow: none !important;
+}
+.s83-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.s83-chips {
+  display: flex;
+  gap: 3px;
+  justify-content: space-between;
+}
+.s83-chip {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 0;
+  border-radius: 7px;
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+.s83-chip:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+}
+.s83-chip.on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.s83-chip.dim {
+  opacity: 0.35;
+}
+.s83-chip-l {
+  display: none;
+}
+.s83-n {
+  position: absolute;
+  top: -3px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  font-style: normal;
+  font-size: 9.5px;
+  line-height: 14px;
+  text-align: center;
+  background: var(--accent);
+  color: #001018;
+  font-weight: 700;
+}
+.s83-none {
+  padding: 6px 2px;
+}
+
+/* categories */
+.s83-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.s83-cat {
+  scroll-margin-top: 96px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.s83-cat[open] {
+  background: transparent;
+  border-color: var(--line-2);
+}
+.s83-head {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  cursor: pointer;
+  border-radius: 10px;
+  color: var(--text);
+}
+.s83-head::-webkit-details-marker {
+  display: none;
+}
+.s83-head:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.s83-head > svg:first-child {
+  color: var(--accent);
+  flex: none;
+}
+.s83-head > span {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.s83-head b {
+  font-size: 13px;
+  font-weight: 600;
+}
+.s83-head small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.s83-chev {
+  color: var(--muted);
+  transition: transform 0.15s;
+  flex: none;
+}
+.s83-cat[open] > .s83-head .s83-chev {
+  transform: rotate(90deg);
+}
+.s83-cat[open] > .s83-head small {
+  display: none;
+}
+.s83-body {
+  padding: 4px 10px 12px;
+}
+.s83-searching .s83-head {
+  pointer-events: none;
+}
+.s83-searching .s83-chev {
+  display: none;
+}
+
+/* wide (maximized / own window): categories as a left-side list */
+@container (min-width: 560px) {
+  .s83-in {
+    display: grid;
+    grid-template-columns: 170px minmax(0, 760px);
+    align-items: start;
+    column-gap: 14px;
+  }
+  .s83-bar {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    grid-row: 1 / span 3;
+  }
+  .s83-chips {
+    flex-direction: column;
+  }
+  .s83-chip {
+    justify-content: flex-start;
+    padding: 7px 9px;
+  }
+  .s83-chip-l {
+    display: inline;
+    font-size: 12.5px;
+  }
+  .s83-n {
+    position: static;
+    margin-left: auto;
+  }
+  .s83-none,
+  .s83-cats {
+    grid-column: 2;
+  }
+}
+
+/* Recording tools (ToolsSection.tsx) */
+.s83-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.s83-tool .row {
+  justify-content: space-between;
+}
+.s83-found {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
