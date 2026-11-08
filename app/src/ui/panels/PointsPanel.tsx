@@ -10,7 +10,7 @@ export function PointsPanel() {
   const pts = settings.value.points;
   return (
     <div class="stack">
-      <p class="muted small">Alerts for your points can notify you. Right-click the map to add a point there.</p>
+      <p class="muted small">Your custom points on the map.</p>
       <button
         class="btn"
         onClick={() => {

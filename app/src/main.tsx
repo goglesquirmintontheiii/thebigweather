@@ -7,7 +7,7 @@ import { App } from "./ui/App";
 import { popoutSpec } from "./popout";
 import { PopoutApp } from "./ui/Popout";
 import { shareParam, initViewer } from "./share/share";
-import "./devcapture"; // 0.8.2: TEMPORARY dev-only feedback capture (Ctrl+Shift+K) — remove with src/devcapture/
+import "./devcapture"; // 0.8.2: TEMPORARY dev-only feedback capture (Ctrl+Shift+F) — remove with src/devcapture/
 
 setWorkerUrl(new URL(workerUrl, location.href).href);
 

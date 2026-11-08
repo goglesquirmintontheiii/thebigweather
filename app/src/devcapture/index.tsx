@@ -1,4 +1,4 @@
-// 0.8.2 TEMPORARY development-only feedback capture (Ctrl+Shift+K).
+// 0.8.2 TEMPORARY development-only feedback capture (Ctrl+Shift+F; was Ctrl+Shift+K before 0.8.3).
 // To remove it: delete src/devcapture/, the import in src/main.tsx, the <DevCaptureSetting /> line in
 // SettingsPanel.tsx and the "devcap" bits marked 0.8.2 in electron/preload.cjs + electron/main.cjs.
 
@@ -19,7 +19,7 @@ export function DevCaptureSetting() {
   return (
     <section>
       <label class="lbl">Advanced</label>
-      <Toggle label="Feedback capture (Ctrl+Shift+K)" on={captureEnabled.value} set={setCaptureEnabled} />
+      <Toggle label="Feedback capture (Ctrl+Shift+F)" on={captureEnabled.value} set={setCaptureEnabled} />
       <div class="muted small">Development tool: pick an element or area, add a note, and copy a code for the developer.</div>
     </section>
   );

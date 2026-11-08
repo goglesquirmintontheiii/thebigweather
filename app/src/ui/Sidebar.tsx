@@ -29,7 +29,8 @@ import { AlertsPanel } from "./panels/AlertsPanel";
 import { PointsPanel } from "./panels/PointsPanel";
 import { SourcesPanel } from "./panels/SourcesPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
-import { Bookmark } from "lucide-preact"; // workflow
+import { PanelsTopLeft, KeyboardMusic } from "lucide-preact"; // 0.8.3: Workspaces icon (was Bookmark), MIDI tab
+import { MidiSection } from "../midi/MidiSection"; // 0.8.3: MIDI tab (was in Settings)
 import { WorkspacePanel } from "./panels/WorkspacePanel"; // workflow
 import { History } from "lucide-preact"; // history 0.6
 import { histStormsOpen } from "../histsearch"; // history 0.6
@@ -72,7 +73,8 @@ const MORE: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "search", icon: Search, label: "Search" },
   { id: "record", icon: CircleDot, label: "Recordings" },
   { id: "files", icon: FolderOpen, label: "Files & backup" },
-  { id: "workspaces", icon: Bookmark, label: "Workspaces" }, // workflow
+  { id: "workspaces", icon: PanelsTopLeft, label: "Workspaces" }, // workflow; 0.8.3: own icon
+  { id: "midi", icon: KeyboardMusic, label: "MIDI" }, // 0.8.3: was in Settings
   { id: "plugins", icon: Puzzle, label: "Plugins" }, // 0.8.2
   // route / rules / widgets / placefiles: in the toolbar "…" menu (keeps the rail short)
 ];
@@ -250,12 +252,12 @@ function RailMenu({ order, move }: { order: string[]; move: (id: string, d: numb
 }
 /* ---------- end 0.8.1 ---------- */
 
-const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */, route: "Route weather", rules: "Notification rules", widgets: "Desktop widgets" /* workflow 0.6 */, placefiles: "Placefiles" /* radar 0.6 */, plugins: "Plugins" /* 0.8.2 */ };
+const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */, midi: "MIDI" /* 0.8.3 */, route: "Route weather", rules: "Notification rules", widgets: "Desktop widgets" /* workflow 0.6 */, placefiles: "Placefiles" /* radar 0.6 */, plugins: "Plugins" /* 0.8.2 */ };
 
 export const PANEL_TITLES = TITLES; // 0.8.2: pop-out window titles
 
 // share viewers: no owner-only panels (the server refuses their writes anyway)
-const OWNER_ONLY = new Set(["settings", "record", "files", "workspaces", "rules", "widgets", "placefiles", "plugins" /* 0.8.2 */]);
+const OWNER_ONLY = new Set(["settings", "record", "files", "workspaces", "rules", "widgets", "placefiles", "plugins" /* 0.8.2 */, "midi" /* 0.8.3 */]);
 
 /* ---------- 0.8.2: side panel window (title bar, 0.2 s open/close, minimize, maximize, pop-out) ---------- */
 // old links / the command palette may still ask for the Data sources tab: open its window instead
@@ -332,6 +334,7 @@ function PanelBody({ p }: { p: string }) {
         {p === "rules" && <RulesPanel /> /* workflow 0.6 */}
         {p === "widgets" && <WidgetsPanel /> /* workflow 0.6 */}
         {p === "plugins" && <PluginsPanel /> /* 0.8.2 */}
+        {p === "midi" && <MidiSection /> /* 0.8.3 */}
     </>
   );
 }

@@ -11,7 +11,8 @@ import { CalendarClock } from "lucide-preact"; // history
 import { histRange, histPicker, exitHistory } from "../history"; // history
 // workflow
 import { useState, useEffect, useLayoutEffect, useRef } from "preact/hooks";
-import { Film, Bookmark, Slice, Route, Leaf, Ellipsis } from "lucide-preact";
+import { Film, Slice, Route, Leaf, Ellipsis } from "lucide-preact";
+import { PanelsTopLeft as WsIcon } from "lucide-preact"; // 0.8.3: Workspaces icon (was Bookmark)
 import { loopDialog, loopProgress } from "../loopexport";
 import { LoopExportDialog } from "./LoopExport";
 import { SrvControl } from "./SrvControl";
@@ -133,7 +134,7 @@ export const TB_ITEMS: TbItem[] = [
   { id: "rules", sec: "Workflow", label: "Notification rules", icon: ListChecks, on: () => openPanel.value === "rules", run: togglePanel("rules"), owner: true },
   { id: "notify", sec: "Workflow", label: "Notification channels", icon: BellRing, on: () => notifyOpen.value, run: () => (notifyOpen.value = !notifyOpen.value) },
   { id: "widgets", sec: "Workflow", label: "Desktop widgets", icon: AppWindow, on: () => openPanel.value === "widgets", run: togglePanel("widgets"), owner: true },
-  { id: "ws", sec: "Workflow", label: "Workspaces", icon: Bookmark, on: () => wsMenu.value, run: () => (wsMenu.value = !wsMenu.value), owner: true },
+  { id: "ws", sec: "Workflow", label: "Workspaces", icon: WsIcon, on: () => wsMenu.value, run: () => (wsMenu.value = !wsMenu.value), owner: true },
   { id: "kiosk", sec: "Workflow", label: "Wall / kiosk mode", icon: Tv, on: () => false, run: enterKiosk, owner: true },
   { id: "share", sec: "Share", label: "Share live view", icon: Share2, on: () => shareDialog.value, run: () => (shareDialog.value = !shareDialog.value), owner: true },
   { id: "team", sec: "Share", label: "Team (live collaboration)", icon: Users, on: () => teamOpen.value, run: () => (teamOpen.value = !teamOpen.value), owner: true },

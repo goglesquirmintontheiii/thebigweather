@@ -1,4 +1,4 @@
-// 0.8.2: Settings → MIDI: on/off, devices, Learn (press a control → pick an action), mappings per device.
+// 0.8.2: MIDI (0.8.3: its own rail tab, was Settings → MIDI): on/off, devices, Learn (press a control → pick an action), mappings per device.
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Toggle } from "../ui/panels/RadarPanel";

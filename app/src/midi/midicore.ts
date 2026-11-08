@@ -1,5 +1,5 @@
 // 0.8.2: MIDI controller mappings — message parsing and value maths (pure, unit-tested).
-// The Web MIDI side is midi.ts; Settings → MIDI is MidiSection.tsx.
+// The Web MIDI side is midi.ts; the MIDI tab (0.8.3) is MidiSection.tsx.
 
 export type MKind = "note" | "cc" | "pc" | "pb";
 export interface MidiMsg {

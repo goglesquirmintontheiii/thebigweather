@@ -12,7 +12,6 @@ import { sameHost, serverInfo, refreshInfo } from "../clientstats";
 import { CenterModal } from "./CenterModal";
 import { Toggle } from "./panels/RadarPanel";
 import { KeysEditor } from "./panels/SettingsPanel";
-import { ytdlp, deno, loadRecs } from "./panels/RecordPanel"; // 0.8.2: YouTube tools
 import { ServerCog, Gauge, HardDrive, SlidersHorizontal, KeyRound, ScrollText, RotateCw, Copy, Eye, EyeOff, Trash2, RefreshCw, TriangleAlert, Check, Loader } from "lucide-preact";
 
 export const serverSettingsOpen = signal(false);
@@ -78,7 +77,6 @@ function Field({ label, path, err, restart, children, hint }: { label: string; p
 export function ServerSettingsSection() {
   useEffect(() => {
     refreshInfo();
-    loadRecs(); // 0.8.2: yt-dlp / Deno status
   }, []);
   if (!sameHost.value) return null;
   const info = serverInfo.value;
@@ -92,11 +90,7 @@ export function ServerSettingsSection() {
         <ServerCog size={13} /> Server settings…
       </button>
       <div class="muted small">Memory and CPU budgets, caches, credentials and logs.</div>
-      {/* 0.8.2: YouTube recording needs yt-dlp + Deno (start.sh / start.ps1 offer to install both) */}
-      <div class="muted small" title="YouTube camera recording: yt-dlp, and Deno as its JavaScript runtime. start.sh / start.ps1 install them.">
-        yt-dlp: {ytdlp.value ? "found" : "missing"}
-        {deno.value !== null && <> · Deno: {deno.value ? "found" : <span class="err-text">missing (YouTube may fail)</span>}</>}
-      </div>
+      {/* 0.8.3: yt-dlp / Deno status + one-click download moved to Settings → Connection → Recording tools */}
     </section>
   );
 }

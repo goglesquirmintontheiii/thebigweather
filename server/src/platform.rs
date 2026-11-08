@@ -169,6 +169,14 @@ pub fn tool(name: &str) -> PathBuf {
             }
         }
     }
+    // 0.8.3: one-click downloads (tooldl.rs) land here when the server folder is read-only
+    let data = crate::config::paths().data;
+    if !data.as_os_str().is_empty() {
+        let c = data.join("tools").join(&file);
+        if c.is_file() {
+            return c;
+        }
+    }
     PathBuf::from(file)
 }
 

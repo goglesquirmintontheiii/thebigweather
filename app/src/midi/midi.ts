@@ -1,4 +1,4 @@
-// 0.8.2: MIDI controllers (Web MIDI). Off by default (Settings → MIDI). Buttons / pads run command
+// 0.8.2: MIDI controllers (Web MIDI). Off by default (MIDI tab). Buttons / pads run command
 // palette commands (change product, toggle layers, pane layouts, play/pause, frames, radars …);
 // knobs / faders drive opacity, frame scrub, zoom, loop speed, rotation. Mappings are per device.
 
