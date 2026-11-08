@@ -3,6 +3,9 @@ import { createMap } from "../map/mapview";
 import { settings } from "../store";
 import { startAlerts } from "../alerts";
 import { Rail, SidePanel } from "./Sidebar";
+import { MinTray } from "./winframe"; // 0.8.2
+import { SourcesWindow } from "./SourcesWindow"; // 0.8.2
+import "./winreg"; // 0.8.2: pop-out windows + settings sync
 import { TopBar } from "./Header";
 import { Toolbar } from "./Toolbar";
 import { Timeline } from "./Timeline";
@@ -155,6 +158,7 @@ function MainApp() {
       <IntlLegend /> {/* intl & forecast tools */}
       <View3D /> {/* 3D */}
       <div class="bottom-dock">
+        <MinTray /> {/* 0.8.2: minimized windows */}
         <HistoryBar />
         <Timeline />
         <Toolbar />
@@ -184,6 +188,7 @@ function MainApp() {
       <NotifyPanel /> {/* data 0.8 */}
       <ShakeMenu /> {/* shake/stats/server 0.6 */}
       <ServerSettings /> {/* shake/stats/server 0.6 */}
+      <SourcesWindow /> {/* 0.8.2 */}
       <RadioPlayers />
       {openPanel.value !== "radio" && <NowPlaying compact />}
       <AddCameraDialog />

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "preact/hooks";
-import { settings, update, uid, toast } from "../../store";
+import { settings, update, uid, toast, connection } from "../../store";
+import { sourcesOpen } from "../SourcesWindow"; // 0.8.2
 import { api, lastHello } from "../../api";
 import { Toggle } from "./RadarPanel";
-import { Trash2, Check, Plus, Server } from "lucide-preact";
+import { Trash2, Check, Plus, Server, Activity } from "lucide-preact";
 import { playAlertSound } from "../../sound";
 import { ACCENTS } from "../../theme"; // workflow
 import { DesktopSection } from "../../share/DesktopSettings"; // Phase 6
@@ -145,6 +146,11 @@ export function SettingsPanel() {
             Server: {hello.profile.name} profile · {hello.profile.cores} cores · {hello.profile.threads} decode threads · v{hello.version}
           </div>
         )}
+        {/* 0.8.2: Data sources (was a rail tab) */}
+        <button class="btn sm ghost srcwin-btn" title="Feed status, health and timing" onClick={() => (sourcesOpen.value = true)}>
+          <Activity size={13} /> Data sources
+          {connection.value !== "online" && <i class={`srcwin-dot ${connection.value}`} />}
+        </button>
       </section>
       <ServerSettingsSection /> {/* shake/stats/server 0.6 */}
       <DesktopSection /> {/* Phase 6: tray, auto-start, built-in server */}

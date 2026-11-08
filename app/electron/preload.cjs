@@ -36,6 +36,15 @@ contextBridge.exposeInMainWorld("tbw", {
   info: () => ipcRenderer.invoke("app-info"),
   download: (url, name) => ipcRenderer.invoke("download", url, name),
   popout: (spec) => ipcRenderer.invoke("popout", spec),
+  /* 0.8.2: title-bar buttons of a frameless pop-out window */
+  win: {
+    ctl: (a) => ipcRenderer.invoke("win-ctl", a),
+    onMax: (cb) => {
+      const h = (_e, v) => cb(!!v);
+      ipcRenderer.on("win-max", h);
+      return () => ipcRenderer.removeListener("win-max", h);
+    },
+  },
   screenRec: {
     open: () => ipcRenderer.invoke("screenrec-open"),
     write: (id, buf) => ipcRenderer.invoke("screenrec-write", id, buf),

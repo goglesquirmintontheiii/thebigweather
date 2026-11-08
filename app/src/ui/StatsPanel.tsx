@@ -9,9 +9,10 @@ import { api } from "../api";
 import { settings, update } from "../store";
 import { fmtBytes } from "../util";
 import { client, clientHist, sameHost, useClientStats, hasIpc, type ClientStats } from "../clientstats";
-import { Cpu, X, GripVertical, MonitorCog, Server, Minimize2, Maximize2 } from "lucide-preact";
+import { Cpu, GripVertical, MonitorCog, Server, Minimize2, Maximize2 } from "lucide-preact";
 import { mergedLayout } from "./uiorder"; // 0.8.1
 import "./hotfix081.css"; // 0.8.1
+import { WinButtons, IN_OS_WIN, isMin, isMax, isPopped, minimize, toggleMax, canPop, popWindow, onBarDbl } from "./winframe"; // 0.8.2
 
 const stats = signal<any>(null);
 const history = signal<number[]>([]);
@@ -198,17 +199,21 @@ function Floater({ pk, sk = pk, title, icon, onClose, children, w: w0 = 220, cls
     window.addEventListener("pointerup", up);
   };
   const tip = `${Math.round(w)} × ${Math.round(h ?? ref.current?.offsetHeight ?? 0)} px`;
+  /* 0.8.2: shared title bar; while popped out the main window hides the stats */
+  const os = IN_OS_WIN;
+  const wid = `s:${pk}`;
+  const max = !os && isMax(wid);
+  if (!os && isPopped("s:stats")) return null;
+  const zoom = () => toggleMax(wid);
   return (
-    <div ref={ref} class={`stats glass stats-${pk} ${cls} ${h != null ? "sized" : ""}`} style={{ left: `${x}px`, top: `${y}px`, width: `${w}px`, ...(h != null ? { height: `${h}px` } : {}) }}>
+    <div ref={ref} class={`stats glass stats-${pk} ${cls} ${h != null ? "sized" : ""}${!os && isMin(wid) ? " wf-minimized" : ""}${max ? " wf-max" : ""}${os ? " wf-osframe" : ""}`} style={os ? undefined : { left: `${x}px`, top: `${y}px`, width: `${w}px`, ...(h != null ? { height: `${h}px` } : {}) }}>
       <div class="stats-zoom">
-        <div class="stats-head" onPointerDown={onDown as any}>
-          <GripVertical size={12} />
+        <div class="stats-head wf-bar" onPointerDown={os || max ? undefined : (onDown as any)} onDblClick={os ? undefined : (onBarDbl(zoom) as any)}>
+          <WinButtons os={os} onClose={onClose} onMin={() => minimize(wid, typeof title === "string" ? title : "Stats", undefined, onClose)} onZoom={zoom} zoomed={max} onPop={canPop("s:stats") ? () => popWindow("s:stats") : undefined} />
+          {!os && <GripVertical size={12} />}
           {icon}
           <span>{title}</span>
           {extra}
-          <button class="icon-btn" onPointerDown={(e) => e.stopPropagation()} onClick={onClose}>
-            <X size={12} />
-          </button>
         </div>
         {children}
       </div>

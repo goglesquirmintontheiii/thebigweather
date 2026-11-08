@@ -6,9 +6,13 @@ import { useEffect, useRef, useState } from "preact/hooks"; // 0.8.1
 import { createPortal } from "preact/compat"; // 0.8.1
 import { mergeOrder, moveBy, dropAt, isDefaultOrder } from "./uiorder"; // 0.8.1
 import "./hotfix081.css"; // 0.8.1
+import { effect } from "@preact/signals"; // 0.8.2
+import { WinButtons, IN_OS_WIN, isMin, isMax, isPopped, minimize, unminimize, toggleMax, canPop, popWindow, onBarDbl, winAware, animOn, ANIM_MS } from "./winframe"; // 0.8.2
+import { railWinId } from "./wincore"; // 0.8.2
+import { sourcesOpen } from "./SourcesWindow"; // 0.8.2
 import { viewer } from "../share/share"; // share & collab
 import { alerts } from "../alerts";
-import { Layers, Radar, TriangleAlert, MapPin, Activity, Settings, Radio, FolderOpen, CloudSun, Search, X, Map as MapIcon, CircleDot } from "lucide-preact";
+import { Layers, Radar, TriangleAlert, MapPin, Settings, Radio, FolderOpen, CloudSun, Search, X, Map as MapIcon, CircleDot } from "lucide-preact";
 import { RadioPanel } from "./panels/RadioPanel";
 import { ForecastPanel } from "./panels/ForecastPanel";
 import { SearchPanel } from "./panels/SearchPanel";
@@ -55,7 +59,7 @@ const ITEMS: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
   { id: "map", icon: MapIcon, label: "Basemap" },
   { id: "alerts", icon: TriangleAlert, label: "Alerts" },
   { id: "points", icon: MapPin, label: "My points" },
-  { id: "sources", icon: Activity, label: "Data sources" },
+  // 0.8.2: Data sources moved to Settings → "Data sources"
 ];
 
 const MORE: { id: Exclude<PanelId, null>; icon: any; label: string }[] = [
@@ -92,9 +96,7 @@ const RAIL: RailEntry[] = [
             const nWarn = [...alerts.value.values()].filter((a) => String(a.properties.event).endsWith("Warning")).length;
             return nWarn > 0 && <span class="badge">{nWarn > 99 ? "99+" : nWarn}</span>;
           }
-        : id === "sources"
-          ? () => connection.value !== "online" && <span class={`dot ${connection.value}`} />
-          : undefined,
+        : undefined,
   })),
   { id: "sep", icon: null, label: "Separator", on: () => false, click: () => {} },
   ...MORE.map(({ id, icon, label }) => ({
@@ -180,16 +182,19 @@ export function Rail() {
         const r = byId.get(id)!;
         if (id === "sep") return <div key="sep" class={`rail-sep rail-sep-drag${dropCls(id)}`} title="Separator (drag to move)" {...(dragProps(id) as any)} />;
         const Icon = r.icon;
+        const wid = railWinId(id); // 0.8.2: minimized → restore, popped out → focus that window
+        const on = r.on() || isMin(wid) || isPopped(wid);
         return (
-          <button key={id} class={`rail-btn ${r.on() ? "on" : ""}${dropCls(id)}`} title={r.label} onClick={r.click} {...(dragProps(id) as any)}>
+          <button key={id} class={`rail-btn ${on ? "on" : ""}${isMin(wid) || isPopped(wid) ? " wf-away" : ""}${dropCls(id)}`} title={r.label + (isMin(wid) ? " (minimized)" : isPopped(wid) ? " (in its own window)" : "")} onClick={winAware(wid, r.click)} {...(dragProps(id) as any)}>
             <Icon size={20} />
             {r.extra?.()}
           </button>
         );
       })}
       <div class="rail-fill" />
-      <button class={`rail-btn ${openPanel.value === "settings" ? "on" : ""}`} title="Settings" onClick={() => (openPanel.value = openPanel.value === "settings" ? null : "settings")}>
+      <button class={`rail-btn ${openPanel.value === "settings" || isMin("p:settings") || isPopped("p:settings") ? "on" : ""}`} title="Settings" onClick={winAware("p:settings", () => (openPanel.value = openPanel.value === "settings" ? null : "settings"))}>
         <Settings size={20} />
+        {connection.value !== "online" && <span class={`dot ${connection.value}`} title="Data sources: not connected" /> /* 0.8.2: was on the Data sources button */}
       </button>
       <RailMenu order={order} move={move} />
     </nav>
@@ -240,21 +245,68 @@ function RailMenu({ order, move }: { order: string[]; move: (id: string, d: numb
 
 const TITLES: Record<string, string> = { forecast: "Forecast", radio: "Weather radio", search: "Search", record: "Recordings", files: "Files & backup", radar: "Radar", layers: "Layers", map: "Basemap", alerts: "Alerts", points: "My points", sources: "Data sources", settings: "Settings", workspaces: "Workspaces" /* workflow */, route: "Route weather", rules: "Notification rules", widgets: "Desktop widgets" /* workflow 0.6 */, placefiles: "Placefiles" /* radar 0.6 */ };
 
+export const PANEL_TITLES = TITLES; // 0.8.2: pop-out window titles
+
 // share viewers: no owner-only panels (the server refuses their writes anyway)
 const OWNER_ONLY = new Set(["settings", "record", "files", "workspaces", "rules", "widgets", "placefiles"]);
 
-export function SidePanel() {
+/* ---------- 0.8.2: side panel window (title bar, 0.2 s open/close, minimize, maximize, pop-out) ---------- */
+// old links / the command palette may still ask for the Data sources tab: open its window instead
+effect(() => {
+  if (openPanel.value === "sources") {
+    openPanel.value = null;
+    sourcesOpen.value = true;
+  }
+});
+// a minimized panel opened again (rail, palette, hotkey): drop its chip
+effect(() => {
   const p = openPanel.value;
-  if (!p || (viewer.value && OWNER_ONLY.has(p))) return null;
+  if (p) unminimize(`p:${p}`);
+});
+
+export function SidePanel() {
+  const cur0 = openPanel.value;
+  const cur = cur0 && cur0 !== "sources" && !(viewer.value && OWNER_ONLY.has(cur0)) ? cur0 : null;
+  // keep the last panel on screen for the closing animation
+  const [shown, setShown] = useState<string | null>(cur);
+  useEffect(() => {
+    if (cur) return void setShown(cur);
+    if (!shown) return;
+    if (IN_OS_WIN || !animOn()) return void setShown(null);
+    const t = setTimeout(() => setShown(null), ANIM_MS);
+    return () => clearTimeout(t);
+  }, [cur]);
+  const p = cur ?? shown;
+  if (!p) return null;
+  const closing = !cur;
+  const os = IN_OS_WIN; // the pop-out window of this tab
+  const id = `p:${p}`;
+  const max = !os && isMax(id);
+  const close = () => (openPanel.value = null);
+  const zoom = () => toggleMax(id);
   return (
-    <aside class="side-panel glass">
-      <div class="panel-head">
+    <aside class={`side-panel glass${closing ? " sp-closing" : ""}${max ? " wf-max" : ""}${os ? " wf-osframe" : ""}`} aria-hidden={closing || undefined}>
+      <div class="panel-head wf-bar" onDblClick={os ? undefined : (onBarDbl(zoom) as any)}>
+        <WinButtons
+          os={os}
+          onClose={close}
+          onMin={() => (minimize(id, TITLES[p] ?? p, () => (openPanel.value = p as PanelId), () => {}), close())}
+          onZoom={zoom}
+          zoomed={max}
+          onPop={canPop(id) ? () => popWindow(id) : undefined}
+        />
         <h2>{TITLES[p]}</h2>
-        <button class="icon-btn" onClick={() => (openPanel.value = null)} title="Close">
-          <X size={16} />
-        </button>
       </div>
       <div class="panel-body">
+        <PanelBody p={p} />
+      </div>
+    </aside>
+  );
+}
+
+function PanelBody({ p }: { p: string }) {
+  return (
+    <>
         {p === "radar" && <RadarPanel />}
         {p === "layers" && <LayersPanel />}
         {p === "map" && <MapPanel />}
@@ -272,7 +324,7 @@ export function SidePanel() {
         {p === "route" && <RoutePanel /> /* workflow 0.6 */}
         {p === "rules" && <RulesPanel /> /* workflow 0.6 */}
         {p === "widgets" && <WidgetsPanel /> /* workflow 0.6 */}
-      </div>
-    </aside>
+    </>
   );
 }
+/* ---------- end 0.8.2 ---------- */

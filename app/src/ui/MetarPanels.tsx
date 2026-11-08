@@ -9,7 +9,7 @@ import { FloatPanel } from "./FloatPanel";
 import { WindCompass, SkyGraph } from "./OverlayPopup";
 import { popout, canPopout } from "../popout";
 import { fmtAge } from "../util";
-import { PictureInPicture2, RefreshCw } from "lucide-preact";
+import { RefreshCw } from "lucide-preact";
 
 export const metarPins = signal<{ id: string; x: number; y: number }[]>([]);
 const obs = signal<Record<string, any>>({});
@@ -103,6 +103,8 @@ export function MetarPanels() {
             x={pin.x}
             y={pin.y}
             onClose={() => close(pin.id)}
+            wid={`f:metar:${pin.id}`} /* 0.8.2: shared title bar pop-out */
+            onPopout={canPopout() ? () => (popout({ kind: "metar", title: `METAR ${pin.id}`, width: 440, height: 600, data: { id: pin.id } }), close(pin.id)) : undefined}
             title={
               <>
                 {p?.cat && <i class="cat-dot" style={{ background: CAT[p.cat] ?? "#94a3b8" }} />}
@@ -114,11 +116,6 @@ export function MetarPanels() {
                 <button class="icon-btn" title="Refresh" onClick={refreshMetars}>
                   <RefreshCw size={13} />
                 </button>
-                {canPopout() && (
-                  <button class="icon-btn" title="Pop out to its own window" onClick={() => (popout({ kind: "metar", title: `METAR ${pin.id}`, width: 440, height: 600, data: { id: pin.id } }), close(pin.id))}>
-                    <PictureInPicture2 size={13} />
-                  </button>
-                )}
               </>
             }
           >

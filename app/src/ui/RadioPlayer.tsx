@@ -8,6 +8,8 @@ import { fmtBytes } from "../util";
 import { ToolButtons, SamePanel, TranscriptPanel } from "./RadioTools";
 import { toDb, dbPos } from "../audio/levels"; // radio/dash 0.8
 import type { LivePlayer, PlayerSnap } from "../radio"; // radio/dash 0.8
+import { WinButtons, isMin, isMax, minimize, toggleMax, forget, onBarDbl } from "./winframe"; // 0.8.2
+import { popout, canPopout } from "../popout"; // 0.8.2
 
 let z = 60;
 
@@ -51,9 +53,21 @@ function Player({ w }: { w: PlayerWin }) {
   const live = seekable ? behind < 4 : s.status === "playing";
   const paused = s.status === "paused";
   const st = s.status === "connecting" ? "Connecting…" : s.status === "reconnecting" ? "Reconnecting…" : s.status === "buffering" ? "Buffering…" : s.status === "error" ? s.note ?? "Error" : null;
+  /* 0.8.2: shared title bar */
+  const wid = `rp:${w.id}`;
+  const max = isMax(wid);
+  useEffect(() => () => forget(wid), []);
+  const zoom = () => toggleMax(wid);
   return (
-    <div ref={ref} class="rp glass" style={{ left: `${w.x}px`, top: `${w.y}px`, zIndex: zi }} onPointerDown={onDown as any}>
-      <div class="rp-head">
+    <div ref={ref} class={`rp glass${isMin(wid) ? " wf-minimized" : ""}${max ? " wf-max" : ""}`} style={{ left: `${w.x}px`, top: `${w.y}px`, zIndex: max ? 66 : zi }} onPointerDown={max ? undefined : (onDown as any)}>
+      <div class="rp-head wf-bar" onDblClick={onBarDbl(zoom) as any}>
+        <WinButtons
+          onClose={() => closePlayer(w.id)}
+          onMin={() => minimize(wid, p.stream.call ?? p.stream.name, undefined, () => closePlayer(w.id))}
+          onZoom={zoom}
+          zoomed={max}
+          onPop={canPopout() ? () => (popout({ kind: "radio", title: p.stream.name, width: 380, height: 190, data: p.stream }), closePlayer(w.id)) : undefined}
+        />
         <Radio size={14} />
         <span class="rp-title" title={p.stream.url}>
           <b>{p.stream.call ?? p.stream.name}</b>
@@ -64,9 +78,6 @@ function Player({ w }: { w: PlayerWin }) {
         </span>
         <button class="icon-btn rp-compact" title="Compact: shrink to the small player (playback, SAME and transcript keep running)" onClick={() => setPlayerCompact(w.id, true)}>
           <Minimize2 size={14} />
-        </button>
-        <button class="icon-btn" title="Close" onClick={() => closePlayer(w.id)}>
-          <X size={14} />
         </button>
       </div>
       <div class="rp-seek">

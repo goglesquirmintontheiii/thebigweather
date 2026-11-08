@@ -5,10 +5,11 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import Hls from "hls.js";
 import { api } from "../api";
 import { activeServer, settings, update, toast } from "../store";
-import { X, ExternalLink, RefreshCw, Pause, Play as PlayIcon, PictureInPicture2, Circle, Square, Info, Trash2 } from "lucide-preact";
+import { ExternalLink, RefreshCw, Pause, Play as PlayIcon, Circle, Square, Info, Trash2 } from "lucide-preact";
 import { activeTime } from "../active";
 import { fileUrl, recs, loadRecs, recordCamera, stopRec, ytdlp, ffmpeg } from "./panels/RecordPanel";
 import { popout, canPopout } from "../popout";
+import { WinButtons, isMin, isMax, minimize, toggleMax, forget, onBarDbl } from "./winframe"; // 0.8.2
 import { mapRef } from "../map/mapview";
 import { currentSite } from "../radar/controller";
 import { distance, bearing, compass, fmtDist } from "../util";
@@ -467,9 +468,21 @@ function Panel({ c }: { c: CamView }) {
   };
   const link = c.page || c.video || c.img;
   const stop = (e: Event) => e.stopPropagation();
+  /* 0.8.2: shared title bar */
+  const wid = `cam:${c.id}`;
+  const max = isMax(wid);
+  useEffect(() => () => forget(wid), []);
+  const zoom = () => toggleMax(wid);
   return (
-    <div ref={ref} class="cam-panel sized glass" style={{ left: `${c.x}px`, top: `${c.y}px`, width: `${size[0]}px`, height: `${size[1]}px`, zIndex: zi }} onPointerDown={() => setZ(++z)}>
-      <div class="cam-head" onPointerDown={onDown as any}>
+    <div ref={ref} class={`cam-panel sized glass${isMin(wid) ? " wf-minimized" : ""}${max ? " wf-max" : ""}`} style={{ left: `${c.x}px`, top: `${c.y}px`, width: `${size[0]}px`, height: `${size[1]}px`, zIndex: max ? 36 : zi }} onPointerDown={() => setZ(++z)}>
+      <div class="cam-head wf-bar" onPointerDown={(e) => !max && onDown(e as any)} onDblClick={onBarDbl(zoom) as any}>
+        <WinButtons
+          onClose={() => close(c.id)}
+          onMin={() => minimize(wid, c.name, undefined, () => close(c.id))}
+          onZoom={zoom}
+          zoomed={max}
+          onPop={canPopout() && c.type !== "rec" ? () => (popout({ kind: "camera", title: c.name, width: 720, height: 480, data: { ...c, x: 0, y: 0 } }), close(c.id)) : undefined}
+        />
         <span class="cam-title" title={c.name}>
           {c.name}
           {c.source && <small> · {c.source}</small>}
@@ -481,24 +494,11 @@ function Panel({ c }: { c: CamView }) {
             <Info size={13} />
           </button>
         )}
-        {canPopout() && c.type !== "rec" && (
-          <button
-            class="icon-btn"
-            title="Pop out to its own window"
-            onPointerDown={stop}
-            onClick={() => (popout({ kind: "camera", title: c.name, width: 720, height: 480, data: { ...c, x: 0, y: 0 } }), close(c.id))}
-          >
-            <PictureInPicture2 size={13} />
-          </button>
-        )}
         {link && link !== "proxy" && (
           <button class="icon-btn" title="Open in browser" onPointerDown={stop} onClick={() => window.open(link, "_blank")}>
             <ExternalLink size={13} />
           </button>
         )}
-        <button class="icon-btn" title="Close" onPointerDown={stop} onClick={() => close(c.id)}>
-          <X size={14} />
-        </button>
       </div>
       {c.type === "rec" && c.rec ? (
         <RecPlayer c={c} />

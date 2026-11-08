@@ -1,0 +1,418 @@
+/* 0.8.2 windows: shared Mac-style title bar, minimized tray, maximize, open/close animations,
+   frameless pop-out windows. Animations follow Settings → Performance → Animations (perf.ts turns
+   every animation off) and Accessibility → Reduce motion (html.a11y-reduce). */
+
+/* ---------- the button group ---------- */
+.wf-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-right: 4px;
+}
+.wf-pop {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.wf-pop:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+.wf-lights {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wf-l {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  cursor: default;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.35);
+}
+/* a bigger hit area than the 12 px dot */
+.wf-l::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+}
+.wf-l i {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  color: rgba(0, 0, 0, 0.62);
+  opacity: 0;
+  pointer-events: none;
+}
+.wf-zoom i {
+  font-size: 9px;
+}
+.wf-lights:hover .wf-l:not(:disabled) i,
+.wf-lights:focus-within .wf-l:not(:disabled) i {
+  opacity: 1;
+}
+.wf-close {
+  background: #ff5f57;
+}
+.wf-l.wf-min {
+  background: #febc2e;
+}
+.wf-zoom {
+  background: #9a9a9a;
+}
+.wf-l:active:not(:disabled) {
+  filter: brightness(0.82);
+}
+.wf-l:disabled {
+  background: rgba(255, 255, 255, 0.16);
+}
+.wf-l:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+html.a11y-contrast .wf-l {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.7);
+}
+
+/* title bars: buttons on the left, then the title */
+.panel-head.wf-bar {
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 10px 12px 8px 12px;
+  user-select: none;
+}
+.panel-head.wf-bar h2 {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-head.wf-bar {
+  padding-left: 12px;
+}
+.fpanel-head.wf-bar {
+  padding-left: 10px;
+  gap: 6px;
+}
+.cam-head.wf-bar {
+  padding-left: 10px;
+}
+.ovl-modal-head.wf-bar {
+  padding-left: 12px;
+  user-select: none;
+}
+.stats-head.wf-bar {
+  padding-left: 7px;
+}
+.stats-head .wf-btns {
+  gap: 6px;
+}
+.stats-head .wf-lights {
+  gap: 6px;
+}
+.rp-head.wf-bar .wf-btns {
+  margin-right: 2px;
+}
+
+/* ---------- minimized / maximized ---------- */
+.wf-minimized {
+  display: none !important;
+}
+.cmodal-back.wf-maxback {
+  place-items: stretch;
+}
+.cmodal.wf-max {
+  position: fixed;
+  left: calc(var(--rail) + 18px);
+  top: 10px;
+  right: 10px;
+  bottom: 10px;
+  width: auto;
+  height: auto;
+  margin: 0;
+}
+.side-panel.wf-max {
+  width: auto;
+  right: 10px;
+  z-index: 8;
+}
+.fpanel.wf-max,
+.cam-panel.wf-max,
+.rp.wf-max,
+.stats.wf-max,
+.ovl-modal.wf-max {
+  position: fixed !important;
+  left: calc(var(--rail) + 18px) !important;
+  top: 10px !important;
+  right: 10px;
+  bottom: 10px;
+  width: auto !important;
+  height: auto !important;
+  max-width: none;
+  max-height: none;
+  cursor: default;
+}
+.fpanel.wf-max .fpanel-body {
+  max-height: none;
+  flex: 1;
+}
+.ovl-modal.wf-max .ovl-modal-body {
+  flex: 1;
+}
+
+/* rail button of a minimized / popped-out window */
+.rail-btn.on.wf-away {
+  background: rgba(63, 183, 255, 0.2);
+  color: var(--accent);
+}
+
+/* ---------- tray of minimized windows (bottom, above the timeline / toolbar) ---------- */
+.wf-tray {
+  max-width: min(72vw, 960px);
+  display: flex;
+  flex-wrap: wrap-reverse;
+  justify-content: center;
+  gap: 6px;
+}
+.wf-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  border-radius: 9px;
+  padding-right: 3px;
+  animation: wf-chip-in 0.2s ease-out;
+}
+.wf-chip-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 100%;
+  padding: 0 6px 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wf-chip-main:hover {
+  color: #fff;
+}
+.wf-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #febc2e;
+  flex: none;
+}
+.wf-chip-x {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+}
+.wf-chip-x:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+/* ---------- open / close animations (0.2 s) ---------- */
+.side-panel {
+  animation: wf-sp-in 0.2s ease-out;
+}
+.side-panel.sp-closing {
+  animation: wf-sp-out 0.2s ease-out forwards;
+  pointer-events: none;
+}
+.cmodal-back {
+  animation: wf-fade-in 0.2s ease-out;
+}
+.cmodal-back > .cmodal,
+.fpanel,
+.cam-panel,
+.rp,
+.ovl-modal {
+  animation: wf-pop-in 0.2s ease-out;
+}
+.wf-ghosts {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 60;
+}
+.wf-ghost,
+.wf-ghost * {
+  pointer-events: none !important;
+}
+.wf-ghost {
+  animation: wf-fade-out 0.2s ease-out forwards !important;
+}
+.wf-ghost > .cmodal {
+  animation: wf-pop-out 0.2s ease-out forwards !important;
+}
+@keyframes wf-sp-in {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+}
+@keyframes wf-sp-out {
+  to {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+}
+@keyframes wf-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes wf-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes wf-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+@keyframes wf-pop-out {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+@keyframes wf-chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+html.a11y-reduce .side-panel,
+html.a11y-reduce .cmodal-back,
+html.a11y-reduce .cmodal,
+html.a11y-reduce .fpanel,
+html.a11y-reduce .cam-panel,
+html.a11y-reduce .rp,
+html.a11y-reduce .ovl-modal,
+html.a11y-reduce .wf-chip,
+html.a11y-reduce .wf-tray,
+html.a11y-reduce .wf-ghost {
+  animation: none !important;
+  transition: none !important;
+}
+html.a11y-reduce .wf-ghost {
+  display: none;
+}
+
+/* ---------- frameless pop-out OS windows ---------- */
+html.wf-oswin .wf-bar {
+  -webkit-app-region: drag;
+}
+html.wf-oswin .wf-bar :is(button, input, select, textarea, a, label, [role="button"], .wf-btns, .toggle) {
+  -webkit-app-region: no-drag;
+}
+.wf-osbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  flex: none;
+  padding: 0 10px;
+  margin: -8px -8px 8px;
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+.wf-ostitle {
+  flex: 1;
+  min-width: 0;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.popout.popout-win {
+  padding: 0;
+  overflow: auto;
+}
+html.wf-oswin .side-panel.wf-osframe,
+html.wf-oswin .fpanel.wf-osframe,
+html.wf-oswin .ovl-modal.wf-osframe {
+  position: fixed;
+  inset: 0;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+  border: 0;
+  animation: none;
+}
+html.wf-oswin .fpanel.wf-osframe .fpanel-body {
+  max-height: none;
+  flex: 1;
+}
+html.wf-oswin .ovl-modal.wf-osframe .ovl-modal-body {
+  flex: 1;
+}
+html.wf-oswin .stats.wf-osframe {
+  position: relative;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  border-width: 0 0 1px;
+}
+html.wf-oswin .popout-s_stats {
+  display: flex;
+  flex-direction: column;
+}
+.wf-poperr {
+  margin: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  max-width: 420px;
+}
+.wf-poperr div {
+  display: flex;
+  gap: 8px;
+}
+
+/* ---------- Settings → Data sources ---------- */
+.srcwin-btn {
+  position: relative;
+  align-self: flex-start;
+  margin-top: 6px;
+}
+.srcwin-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.srcwin-dot.offline,
+.srcwin-dot.unauthorized {
+  background: var(--err);
+}
+.cmodal.srcwin {
+  width: min(600px, 94vw);
+  height: min(84vh, 820px);
+}
