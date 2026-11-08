@@ -23,6 +23,7 @@ import type { Raster } from "../grid/raster";
 import { pane3dInfo, paneRev } from "../map/panes";
 import { Slider } from "./controls";
 import type { ColorTable } from "../radar/colormaps";
+import { popoutSpec } from "../popout"; // integration 0.8.3
 
 /** app product id -> server volume3d moment */
 const MOMENT: Record<string, string> = { REF: "REF", VEL: "VEL", SW: "SW", ZDR: "ZDR", RHO: "CC", CC: "CC", PHI: "PHI", KDP: "KDP" };
@@ -876,10 +877,12 @@ effect(() => {
 
 // ---------- 0.8.3 3d (R40): panes ----------
 const PKEY = "tbw.view3d.panes";
+/* integration 0.8.3: only the main window keeps its panes' 3D (a pane window's pane 1 isn't the main window's pane 1) */
+const PKEEP = !popoutSpec;
 /** panes in 3D (by pane index) */
 export const pane3d = signal<Record<number, boolean>>((() => {
   try {
-    const v = JSON.parse(localStorage.getItem(PKEY) || "{}");
+    const v = PKEEP ? JSON.parse(localStorage.getItem(PKEY) || "{}") : {};
     return v && typeof v === "object" ? v : {};
   } catch {
     return {};
@@ -890,7 +893,7 @@ export function togglePane3D(idx: number) {
   if (!n[idx]) delete n[idx];
   pane3d.value = n;
   try {
-    localStorage.setItem(PKEY, JSON.stringify(n));
+    if (PKEEP) localStorage.setItem(PKEY, JSON.stringify(n));
   } catch {
     /* ignore */
   }

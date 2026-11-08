@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { snapAt, addEdge, splitCell, normalize, sameGrid, cellRect, inRect, edgeBand, homeFallback, matchLayout, type Grid } from "../src/ui/winsnap";
-import { fitScale, shouldForward, raisesMain } from "../src/ui/wincore";
+import { fitScale, shouldForward, raisesMain, paneWinOwnKey } from "../src/ui/wincore";
 
 export function testPopoutKeyForwarding() {
   const k = (key: string, m: Partial<{ ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean }> = {}) => ({ key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...m });
@@ -18,6 +18,8 @@ export function testPopoutKeyForwarding() {
   assert.ok(!shouldForward(k(" "), { field: false, button: true }));
   assert.ok(!shouldForward(k("c", { ctrlKey: true }), plain));
   assert.ok(raisesMain(k("?")) && raisesMain(k("k", { metaKey: true })) && !raisesMain(k("d")));
+  // integration 0.8.3: a pane window keeps I (its Inspector) and B (its bearing tool)
+  assert.ok(paneWinOwnKey(k("i")) && paneWinOwnKey(k("B")) && !paneWinOwnKey(k("i", { ctrlKey: true })) && !paneWinOwnKey(k("d")));
 }
 
 export function testFitScale() {

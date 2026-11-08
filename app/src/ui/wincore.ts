@@ -89,6 +89,8 @@ export function shouldForward(k: KeyLike, target: { field: boolean; button: bool
   if (mod && EDIT_KEYS.has(k.key.toLowerCase())) return false; // copy / paste / zoom / reload / close stay with the window
   return true;
 }
+/** integration 0.8.3: keys a pane window handles itself (I = its Inspector, B = its bearing tool) */
+export const paneWinOwnKey = (k: KeyLike) => !k.ctrlKey && !k.metaKey && !k.altKey && !k.shiftKey && (k.key.toLowerCase() === "i" || k.key.toLowerCase() === "b");
 /** keys that open something in the main window (it comes to the front) */
 export const raisesMain = (k: Pick<KeyMsg, "key" | "ctrlKey" | "metaKey">) => k.key === "?" || ((k.ctrlKey || k.metaKey) && k.key.toLowerCase() === "k");
 

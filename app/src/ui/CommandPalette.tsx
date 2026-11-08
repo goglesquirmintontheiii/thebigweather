@@ -37,6 +37,7 @@ import { sourcesOpen } from "./SourcesWindow"; // 0.8.2 integration: a window no
 import { winAware } from "./winframe"; // 0.8.2 integration: minimized → restore, popped out → focus
 import { BUILTIN_LAYOUTS, openPaneWindow, defaultCfg, layoutName } from "./Panes";
 import { jumpToSetting } from "../a11y/jump";
+import { configModal } from "./OverlayList"; // integration 0.8.3
 import { A11Y_DEFAULTS, a11y } from "../a11y/a11y";
 import { Search, CornerDownLeft, Command, Layers, CloudSun, PanelLeft, Settings as Cog, MapPin, Radar, Navigation, History, X, Puzzle } from "lucide-preact";
 /* 0.8.3: every catalog product + plugins */
@@ -146,6 +147,10 @@ function settingDefs(): SetDef[] {
     { label: "Sound on new sweep", section: "Alerts & sound", get: () => s.audio.sweeps, set: (v) => update((x) => (x.audio.sweeps = v)) },
     { label: "Volume", section: "Alerts & sound" },
     { label: "API keys", section: "API keys" },
+    /* integration 0.8.3: sections added this round (Settings categories) */
+    { label: "Recording tools", section: "Connection", kw: "yt-dlp ytdlp deno youtube download install camera recording" },
+    { label: "Performance", section: "Performance", kw: "gpu quality speed slow lag frame rate" },
+    { label: "Updates", section: "App", kw: "update version upgrade download" },
     { label: "Pane layouts", section: "Pane layouts", kw: "custom grid editor" },
     // 0.8.3: MIDI is its own tab now (panel entry above)
     { label: "Accessibility", section: "Accessibility", kw: "a11y" },
@@ -268,6 +273,7 @@ export function buildItems(): PItem[] {
   cmd("panewin", "New pane window", () => openPaneWindow(defaultCfg(1), { pos: true, time: true, layers: true }), "A window with just a map and product selector, linked to this one", "popout pop-out second monitor");
   cmd("linkall", "Panes: link all (position, time, layers)", () => update((x) => ((x.panes.sync = true), (x.panes.links = {}))), `Layout: ${layoutName(s.panes.layout)}`, "sync");
   cmd("plugins", "Plugins", panel("plugins"), "Installed plugins and the marketplace", "plugin marketplace extensions addons install"); // 0.8.2
+  cmd("altr", "Alert translation options", () => (configModal.value = "base:alerts"), "Alerts → layer options → Translation", "translate russian language english alerts"); // integration 0.8.3
   cmd("saver", "Bandwidth saver", () => update((x) => (x.saver = !x.saver)), undefined, "data", !!s.saver);
   // layers (overlays + base layers)
   for (const l of allLayers()) out.push({ id: `layer:${l.id}`, cat: "layer", label: l.name, hint: l.group, kw: `${l.group} overlay`, on: isLayerOn(l.id), run: () => toggleLayer(l.id) });
