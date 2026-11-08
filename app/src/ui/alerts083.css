@@ -1,0 +1,212 @@
+/* 0.8.3: Alerts tab (Timelines button, region tabs that fit), alert timeline (type groups with
+ * sticky labels, type filter chips, one scroller for both directions), Translate button */
+
+/* R16: "International 944" must fit its tab */
+.seg.al-regions {
+  gap: 2px;
+}
+.seg.al-regions button {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 5px;
+  gap: 4px;
+  overflow: hidden;
+}
+.seg.al-regions button:last-child {
+  flex-grow: 1.35;
+}
+.al-regions .al-n {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  line-height: 15px;
+}
+
+/* R17: Timelines button at the top of the tab */
+.al-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.al-top .al-tlbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: center;
+}
+.al-top .al-tlbtn.on {
+  color: var(--accent, #3fb7ff);
+  box-shadow: inset 0 0 0 1px rgba(63, 183, 255, 0.5);
+}
+
+/* ---------- alert timeline ---------- */
+.cmodal.atl .atl-wrap {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.cmodal.atl .atl-scroll {
+  overflow: auto;
+  max-height: min(62vh, 760px);
+  height: auto;
+}
+.cmodal.atl .atl-canvas {
+  position: relative;
+  min-height: 100%;
+}
+.cmodal.atl .atl-row {
+  display: flex;
+  position: relative;
+  border-bottom: 1px solid var(--line);
+}
+.cmodal.atl .atl-row.atl-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  height: 26px;
+  background: #121a24;
+}
+.cmodal.atl .atl-lname {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  flex: 0 0 210px;
+  width: 210px;
+  display: block;
+  padding: 0;
+  border-bottom: 0;
+  border-right: 1px solid var(--line);
+  background: #141c27;
+}
+.cmodal.atl .atl-corner {
+  z-index: 6;
+  background: #121a24;
+}
+/* the name stays in view while a tall group scrolls past (sticky at the group's start) */
+.cmodal.atl .atl-lname-in {
+  position: sticky;
+  top: 26px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 26px;
+  padding: 0 10px;
+  text-align: left;
+  font-size: 12px;
+  color: #d2dae4;
+}
+.cmodal.atl .atl-lname-in:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.cmodal.atl .atl-lname-in i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.cmodal.atl .atl-lname-in span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmodal.atl .atl-lane {
+  position: relative;
+  flex: 0 0 auto;
+  border-bottom: 0;
+}
+.cmodal.atl .atl-axis {
+  position: relative;
+  height: 26px;
+  border-bottom: 0;
+  flex: 0 0 auto;
+}
+.cmodal.atl .atl-grid {
+  position: absolute;
+  top: 26px;
+  bottom: 0;
+  right: auto;
+  z-index: 0;
+}
+.cmodal.atl .atl-future {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.025);
+}
+.cmodal.atl .atl-bar,
+.cmodal.atl .atl-pt {
+  z-index: 1;
+}
+.cmodal.atl .atl-none {
+  position: sticky;
+  left: 0;
+  padding: 12px;
+}
+.atl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  max-height: 84px;
+  overflow-y: auto;
+}
+.atl-chips-h {
+  margin-right: 2px;
+}
+.atl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  color: #c4cdd8;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  white-space: nowrap;
+}
+.atl-chip i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+.atl-chip small {
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+.atl-chip.in {
+  color: #fff;
+  background: rgba(63, 183, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(63, 183, 255, 0.6);
+}
+.atl-chip.out {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+/* ---------- R6: Translate ---------- */
+.ad-tr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 2px 0 6px;
+}
+.ad-tr .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ad-tr-note {
+  font-size: 10.5px;
+}
+.ad-tr-err {
+  color: #fca5a5;
+}

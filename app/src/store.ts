@@ -86,6 +86,10 @@ export interface AlertCfg {
   types: Record<string, AlertTypeCfg>;
   /** 0.8.2: United States / Canada / International switches (missing = on) */
   regions?: Partial<Record<"us" | "ca" | "intl", boolean>>;
+  /** 0.8.3: Translate button on alert text — Russian alerts (default), every non-English one, or off */
+  trShow?: "ru" | "all" | "off";
+  /** 0.8.3: translation service the server calls (no keys); the built-in glossary is the fallback */
+  trEngine?: "mymemory" | "google" | "libre" | "glossary";
 }
 
 /** An extra map pane (multi-pane view). */
@@ -279,6 +283,8 @@ export interface Settings {
   /* ---------- end data 0.8 ---------- */
   /* 0.8.2: toolbar pins (ui/Toolbar.tsx), dashboards (ui/Dashboard.tsx), MIDI mappings (midi/) */
   tbPins?: string[];
+  /** 0.8.3: Layers rows shown as on/off toggles in the toolbar's "…" menu (layer keys) */
+  layerPins?: string[];
   dashboards?: import("./ui/dashgrid").DashState;
   midi?: import("./midi/midicore").MidiSettings;
 }

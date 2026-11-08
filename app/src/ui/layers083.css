@@ -1,0 +1,56 @@
+/* 0.8.3: Layers rows — toolbar-menu pin, rows that can't be turned on */
+.ovl-line .ovl-tbpin {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  color: var(--muted);
+  opacity: 0;
+}
+.ovl-row:hover .ovl-tbpin,
+.ovl-line .ovl-tbpin:focus-visible {
+  opacity: 0.75;
+}
+.ovl-line .ovl-tbpin.on {
+  opacity: 1;
+  color: var(--accent);
+}
+.ovl-row.is-disabled .ovl-toggle {
+  cursor: not-allowed;
+}
+.ovl-row.is-disabled .ovl-toggle span {
+  opacity: 0.5;
+}
+
+/* toolbar "…" menu: pinned layers as switches */
+.tb-more-item .tb-lsw {
+  margin-left: auto;
+  width: 26px;
+  height: 15px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.14);
+  position: relative;
+  flex: none;
+  transition: background 0.15s;
+}
+.tb-more-item .tb-lsw::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #cbd5e1;
+  transition: transform 0.15s;
+}
+.tb-more-item.on .tb-lsw {
+  background: var(--accent);
+}
+.tb-more-item.on .tb-lsw::after {
+  transform: translateX(11px);
+  background: #fff;
+}
+.tb-more-empty {
+  padding: 2px 10px 6px;
+  font-size: 11px;
+}

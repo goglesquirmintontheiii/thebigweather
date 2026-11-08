@@ -28,7 +28,7 @@ const LINE: ExpressionSpecification = ["in", ["geometry-type"], ["literal", ["Li
 const POINT: ExpressionSpecification = ["==", ["geometry-type"], "Point"];
 
 function keepMeta(id: string, fc: any) {
-  ovlMeta.value = { ...ovlMeta.value, [id]: { sources: Array.isArray(fc?.sources) ? fc.sources : [], total: fc?.total, truncated: !!fc?.truncated } as FeedMeta };
+  ovlMeta.value = { ...ovlMeta.peek(), [id]: { sources: Array.isArray(fc?.sources) ? fc.sources : [], total: fc?.total, truncated: !!fc?.truncated } as FeedMeta };
 }
 
 /** A point in the middle of a line (or of a multi-line's longest part), for the icon. */
@@ -150,14 +150,28 @@ function flowPrepare(fc: any) {
     const n = Math.min(4, list.length);
     list.forEach((f, j) => (out[idx.get(f)!].properties._slot = `${n}-${j % n}`));
   }
-  return { ...fc, features: out, _count: feats.length };
+  const srcs: FeedSource[] = Array.isArray(fc?.sources) ? fc.sources : [];
+  // first fetch on the server still running: ask again shortly instead of in 5 minutes
+  const pending = !feats.length && !srcs.some((s) => s.age != null || s.error);
+  return { ...fc, features: out, _count: feats.length, _status: flowNote(fc), pending };
+}
+
+/** 0.8.3: say where the data is (only three areas publish open speeds) and why nothing shows */
+export const FLOW_AREAS = "Finland, Maryland and New York City only";
+export function flowNote(fc: any): string {
+  const n = fc?.features?.length ?? 0;
+  const srcs: FeedSource[] = Array.isArray(fc?.sources) ? fc.sources : [];
+  if (n) return `${FLOW_AREAS} · zoom there to see it`;
+  if (srcs.length && srcs.every((s) => s.error)) return "No data: the sources aren't answering";
+  if (!srcs.some((s) => s.age != null)) return "Loading the speed feeds…";
+  return `No data (${FLOW_AREAS})`;
 }
 
 function flowLayers(s: string, st: Style): LayerSpecification[] {
   const speed: ExpressionSpecification = mph() ? ["round", ["*", ["to-number", ["get", "speed"], 0], 0.621371]] : ["round", ["to-number", ["get", "speed"], 0]];
   return [
-    { id: `${s}-case`, type: "line", source: s, filter: LINE, layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#000", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 2.5 * st.size, 14, 7 * st.size], "line-opacity": 0.5 * st.opacity } } as LayerSpecification,
-    { id: `${s}-line`, type: "line", source: s, filter: LINE, layout: { "line-cap": "round", "line-join": "round", "line-sort-key": ["-", 200, FLOW_RANK] }, paint: { "line-color": FLOW_COLOR, "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1.5 * st.size, 14, 5 * st.size], "line-opacity": st.opacity } } as LayerSpecification,
+    { id: `${s}-case`, type: "line", source: s, filter: LINE, layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#000", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 3 * st.size, 9, 4 * st.size, 14, 8 * st.size], "line-opacity": 0.5 * st.opacity } } as LayerSpecification,
+    { id: `${s}-line`, type: "line", source: s, filter: LINE, layout: { "line-cap": "round", "line-join": "round", "line-sort-key": ["-", 200, FLOW_RANK] }, paint: { "line-color": FLOW_COLOR, "line-width": ["interpolate", ["linear"], ["zoom"], 5, 1.8 * st.size, 9, 2.6 * st.size, 14, 5.5 * st.size], "line-opacity": st.opacity } } as LayerSpecification,
     {
       id: `${s}-pt`,
       type: "symbol",
@@ -165,7 +179,7 @@ function flowLayers(s: string, st: Style): LayerSpecification[] {
       filter: POINT,
       layout: {
         "icon-image": "flow-dot",
-        "icon-size": ["interpolate", ["linear"], ["zoom"], 4, 0.55 * st.size, 9, 0.9 * st.size, 13, 1.1 * st.size],
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 3, 0.6 * st.size, 7, 0.85 * st.size, 10, 1 * st.size, 13, 1.15 * st.size],
         "icon-offset": SLOT_OFFSET,
         "icon-allow-overlap": true,
         "icon-ignore-placement": true,
@@ -250,13 +264,15 @@ export const roadTrafficDefs: OverlayDef[] = [
     id: "trafficflow",
     name: "Traffic speeds (open data)",
     group: "Traffic",
-    view: "bbox",
-    minzoom: 5,
+    // 0.8.3: the whole set is small (a few thousand stations / links): fetch it once per refresh
+    // instead of on every pan / zoom (was view: "bbox", minzoom 5), and draw the links above the
+    // radar picture (lines normally sit under it, so NYC links were hidden by the radar)
     refresh: 300,
+    rasterTop: true,
     style: { opacity: 1, size: 1, labels: true },
     prepare: (fc) => flowPrepare(fc),
     layers: (s, st) => flowLayers(s, st),
     click: (p) => flowClick(p),
-    note: "No key needed. Measured speeds: Finland (Fintraffic Digitraffic, CC BY 4.0), Maryland CHART sensors and NYC DOT links. Coloured by % of free-flow speed where the source gives one (red < 50%, green ≥ 90%), else by the speed itself.",
-  },
+    note: "No key needed. Open speed data exists only for Finland (Fintraffic Digitraffic, CC BY 4.0), Maryland (CHART sensors) and New York City (NYC DOT links). Coloured by % of free-flow speed where the source gives one (red < 50%, green ≥ 90%), else by the speed itself.",
+  } as OverlayDef & { rasterTop?: boolean },
 ];

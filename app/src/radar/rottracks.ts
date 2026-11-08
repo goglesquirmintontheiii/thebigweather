@@ -12,7 +12,7 @@ import { distance, speedFactor } from "../util";
 import type { Style, Popup } from "../overlays/defs";
 
 const on = () => !!settings.value.ovl.rottracks?.on;
-const status = (s: { loading?: boolean; error?: string; count?: number; note?: string }) => (ovlStatus.value = { ...ovlStatus.value, rottracks: s });
+const status = (s: { loading?: boolean; error?: string; count?: number; note?: string }) => (ovlStatus.value = { ...ovlStatus.peek(), rottracks: s }); // 0.8.3: peek (no effect cycle)
 
 interface Det {
   lon: number;

@@ -497,6 +497,7 @@ fn feature(src: &SrcMeta, id: &str, event: &str, info: Option<&CapInfo>, sent: &
         "certainty": g(|i| &i.certainty),
         "headline": g(|i| &i.headline),
         "description": g(|i| &i.description),
+        "lang": g(|i| &i.lang), // 0.8.3: lets the app offer Translate
         "instruction": g(|i| &i.instruction),
         "areaDesc": area_desc,
         "sent": sent,

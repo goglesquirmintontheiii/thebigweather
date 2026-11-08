@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { signal } from "@preact/signals";
 import { alerts, sortedAlerts } from "../../alerts";
@@ -11,8 +11,9 @@ import { regionOn } from "../../alertstyle";
 import { alertSources, intlTabOpen, refreshAlertSources } from "../../alertdemand";
 import { openAlertLayerOptions } from "../AlertConfig";
 import { timelineOpen } from "../AlertTimeline";
-import { ChartGantt, ChevronDown, SlidersHorizontal } from "lucide-preact";
+import { ChartGantt, SquareArrowOutUpRight, SlidersHorizontal } from "lucide-preact";
 import "../alerts082.css";
+import "../alerts083.css"; // 0.8.3
 
 export function zoomToGeometry(g: any) {
   const map = mapRef.value;
@@ -95,32 +96,13 @@ export function AlertTypeMenu() {
 
 /** "Timelines" button with its menu. */
 function Timelines() {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: Event) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    window.addEventListener("pointerdown", close, true);
-    return () => window.removeEventListener("pointerdown", close, true);
-  }, [open]);
+  // 0.8.3: a plain button at the top of the tab (was a one-item menu) that opens the timeline window
+  const on = timelineOpen.value;
   return (
-    <div class="al-tl" ref={ref}>
-      <button class={`btn sm ghost ${open ? "on" : ""}`} aria-expanded={open} onClick={() => setOpen(!open)} title="Timelines">
-        <ChartGantt size={13} /> Timelines <ChevronDown size={12} />
+    <div class="al-top">
+      <button class={`btn sm ghost al-tlbtn ${on ? "on" : ""}`} aria-pressed={on} onClick={() => (timelineOpen.value = !on)} title={on ? "Close the alert timeline" : "Open the alert timeline window"}>
+        <ChartGantt size={13} /> Timelines <SquareArrowOutUpRight size={12} />
       </button>
-      {open && (
-        <div class="ctx glass al-tl-menu">
-          <button
-            class={timelineOpen.value ? "on" : ""}
-            onClick={() => {
-              timelineOpen.value = !timelineOpen.value;
-              setOpen(false);
-            }}
-          >
-            <ChartGantt size={13} /> Alert timeline
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -169,6 +151,7 @@ export function AlertsPanel() {
   const failing = srcs.filter((s) => s.active && s.error);
   return (
     <div class="stack">
+      <Timelines />
       <div class="seg al-regions">
         {REGIONS.map((r) => (
           <button key={r} class={region === r ? "on" : ""} onClick={() => setRegion(r)}>
@@ -206,7 +189,6 @@ export function AlertsPanel() {
             ))}
           </select>
         </label>
-        <Timelines />
       </div>
       {off && (
         <div class="al-off muted small">

@@ -190,6 +190,7 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/alerts", get(alerts))
         .route("/alerts/sources", get(alert_sources)) // 0.8.2
         .route("/alerts/want", post(alert_want)) // 0.8.2
+        .route("/alerts/translate", post(alert_translate)) // 0.8.3
         .route("/sources", get(sources))
         .route("/keys", get(keys_get).put(keys_put))
         .route("/stats", get(stats))
@@ -661,6 +662,10 @@ async fn alert_sources(State(st): St) -> Json<Value> {
 async fn alert_want(State(st): St, Json(b): Json<Value>) -> Json<Value> {
     let ids: Vec<String> = b["sources"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).take(400).collect()).unwrap_or_default();
     Json(json!({"ok": true, "sources": st.alerts.intl.want(&ids)}))
+}
+/// 0.8.3: translate alert text to English (free endpoint, glossary fallback, cached)
+async fn alert_translate(State(st): St, Json(b): Json<Value>) -> Json<Value> {
+    Json(st.alerts.translate(&b).await)
 }
 
 async fn sources(State(st): St) -> Json<Value> {

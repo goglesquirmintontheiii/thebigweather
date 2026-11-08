@@ -16,7 +16,7 @@ import type { Style, Popup } from "../overlays/defs";
 
 const EMPTY = { type: "FeatureCollection", features: [] as any[] };
 const on = (id: string) => !!settings.value.ovl[id]?.on;
-const status = (id: string, s: { loading?: boolean; error?: string; count?: number; note?: string }) => (ovlStatus.value = { ...ovlStatus.value, [id]: s });
+const status = (id: string, s: { loading?: boolean; error?: string; count?: number; note?: string }) => (ovlStatus.value = { ...ovlStatus.peek(), [id]: s }); // 0.8.3: peek (no effect cycle)
 
 export interface MeshGrid {
   key: string;
@@ -150,7 +150,7 @@ function showHail(key: string) {
 async function loadHail(key: string) {
   if (inflight === key) return;
   inflight = key;
-  status("hail", { ...ovlStatus.value.hail, loading: true, error: undefined });
+  status("hail", { ...ovlStatus.peek().hail, loading: true, error: undefined });
   try {
     const r = await computeHail(key);
     hsdaCache.set(key, r);

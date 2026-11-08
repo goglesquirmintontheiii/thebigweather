@@ -85,7 +85,7 @@ const severe: OverlayDef[] = [
   },
   {
     id: "rotation",
-    name: "Rotation (selected radar)",
+    name: "Rotation (Single-site)", // 0.8.3 (was "Rotation (selected radar)")
     group: "Severe",
     feed: "client",
     refresh: 0,
@@ -97,7 +97,7 @@ const severe: OverlayDef[] = [
   },
   {
     id: "rotscan",
-    name: "Rotation scan (all US radars)",
+    name: "Rotation (Countrywide)", // 0.8.3 (was "Rotation scan (all US radars)")
     group: "Severe",
     feed: "client",
     refresh: 0,

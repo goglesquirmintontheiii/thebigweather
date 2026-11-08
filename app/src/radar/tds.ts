@@ -15,7 +15,7 @@ import type { Style, Popup } from "../overlays/defs";
 
 const EMPTY = { type: "FeatureCollection", features: [] as any[] };
 const on = () => !!settings.value.ovl.tds?.on;
-const status = (s: { loading?: boolean; error?: string; count?: number; note?: string }) => (ovlStatus.value = { ...ovlStatus.value, tds: s });
+const status = (s: { loading?: boolean; error?: string; count?: number; note?: string }) => (ovlStatus.value = { ...ovlStatus.peek(), tds: s }); // 0.8.3: peek (no effect cycle)
 
 export interface TdsHit {
   lat: number;
@@ -138,7 +138,7 @@ function show(key: string) {
 async function load(key: string) {
   if (inflight === key) return;
   inflight = key;
-  status({ ...ovlStatus.value.tds, loading: true, error: undefined });
+  status({ ...ovlStatus.peek().tds, loading: true, error: undefined });
   try {
     const hits = await compute(key);
     cache.set(key, hits);
