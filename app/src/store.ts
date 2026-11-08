@@ -84,6 +84,8 @@ export interface AlertCfg {
   hidden: string[];
   cats: Record<string, AlertTypeCfg>;
   types: Record<string, AlertTypeCfg>;
+  /** 0.8.2: United States / Canada / International switches (missing = on) */
+  regions?: Partial<Record<"us" | "ca" | "intl", boolean>>;
 }
 
 /** An extra map pane (multi-pane view). */

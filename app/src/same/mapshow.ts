@@ -37,7 +37,19 @@ function setShown(key: string, until: number | null) {
   sameShown.value = n;
 }
 
-function render(map: MLMap) {
+/* 0.8.2: "appear on the map immediately" — the outline used to be lost when the map's style was
+ * (re)loading (basemap / labels / theme change, the Google basemap swap at start): addSource threw,
+ * the error was swallowed by the caller, and a style reload later wiped outlines already shown.
+ * Now a failed draw retries when the style is ready, every style load redraws, and the outline
+ * layers stay on top of layers added after them (radar, alerts). */
+const hooked = new WeakSet<MLMap>();
+function hook(map: MLMap) {
+  if (hooked.has(map)) return;
+  hooked.add(map);
+  map.on("style.load", () => shown.size && render(map));
+}
+
+function draw(map: MLMap) {
   const fc: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [...shown.values()].flatMap((h) => h.fc.features) };
   const src = map.getSource(SRC) as GeoJSONSource | undefined;
   if (src) src.setData(fc);
@@ -45,6 +57,32 @@ function render(map: MLMap) {
     map.addSource(SRC, { type: "geojson", data: fc });
     map.addLayer({ id: "same-hl-fill", type: "fill", source: SRC, paint: { "fill-color": ["coalesce", ["get", "_color"], "#ff3b30"], "fill-opacity": 0.22 } });
     map.addLayer({ id: "same-hl-line", type: "line", source: SRC, paint: { "line-color": ["coalesce", ["get", "_color"], "#ff3b30"], "line-width": 2.4, "line-dasharray": [2, 1] } });
+  }
+  // keep on top
+  if (fc.features.length && map.getLayer("same-hl-line")) {
+    map.moveLayer("same-hl-fill");
+    map.moveLayer("same-hl-line");
+  }
+}
+
+let retry: number | undefined;
+function render(map: MLMap) {
+  hook(map);
+  try {
+    draw(map);
+  } catch {
+    // style still loading: draw as soon as it is ready
+    clearTimeout(retry);
+    const again = () => {
+      clearTimeout(retry);
+      try {
+        draw(map);
+      } catch {
+        retry = window.setTimeout(again, 250);
+      }
+    };
+    map.once("idle", again);
+    retry = window.setTimeout(again, 400);
   }
 }
 

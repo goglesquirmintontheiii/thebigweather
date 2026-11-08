@@ -125,7 +125,10 @@ struct AfskDemod {
     bad: u32,
     msg: String,
     msg_t: f64,
-    bursts: Vec<(String, f64)>,
+    /// 0.8.2: time of the latest bit (a burst's end time)
+    t_bit: f64,
+    /// (text, start, end)
+    bursts: Vec<(String, f64, f64)>,
 }
 
 impl AfskDemod {
@@ -155,6 +158,7 @@ impl AfskDemod {
             bad: 0,
             msg: String::new(),
             msg_t: 0.0,
+            t_bit: 0.0,
             bursts: vec![],
         }
     }
@@ -218,6 +222,7 @@ impl AfskDemod {
     }
 
     fn bit(&mut self, b: u32, q: f64, t: f64) {
+        self.t_bit = t;
         self.shift = ((self.shift >> 1) | (b << 7)) & 0xff;
         let carrier = q > 0.3;
         if !self.synced {
@@ -264,13 +269,16 @@ impl AfskDemod {
 
     fn end(&mut self) {
         if self.msg.len() >= 4 {
-            self.bursts.push((std::mem::take(&mut self.msg), self.msg_t));
+            self.bursts.push((std::mem::take(&mut self.msg), self.msg_t, self.t_bit));
         }
         self.msg.clear();
         self.synced = false;
         self.good = 0;
     }
 }
+
+/// 0.8.2: silence after a burst that ends its group (SAME copies are about 1 s apart)
+const GROUP_GAP: f64 = 2.5;
 
 struct ToneDetector {
     fs: f64,
@@ -394,12 +402,13 @@ impl SameDecoder {
     pub fn push(&mut self, x: &[f32]) -> Vec<SameEvent> {
         let mut out = vec![];
         self.demod.push(x, self.t);
-        for (s, t) in std::mem::take(&mut self.demod.bursts) {
-            self.burst(s, t, &mut out);
+        for (s, t, e) in std::mem::take(&mut self.demod.bursts) {
+            self.burst(s, t, e, &mut out);
         }
         self.tones.push(x, self.t, &mut out);
         self.t += x.len() as f64 / self.fs;
-        if self.group.as_ref().map(|g| self.t - g.last > 4.5).unwrap_or(false) {
+        // 0.8.2: gap measured from the end of the last burst (long headers kept their 3 copies apart)
+        if !self.demod.synced && self.group.as_ref().map(|g| self.t - g.last > GROUP_GAP).unwrap_or(false) {
             self.flush(&mut out);
         }
         out
@@ -412,15 +421,16 @@ impl SameDecoder {
         out
     }
 
-    fn burst(&mut self, s: String, t: f64, out: &mut Vec<SameEvent>) {
+    fn burst(&mut self, s: String, t: f64, t_end: f64, out: &mut Vec<SameEvent>) {
         let Some(kind) = looks(&s) else { return };
-        if self.group.as_ref().map(|g| g.kind != kind || t - g.last > 4.5).unwrap_or(false) {
+        if self.group.as_ref().map(|g| g.kind != kind || t - g.last > GROUP_GAP).unwrap_or(false) {
             self.flush(out);
         }
-        let g = self.group.get_or_insert(Group { kind, copies: vec![], t, last: t });
+        let g = self.group.get_or_insert(Group { kind, copies: vec![], t, last: t_end });
         g.copies.push(s);
-        g.last = t;
-        if g.copies.len() >= 3 {
+        g.last = t_end;
+        // 0.8.2: two identical copies are as good as three (out one burst sooner)
+        if g.copies.len() >= 3 || (g.copies.len() == 2 && g.copies[0] == g.copies[1]) {
             self.flush(out);
         }
     }

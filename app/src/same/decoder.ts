@@ -38,6 +38,10 @@ class AfskDemod {
   private shift = 0;
   private good = 0;
   private synced = false;
+  /** 0.8.2: a burst is being received (it is reported only when it ends) */
+  get busy() {
+    return this.synced;
+  }
   private bitCount = 0;
   private bad = 0;
   private msg = "";
@@ -45,7 +49,7 @@ class AfskDemod {
 
   constructor(
     private fs: number,
-    private onBurst: (text: string, t: number) => void,
+    private onBurst: (text: string, t: number, tEnd: number) => void,
   ) {
     this.N = Math.round(fs / BAUD);
     this.ring = new Float64Array(this.N * 5);
@@ -111,6 +115,7 @@ class AfskDemod {
   }
 
   private bit(b: number, q: number, t: number) {
+    this.tBit = t; // 0.8.2: burst end time
     this.shift = ((this.shift >> 1) | (b << 7)) & 0xff;
     const carrier = q > 0.3;
     if (!this.synced) {
@@ -142,8 +147,9 @@ class AfskDemod {
     if (this.msg.length >= 268) this.end();
   }
 
+  private tBit = 0;
   private end() {
-    if (this.msg.length >= 4) this.onBurst(this.msg, this.msgT);
+    if (this.msg.length >= 4) this.onBurst(this.msg, this.msgT, this.tBit);
     this.msg = "";
     this.synced = false;
     this.good = 0;
@@ -236,6 +242,9 @@ class ToneDetector {
   }
 }
 
+/** 0.8.2: silence after a burst that ends its group (SAME copies are ~1 s apart) */
+const GROUP_GAP = 2.5;
+
 export class SameDecoder {
   private demod: AfskDemod;
   private tones: ToneDetector;
@@ -249,7 +258,7 @@ export class SameDecoder {
     private emit: (e: SameEvent) => void,
     private now: () => Date = () => new Date(),
   ) {
-    this.demod = new AfskDemod(fs, (s, t) => this.burst(s, t));
+    this.demod = new AfskDemod(fs, (s, t, e) => this.burst(s, t, e));
     this.tones = new ToneDetector(fs, emit);
   }
 
@@ -265,7 +274,9 @@ export class SameDecoder {
     this.demod.push(x, this.t);
     this.tones.push(x, this.t);
     this.t += x.length / this.fs;
-    if (this.group && this.t - this.group.last > 4.5) this.flush();
+    // 0.8.2: measured from the END of the last burst (was its start: a long header — many
+    // counties, ~4 s per burst — split its 3 copies into single-copy groups and waited 4.5 s)
+    if (this.group && !this.demod.busy && this.t - this.group.last > GROUP_GAP) this.flush();
   }
 
   /** Force out a partially received group (e.g. at end of a test clip). */
@@ -273,14 +284,17 @@ export class SameDecoder {
     this.flush();
   }
 
-  private burst(s: string, t: number) {
+  private burst(s: string, t: number, tEnd = t) {
     const kind = looks(s);
     if (!kind) return;
-    if (this.group && (this.group.kind !== kind || t - this.group.last > 4.5)) this.flush();
-    if (!this.group) this.group = { kind, copies: [], t, last: t };
+    if (this.group && (this.group.kind !== kind || t - this.group.last > GROUP_GAP)) this.flush();
+    if (!this.group) this.group = { kind, copies: [], t, last: tEnd };
     this.group.copies.push(s);
-    this.group.last = t;
-    if (this.group.copies.length >= 3) this.flush();
+    this.group.last = tEnd;
+    // 0.8.2: two identical copies are as good as three (out ~one burst sooner); a third copy that
+    // follows is the same header and is dropped as a repeat
+    const c = this.group.copies;
+    if (c.length >= 3 || (c.length === 2 && c[0] === c[1])) this.flush();
   }
 
   private flush() {

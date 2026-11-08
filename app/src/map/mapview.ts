@@ -23,7 +23,8 @@ import { frameIndex } from "../anim";
 import { sampleAt } from "../radar/sweep";
 import { alerts } from "../alerts";
 import { registerPatterns } from "../alertstyle";
-import { addBaseLayers, applyBaseStyles, applyBaseVisibility, alertFeatures, siteEl, markerDensity, hookAlertHover } from "./baselayers"; // 0.8.2
+import { addBaseLayers, applyBaseStyles, applyBaseVisibility, alertFeatures, siteEl, markerDensity, hookAlertHover, ALERT_HIT_LAYERS } from "./baselayers"; // 0.8.2
+export { ALERT_HIT_LAYERS }; // 0.8.2
 import { api } from "../api";
 import { distance, bearing, compass, fmtDist, circle, destination } from "../util";
 /* workflow 0.6: offline tiles, terrain, route/plugin layers, precip effect */
@@ -431,7 +432,7 @@ export function createMap(container: HTMLElement): MLMap {
     const pick = pickOverlay(e);
     if (pick.handled) return;
     // every alert under the cursor, most urgent first, then watches/storms/MDs from overlays
-    const layers = ["ovl-alerts-fill", "ovl-alerts-pattern"].filter((l) => map.getLayer(l));
+    const layers = ALERT_HIT_LAYERS.filter((l) => map.getLayer(l)); // 0.8.2
     const ids = [...new Set(map.queryRenderedFeatures(e.point, { layers }).map((f) => String(f.properties.id)))];
     const al = ids.map((id) => alerts.value.get(id)).filter(Boolean).sort((a: any, b: any) => b.properties.priority - a.properties.priority || String(b.properties.sent).localeCompare(String(a.properties.sent)));
     const items: DetailItem[] = [...al.map((a: any) => ({ kind: "alert" as const, id: a.properties.id })), ...pick.panel];

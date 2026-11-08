@@ -89,7 +89,7 @@ fn clean(fs: f64) {
     let h = headers(&ev);
     assert_eq!(h.len(), 1, "{ev:?}");
     assert_eq!(h[0].0, hdr());
-    assert_eq!(h[0].2, 3);
+    assert_eq!(h[0].2, 2); // 0.8.2: two identical copies are enough
     assert_eq!(h[0].1.as_ref().unwrap().event_name, "Tornado Warning");
     let (k, d) = tone_end(&ev).unwrap();
     assert!(k == Tone::Nwr && (d - 8.0).abs() < 0.15, "{d}");

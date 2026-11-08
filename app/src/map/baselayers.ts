@@ -6,11 +6,14 @@ import type { Map as MLMap, GeoJSONSource } from "maplibre-gl";
 import { settings } from "../store";
 import { isDarkBasemap } from "./basemaps";
 import { alerts } from "../alerts";
-import { alertStyle, alertVisible, alertKind, patternId } from "../alertstyle";
+import { alertStyle, alertShown, alertKind, patternId } from "../alertstyle";
+import { alertOwnColor } from "../alerts"; // 0.8.2
 import { selectSite } from "../radar/controller";
 
 const EMPTY = { type: "FeatureCollection", features: [] } as any;
-export const ALERT_LAYERS = ["ovl-alerts-fill", "ovl-alerts-pattern", "ovl-alerts-casing", "ovl-alerts-line", "ovl-alerts-flash"];
+export const ALERT_LAYERS = ["ovl-alerts-fill", "ovl-alerts-pattern", "ovl-alerts-casing", "ovl-alerts-line", "ovl-alerts-flash", "ovl-alerts-pt" /* 0.8.2 */];
+/** 0.8.2: layers that pick an alert under the cursor (click / right-click) */
+export const ALERT_HIT_LAYERS = ["ovl-alerts-fill", "ovl-alerts-pattern", "ovl-alerts-pt"];
 
 /** Counties, states and the alert layers (same ids on every map). */
 export function addBaseLayers(map: MLMap, before: string | undefined) {
@@ -52,6 +55,14 @@ export function addBaseLayers(map: MLMap, before: string | undefined) {
       "line-width": ["case", ["has", "tag"], ["+", ["get", "lw"], 1.1], ["get", "lw"]],
       "line-dasharray": ["match", ["get", "ls"], "dashed", ["literal", [3, 2]], "dotted", ["literal", [0.6, 1.6]], ["literal", [1, 0]]],
     },
+  }, before);
+  // 0.8.2: alerts whose areas can't be mapped (some international feeds): a dot at the country centre
+  map.addLayer({
+    id: "ovl-alerts-pt",
+    type: "circle",
+    source: "alerts",
+    filter: ["==", ["geometry-type"], "Point"],
+    paint: { "circle-color": ["get", "fc"], "circle-radius": ["case", hover, 8, 6], "circle-stroke-color": ["get", "lc"], "circle-stroke-width": 1.5, "circle-opacity": 0.8 },
   }, before);
   // new alerts flash for a while (per-type setting)
   map.addLayer({
@@ -109,11 +120,11 @@ export function alertFeatures(now = Date.now()): { fc: any; flashing: boolean } 
   if (all.length) alertsPrimed = true;
   let flashing = false;
   const feats = all
-    .filter((f) => f.geometry && alertVisible(f.properties.event))
+    .filter((f) => f.geometry && alertShown(f.properties)) // 0.8.2: region switches
     .sort((a, b) => a.properties.priority - b.properties.priority)
     .map((f, i) => {
       const e: string = f.properties.event;
-      const st = alertStyle(e);
+      const st = alertStyle(e, alertOwnColor(f.properties)); // 0.8.2: level colour for non-NWS
       const seen = alertSeen.get(f.properties.id) ?? 0;
       const fl = st.flash > 0 && seen > 0 && now - seen < st.flash * 1000 ? 1 : 0;
       if (fl) flashing = true;
@@ -138,6 +149,7 @@ export function hookAlertHover(map: MLMap, blocked: () => boolean) {
   };
   map.on("mousemove", "ovl-alerts-fill", onMove);
   map.on("mousemove", "ovl-alerts-pattern", onMove);
+  map.on("mousemove", "ovl-alerts-pt", onMove); // 0.8.2
   const onLeave = () => {
     map.getCanvas().style.cursor = "";
     if (hovered !== undefined && map.getSource("alerts")) map.setFeatureState({ source: "alerts", id: hovered }, { hover: false });
@@ -145,6 +157,7 @@ export function hookAlertHover(map: MLMap, blocked: () => boolean) {
   };
   map.on("mouseleave", "ovl-alerts-fill", onLeave);
   map.on("mouseleave", "ovl-alerts-pattern", onLeave);
+  map.on("mouseleave", "ovl-alerts-pt", onLeave); // 0.8.2
 }
 
 /** Radar site marker button (same element on every map). */

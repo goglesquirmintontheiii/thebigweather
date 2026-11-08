@@ -1,0 +1,116 @@
+/* 0.8.2: Alerts tab (regions, sort / type filter, Timelines menu), alert type menu, layer-options jump */
+.al-regions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.al-regions .al-n {
+  font-size: 10px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+.al-tools {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.al-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 90px;
+}
+.al-pick select {
+  width: 100%;
+  min-width: 0;
+}
+.al-tl {
+  position: relative;
+}
+.al-tl > .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.al-tl-menu {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 170px;
+}
+.al-tl-menu button,
+.al-typemenu button,
+.ctx .ctx-alert {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.al-tl-menu button.on {
+  color: var(--accent, #3fb7ff);
+}
+.al-typemenu {
+  position: fixed;
+  z-index: 1000;
+}
+.ctx .ctx-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.ctx button small.muted {
+  margin-left: 4px;
+}
+.al-cc {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #c9d1d9;
+  letter-spacing: 0.3px;
+}
+.al-off .linkish,
+.al-attr .linkish {
+  color: var(--accent, #3fb7ff);
+  text-decoration: underline;
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+.al-attr {
+  line-height: 1.4;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.al-regsw {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.al-regsw small {
+  margin-left: 3px;
+}
+.al-row.al-flash {
+  animation: al-flash 0.65s ease-in-out 4;
+  border-radius: 6px;
+}
+@keyframes al-flash {
+  0%,
+  100% {
+    background: transparent;
+  }
+  50% {
+    background: rgba(63, 183, 255, 0.28);
+    box-shadow: 0 0 0 1px rgba(63, 183, 255, 0.7) inset;
+  }
+}
+.ad-attr {
+  margin-top: 6px;
+}

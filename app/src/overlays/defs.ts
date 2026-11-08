@@ -1008,7 +1008,7 @@ export const OVERLAYS: OverlayDef[] = [
     style: { opacity: 1, size: 1 },
     layers: (s, st) => [icons(s, ["concat", "cam-", ["get", "t"]], st.size, { paint: { "icon-opacity": st.opacity } })],
     click: (p) => ({ title: p.n, sub: "My camera", kind: "camera", props: p }),
-    note: "Right-click the map → Add camera here (YouTube, HLS, image or web page URL).",
+    note: "Right-click the map → + Camera (YouTube, HLS, image or web page URL).", // 0.8.2
   },
 
   // ---------------- Marine ----------------

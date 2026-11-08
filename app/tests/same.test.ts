@@ -67,7 +67,7 @@ export function testCleanDecode() {
   const h = headers(ev);
   assert.equal(h.length, 1, JSON.stringify(ev));
   assert.equal(h[0].raw, HDR);
-  assert.equal(h[0].copies, 3);
+  assert.equal(h[0].copies, 2); // 0.8.2: two identical copies are enough (out one burst sooner)
   assert.equal(h[0].header?.eventName, "Tornado Warning");
   const te = ev.find((e) => e.type === "tone-end") as any;
   assert.ok(te && te.kind === "nwr" && Math.abs(te.duration - 8) < 0.15, JSON.stringify(te));
