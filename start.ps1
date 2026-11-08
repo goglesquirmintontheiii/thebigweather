@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  TheBigWeather server launcher for Windows (PowerShell 5.1+). The Windows twin of start.sh.
+  Stormiq (formerly TheBigWeather) server launcher for Windows (PowerShell 5.1+). The Windows twin of start.sh.
 
 .DESCRIPTION
   .\start.ps1                          set up (first run) and start the server in this window
@@ -12,7 +12,9 @@
   Double-click start.cmd to run it without changing the execution policy.
 
   Portable mode keeps everything under server\data next to this script. A service keeps its
-  config and data under %ProgramData%\TheBigWeather (an existing portable config is copied there).
+  config and data under %ProgramData%\TheBigWeather (an existing portable config is copied there;
+  the folder, service and task names stay "TheBigWeather" after the rename to Stormiq, so existing
+  installs keep working).
 #>
 [CmdletBinding()]
 param(
@@ -29,7 +31,8 @@ param(
   [switch]$NewToken,
   [switch]$Token,
   [switch]$ShowProfile,
-  [switch]$NoTools,            # don't offer ffmpeg / yt-dlp
+  [switch]$NoTools,            # don't offer ffmpeg / yt-dlp / Deno
+  [switch]$NoDeno,             # don't offer Deno (yt-dlp's JavaScript runtime, needed for YouTube)
   [switch]$Update,             # update the server (+ web app) to the newest release or repository build, then start
   [switch]$CheckUpdate,        # only show whether a newer version exists
   [switch]$NoFirewall
@@ -44,6 +47,7 @@ $BinDir    = Join-Path $ServerDir "bin"
 $Bin       = Join-Path $BinDir "tbw-server.exe"
 $Caddy     = Join-Path $BinDir "caddy.exe"
 $CaddyVersion = "2.10.2"
+# internal names, unchanged by the 0.8.2 rename to Stormiq (existing services / tasks / data use them)
 $ServiceName  = "TheBigWeather"
 $CaddyService = "TheBigWeatherCaddy"
 $TaskName     = "TheBigWeather server"
@@ -76,7 +80,7 @@ $Version = "dev"
 $vf = Join-Path $ServerDir "VERSION"
 if (Test-Path $vf) { $Version = (Get-Content $vf -Raw).Trim() }
 Write-Host ""
-Write-Host "  TheBigWeather server  " -ForegroundColor White -NoNewline
+Write-Host "  Stormiq server  " -ForegroundColor White -NoNewline
 Write-Host $Version -ForegroundColor DarkGray
 Write-Host ""
 
@@ -97,6 +101,7 @@ if ($UninstallService) {
     Ok "removed scheduled task"
   }
   Get-NetFirewallRule -DisplayName "TheBigWeather*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+  Get-NetFirewallRule -DisplayName "Stormiq*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
   Info "Data in $ProgramDataDir was kept."
   exit 0
 }
@@ -163,9 +168,36 @@ else {
     }
   }
 }
+# Deno: since late 2025 yt-dlp needs an external JavaScript runtime to solve YouTube's challenges
+# (without one, YouTube recordings come out empty). The server passes --js-runtimes deno:<path>
+# when it finds deno.exe in server\bin, on PATH or in %USERPROFILE%\.deno\bin.
+function Deno-Exe {
+  $p = Join-Path $BinDir "deno.exe"; if (Test-Path $p) { return $p }
+  $c = Get-Command "deno" -ErrorAction SilentlyContinue; if ($c) { return $c.Source }
+  $p = Join-Path $env:USERPROFILE ".deno\bin\deno.exe"; if (Test-Path $p) { return $p }
+  return $null
+}
+function Deno-Version($exe) { if (-not $exe) { return "" }; try { $l = (& $exe --version 2>$null) | Select-Object -First 1; if ("$l" -match '^deno (\d+\.\d+\.\d+)') { return $Matches[1] } } catch {}; return "" }
+$hasYt = (Test-Path $YtLocal) -or [bool](Get-Command "yt-dlp" -ErrorAction SilentlyContinue)
+if ($hasYt) {
+  $dn = Deno-Exe; $dnv = Deno-Version $dn
+  $dnOk = $false; if ($dnv) { try { $dnOk = ([version]$dnv) -ge ([version]"2.3.0") } catch {} }
+  if ($dnOk) { Ok "Deno $dnv ($dn; yt-dlp's JavaScript runtime for YouTube)" }
+  elseif ($NoTools -or $NoDeno) { Warn "Deno $(if ($dnv) { "$dnv is too old" } else { "not found" }) (skipped); YouTube recording may fail" }
+  else {
+    if ($dnv) { Warn "Deno $dnv is too old for yt-dlp (needs 2.3+)" } else { Warn "Deno not found - yt-dlp needs it to record YouTube (empty recordings otherwise)" }
+    $ans = "y"
+    if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) { $ans = Read-Host "    Install Deno with winget (DenoLand.Deno)? [Y/n]"; if (-not $ans) { $ans = "y" } }
+    if ($ans -match '^[Yy]') {
+      Try-Winget "DenoLand.Deno" "Deno"
+      $dn = Deno-Exe; $dnv = Deno-Version $dn
+      if ($dnv) { Ok "Deno $dnv ($dn)" } else { Warn "no Deno; YouTube recording may fail (put deno.exe in server\bin, or install it from https://deno.com)" }
+    } else { Warn "Deno skipped; YouTube recording may fail (-NoDeno stops this question)" }
+  }
+}
 if ($UseService) {
   # services run as LocalSystem, whose PATH may not include per-user winget installs: copy them next to the server
-  foreach ($t in @("ffmpeg")) {
+  foreach ($t in @("ffmpeg", "deno")) {
     $c = Get-Command $t -ErrorAction SilentlyContinue
     $dst = Join-Path $BinDir "$t.exe"
     if ($c -and $c.Source -and -not (Test-Path $dst)) {
@@ -250,7 +282,7 @@ function Compare-Ver([string]$a, [string]$b) {
   return 0
 }
 function Get-UpdText($url, $accept = "") {
-  $h = @{ "User-Agent" = "TheBigWeather-start" }; if ($accept) { $h["Accept"] = $accept }
+  $h = @{ "User-Agent" = "Stormiq-start" }; if ($accept) { $h["Accept"] = $accept }
   $c = (Invoke-WebRequest -Uri $url -Headers $h -UseBasicParsing -TimeoutSec 30).Content
   if ($c -is [byte[]]) { $c = [Text.Encoding]::UTF8.GetString($c) }
   return [string]$c
@@ -275,7 +307,7 @@ function Join-Parts($b, $name, $out) {
       $pf = "$out.part"; $ok = $false
       for ($try = 1; $try -le 3 -and -not $ok; $try++) {
         try {
-          Invoke-WebRequest -Uri "$($b.Base)/$($p.path)" -OutFile $pf -UseBasicParsing -Headers @{ "User-Agent" = "TheBigWeather-start" } -TimeoutSec 900
+          Invoke-WebRequest -Uri "$($b.Base)/$($p.path)" -OutFile $pf -UseBasicParsing -Headers @{ "User-Agent" = "Stormiq-start" } -TimeoutSec 900
           $ok = ((Get-Item -LiteralPath $pf).Length -eq [long]$p.size) -and ((Get-FileHash -Algorithm SHA256 -LiteralPath $pf).Hash.ToLower() -eq $p.sha256)
         } catch {}
         if (-not $ok) { Start-Sleep -Seconds 2 }
@@ -290,7 +322,7 @@ function Join-Parts($b, $name, $out) {
 function Do-Update {
   Step "Checking for a newer version ($Repo`: releases and the $BuildsBranch branch)"
   $rel = $null; $ver = ""
-  try { $rel = Invoke-RestMethod -Uri "$ApiBase/repos/$Repo/releases/latest" -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "TheBigWeather-start" } -TimeoutSec 30; $ver = ($rel.tag_name -replace '^[vV]', '') } catch {}
+  try { $rel = Invoke-RestMethod -Uri "$ApiBase/repos/$Repo/releases/latest" -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "Stormiq-start" } -TimeoutSec 30; $ver = ($rel.tag_name -replace '^[vV]', '') } catch {}
   $b = Get-Builds
   $mver = if ($b -and $b.Man.version) { [string]$b.Man.version } else { "" }
   if (-not $ver -and -not $mver) { Warn "couldn't find a release or builds (offline?)"; return }
@@ -415,7 +447,7 @@ else {
   $existing = Get-Cfg "public_url"
   if ($existing -like "https://*" -and -not $Lan) { $Domain = $existing.Substring(8) }
 }
-if ($Email) { Set-Cfg "user_agent" "TheBigWeather/$Version ($Email)" }
+if ($Email) { Set-Cfg "user_agent" "Stormiq/$Version ($Email)" }
 if ($Domain) {
   Set-Cfg "bind" "127.0.0.1:$Port"
   Ok "HTTPS mode for $Domain (server listens on 127.0.0.1:$Port behind Caddy)"
@@ -438,11 +470,12 @@ if (-not $NoFirewall) {
   if (Is-Admin) {
     try {
       Get-NetFirewallRule -DisplayName "TheBigWeather*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+      Get-NetFirewallRule -DisplayName "Stormiq*" -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
       if ($Domain) {
-        New-NetFirewallRule -DisplayName "TheBigWeather HTTPS" -Direction Inbound -Protocol TCP -LocalPort 80,443 -Action Allow | Out-Null
+        New-NetFirewallRule -DisplayName "Stormiq HTTPS" -Direction Inbound -Protocol TCP -LocalPort 80,443 -Action Allow | Out-Null
         Ok "firewall: opened ports 80 and 443"
       } else {
-        New-NetFirewallRule -DisplayName "TheBigWeather server" -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
+        New-NetFirewallRule -DisplayName "Stormiq server" -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow -Profile Private,Domain | Out-Null
         Ok "firewall: opened port $Port on private networks"
       }
     } catch { Warn "couldn't add a firewall rule: $($_.Exception.Message)" }
@@ -507,9 +540,9 @@ if ($InstallService) {
     if (Service-Exists $ServiceName) { & sc.exe stop $ServiceName | Out-Null; Start-Sleep 2; & sc.exe delete $ServiceName | Out-Null; Start-Sleep 1 }
     # tbw-server has a built-in service mode: `tbw-server -c <config> service`
     $binPath = "`"$Bin`" -c `"$Config`" service"
-    & sc.exe create $ServiceName binPath= $binPath start= delayed-auto DisplayName= "TheBigWeather server" | Out-Null
+    & sc.exe create $ServiceName binPath= $binPath start= delayed-auto DisplayName= "Stormiq server" | Out-Null
     if ($LASTEXITCODE -ne 0) { Die "sc.exe create failed (try -ScheduledTask instead)" }
-    & sc.exe description $ServiceName "TheBigWeather radar and weather data server" | Out-Null
+    & sc.exe description $ServiceName "Stormiq radar and weather data server" | Out-Null
     & sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/10000/restart/60000 | Out-Null
     & sc.exe start $ServiceName | Out-Null
     Start-Sleep 2
@@ -517,7 +550,7 @@ if ($InstallService) {
     if ($Domain) {
       if (Service-Exists $CaddyService) { & sc.exe stop $CaddyService | Out-Null; Start-Sleep 2; & sc.exe delete $CaddyService | Out-Null; Start-Sleep 1 }
       # Caddy runs as a Windows service by itself
-      & sc.exe create $CaddyService binPath= "`"$Caddy`" run --config `"$Caddyfile`" --adapter caddyfile" start= auto DisplayName= "TheBigWeather HTTPS (Caddy)" | Out-Null
+      & sc.exe create $CaddyService binPath= "`"$Caddy`" run --config `"$Caddyfile`" --adapter caddyfile" start= auto DisplayName= "Stormiq HTTPS (Caddy)" | Out-Null
       & sc.exe failure $CaddyService reset= 86400 actions= restart/5000/restart/10000/restart/60000 | Out-Null
       & sc.exe start $CaddyService | Out-Null
       Ok "service $CaddyService running"
@@ -548,7 +581,7 @@ Write-Host ""
 if ($InstallService) { exit 0 }
 if (Service-Exists $ServiceName) {
   if ((Get-Service $ServiceName).Status -eq "Running") {
-    Warn "The TheBigWeather service is already running. Stop it first: sc.exe stop $ServiceName"
+    Warn "The Stormiq server service is already running. Stop it first: sc.exe stop $ServiceName"
     exit 1
   }
 }

@@ -47,6 +47,8 @@ const rules = signal<Rules | null>(null);
 export const ffmpeg = signal(true);
 /** yt-dlp on the server (YouTube recording) */
 export const ytdlp = signal(false);
+/** 0.8.2: Deno on the server (yt-dlp's JavaScript runtime for YouTube); null = server didn't say */
+export const deno = signal<boolean | null>(null);
 
 export async function loadRecs() {
   try {
@@ -55,6 +57,7 @@ export async function loadRecs() {
     rules.value = r.rules;
     ffmpeg.value = r.ffmpeg;
     ytdlp.value = !!r.ytdlp;
+    deno.value = typeof r.deno === "boolean" ? r.deno : null;
   } catch {
     /* offline */
   }
@@ -367,7 +370,7 @@ export function RecordPanel() {
           </button>
         </div>
         <div class="row">
-          <button class="btn sm ghost" disabled={!list.length} onClick={() => download("/api/rec/export", "TheBigWeather-recordings.zip")}>
+          <button class="btn sm ghost" disabled={!list.length} onClick={() => download("/api/rec/export", "Stormiq-recordings.zip")}>
             <Download size={13} /> Export all
           </button>
           <button class="btn sm ghost" disabled={busy} onClick={() => fileRef.current?.click()}>

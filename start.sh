@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# TheBigWeather server launcher.
+# Stormiq (formerly TheBigWeather) server launcher.
 #
 #   ./start.sh                         set up (first run) and start the server
 #   ./start.sh --domain wx.example.com set up HTTPS with Caddy for that domain
@@ -33,7 +33,7 @@ die()  { echo "${R}✗ $*${N}" >&2; exit 1; }
 
 usage() {
   cat <<EOF
-${B}TheBigWeather server${N}
+${B}Stormiq server${N}
 
 Usage: ./start.sh [options]
 
@@ -46,6 +46,7 @@ Usage: ./start.sh [options]
   --memory-mb N        In-memory cache budget in MB (0 = auto: 40% of RAM, at least 4 GB).
   --cpu-percent N      Share of CPU cores the server may use, 1-100 (default 100).
   --rebuild            Rebuild the server from source even if a binary exists.
+  --no-deno            Don't offer to install Deno (yt-dlp's JavaScript runtime, needed for YouTube).
   --update             Update the server (and web app) to the latest GitHub release or repository
                        build (builds branch), whichever is newer: downloads, checks SHA-256, keeps
                        the old binary as tbw-server.old, then starts it.
@@ -61,7 +62,7 @@ Settings -> Server settings in the app on this computer (most changes apply with
 EOF
 }
 
-MEMORY_MB=""; CPU_PERCENT=""; DOMAIN=""; EMAIL=""; LAN=0; INSTALL=0; UNINSTALL=0; REBUILD=0; NEWTOKEN=0; SHOWTOKEN=0; SHOWPROFILE=0; REPLAY=""; UPDATE=0; CHECKUPDATE=0
+MEMORY_MB=""; CPU_PERCENT=""; DOMAIN=""; EMAIL=""; LAN=0; INSTALL=0; UNINSTALL=0; REBUILD=0; NEWTOKEN=0; SHOWTOKEN=0; SHOWPROFILE=0; REPLAY=""; UPDATE=0; CHECKUPDATE=0; NODENO="${TBW_NO_DENO:-0}"
 REPO="${TBW_UPDATE_REPO:-goglesquirmintontheiii/thebigweather}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -74,6 +75,7 @@ while [[ $# -gt 0 ]]; do
     --install-service) INSTALL=1; shift ;;
     --uninstall-service) UNINSTALL=1; shift ;;
     --rebuild) REBUILD=1; shift ;;
+    --no-deno) NODENO=1; shift ;;
     --update) UPDATE=1; shift ;;
     --check-update) CHECKUPDATE=1; shift ;;
     --new-token) NEWTOKEN=1; shift ;;
@@ -120,7 +122,7 @@ pkg_install() {
 }
 
 echo
-echo "${B}  TheBigWeather server${N}  ${DIM}$(cat "$SERVER_DIR/VERSION" 2>/dev/null || echo dev)${N}"
+echo "${B}  Stormiq server${N}  ${DIM}$(cat "$SERVER_DIR/VERSION" 2>/dev/null || echo dev)${N}"
 echo
 
 # ---------- 1. basic tools ----------
@@ -197,6 +199,52 @@ else
     warn "couldn't update yt-dlp (offline?); YouTube recording may fail until it's updated"
   else
     warn "couldn't install yt-dlp; YouTube camera recording stays off"
+  fi
+fi
+# Deno: since late 2025 yt-dlp needs an external JavaScript runtime to solve YouTube's challenges
+# (without one, YouTube recordings come out empty). The server passes --js-runtimes deno:<path>
+# when it finds deno in server/bin, on PATH or in ~/.deno/bin. Installed here from Deno's official
+# release (the same file Deno's install script uses) into server/bin; nothing else is changed.
+DENO_LOCAL="$BIN_DIR/deno"
+deno_which() { if [[ -x "$DENO_LOCAL" ]]; then echo "$DENO_LOCAL"; elif command -v deno >/dev/null 2>&1; then command -v deno; elif [[ -x "$HOME/.deno/bin/deno" ]]; then echo "$HOME/.deno/bin/deno"; fi; }
+deno_version() { [[ -n "${1:-}" ]] || return 0; "$1" --version 2>/dev/null | sed -n 's/^deno \([0-9.]*\).*/\1/p' | head -1 || true; }
+deno_ok() { [[ -n "${1:-}" && "$(printf '%s\n%s\n' "$1" 2.3.0 | sort -V | head -1)" == 2.3.0 ]]; } # yt-dlp needs >= 2.3
+deno_download() {
+  local triple
+  case "$(uname -m)" in
+    x86_64) triple=x86_64-unknown-linux-gnu ;;
+    aarch64|arm64) triple=aarch64-unknown-linux-gnu ;;
+    *) return 1 ;;
+  esac
+  if ! command -v unzip >/dev/null && ! command -v python3 >/dev/null; then pkg_install unzip -- unzip -- unzip >/dev/null 2>&1 || return 1; fi
+  mkdir -p "$BIN_DIR"
+  local tmp; tmp="$(mktemp -d)"
+  curl -fsSL --max-time 300 -o "$tmp/deno.zip" "https://github.com/denoland/deno/releases/latest/download/deno-$triple.zip" || { rm -rf "$tmp"; return 1; }
+  if command -v unzip >/dev/null; then unzip -q -o "$tmp/deno.zip" -d "$tmp" || { rm -rf "$tmp"; return 1; }
+  else python3 -m zipfile -e "$tmp/deno.zip" "$tmp" || { rm -rf "$tmp"; return 1; }; fi
+  chmod 0755 "$tmp/deno"
+  "$tmp/deno" --version >/dev/null 2>&1 || { rm -rf "$tmp"; return 1; }
+  mv -f "$tmp/deno" "$DENO_LOCAL"; rm -rf "$tmp"
+}
+if [[ -n "$YTV" ]]; then
+  DN="$(deno_which)"; DNV="$(deno_version "$DN")"
+  if deno_ok "$DNV"; then
+    ok "Deno $DNV ${DIM}($DN; yt-dlp's JavaScript runtime for YouTube)${N}"
+  elif (( NODENO )); then
+    warn "Deno $([[ -n "$DNV" ]] && echo "$DNV is too old" || echo "not found") (--no-deno); YouTube recording may fail"
+  else
+    if [[ -n "$DNV" ]]; then warn "Deno $DNV is too old for yt-dlp (needs 2.3+)"; else warn "Deno not found — yt-dlp needs it to record YouTube (empty recordings otherwise)"; fi
+    ans=y
+    if [[ -t 0 && -t 1 ]]; then
+      read -r -t 20 -p "    Install Deno into server/bin (about 45 MB download)? [Y/n] " ans || ans=y
+      ans="${ans:-y}"
+    fi
+    if [[ "$ans" =~ ^[Yy] ]]; then
+      if deno_download; then ok "Deno $(deno_version "$DENO_LOCAL") ${DIM}(installed in server/bin)${N}"
+      else warn "couldn't install Deno (offline? or install it yourself: https://deno.com, or your distro's deno package); YouTube recording may fail"; fi
+    else
+      warn "Deno skipped; YouTube recording may fail (./start.sh --no-deno stops this question)"
+    fi
   fi
 fi
 
@@ -423,7 +471,7 @@ else
   if [[ "$existing" == https://* ]] && (( ! LAN )); then DOMAIN="${existing#https://}"; fi
 fi
 if [[ -n "$EMAIL" ]]; then
-  set_cfg user_agent "TheBigWeather/$(cat "$SERVER_DIR/VERSION" 2>/dev/null || echo 0.1) ($EMAIL)"
+  set_cfg user_agent "Stormiq/$(cat "$SERVER_DIR/VERSION" 2>/dev/null || echo 0.1) ($EMAIL)"
 fi
 if [[ -n "$DOMAIN" ]]; then
   set_cfg bind "127.0.0.1:$PORT"
@@ -497,7 +545,7 @@ if (( INSTALL )); then
   [[ -n "$REPLAY" ]] && extra=" --replay-dir $REPLAY"
   $SUDO tee /etc/systemd/system/tbw-server.service >/dev/null <<EOF
 [Unit]
-Description=TheBigWeather server
+Description=Stormiq server
 After=network-online.target
 Wants=network-online.target
 
@@ -516,7 +564,7 @@ EOF
   if [[ -n "$DOMAIN" ]]; then
     $SUDO tee /etc/systemd/system/tbw-caddy.service >/dev/null <<EOF
 [Unit]
-Description=TheBigWeather HTTPS (Caddy)
+Description=Stormiq HTTPS (Caddy)
 After=network-online.target tbw-server.service
 Wants=network-online.target
 

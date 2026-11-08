@@ -1177,7 +1177,7 @@ async fn metars(State(st): St) -> Json<Value> {
 // ---------- recordings ----------
 
 async fn rec_list(State(st): St) -> Json<Value> {
-    Json(json!({"recs": st.rec.list(), "rules": *st.rec.rules.lock(), "ffmpeg": st.rec.has_ffmpeg(), "ytdlp": st.rec.has_ytdlp()}))
+    Json(json!({"recs": st.rec.list(), "rules": *st.rec.rules.lock(), "ffmpeg": st.rec.has_ffmpeg(), "ytdlp": st.rec.has_ytdlp(), "deno": crate::recorder::deno_path().is_some()}))
 }
 
 async fn rec_create(State(st): St, Json(r): Json<crate::recorder::Rec>) -> Result<Json<Value>, ApiError> {
@@ -1290,7 +1290,7 @@ async fn rec_export(State(st): St, headers: HeaderMap, Query(q): Query<IdsQ>) ->
     let o2 = out.clone();
     tokio::task::spawn_blocking(move || rec.export(&ids, &o2)).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     let mut resp = serve_file(out.clone(), &headers).await?;
-    resp.headers_mut().insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("attachment; filename=\"TheBigWeather-recordings.zip\""));
+    resp.headers_mut().insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("attachment; filename=\"Stormiq-recordings.zip\""));
     // the stream holds the file open; remove it a little later
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(3600)).await;

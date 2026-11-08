@@ -751,9 +751,41 @@ fn ffmpeg_location() -> Vec<String> {
     }
 }
 
+/// 0.8.2: Deno, the JavaScript runtime yt-dlp needs for YouTube since late 2025 (EJS challenge
+/// solver): next to the server (server/bin) or in `tools/`, on PATH, in `$DENO_INSTALL/bin`, or
+/// in `~/.deno/bin` (the official install script's default).
+pub fn deno_path() -> Option<PathBuf> {
+    let file = format!("deno{}", std::env::consts::EXE_SUFFIX);
+    let t = crate::platform::tool("deno");
+    if t.is_absolute() && t.is_file() {
+        return Some(t);
+    }
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    if let Some(d) = std::env::var_os("DENO_INSTALL") {
+        dirs.push(PathBuf::from(d).join("bin"));
+    }
+    for h in ["HOME", "USERPROFILE"] {
+        if let Some(d) = std::env::var_os(h) {
+            dirs.push(PathBuf::from(d).join(".deno").join("bin"));
+        }
+    }
+    dirs.into_iter().map(|d| d.join(&file)).find(|c| c.is_file())
+}
+
+/// `--js-runtimes deno:<path>` when Deno was found (yt-dlp then needs no PATH lookup); nothing
+/// otherwise (yt-dlp falls back to its defaults and YouTube may fail).
+pub fn ytdlp_js_args(deno: Option<&Path>) -> Vec<String> {
+    match deno {
+        Some(p) => vec!["--js-runtimes".into(), format!("deno:{}", p.display())],
+        None => vec![],
+    }
+}
+
 /// yt-dlp arguments that print the chosen stream as JSON (url, http_headers, is_live…).
-pub fn ytdlp_resolve_args(url: &str) -> Vec<String> {
+/// `extra` (e.g. [`ytdlp_js_args`]) goes before the URL.
+pub fn ytdlp_resolve_args(url: &str, extra: &[String]) -> Vec<String> {
     let mut a = strs(["--no-playlist", "--no-progress", "--socket-timeout", "20", "-f", YT_FORMAT, "-j"]);
+    a.extend(extra.iter().cloned());
     a.push("--".into());
     a.push(url.into());
     a
@@ -971,7 +1003,7 @@ async fn ffmpeg_hls_lenient() -> bool {
 
 /// Resolve a YouTube URL with yt-dlp (`-j`); failures log yt-dlp's stderr.
 pub async fn yt_resolve(url: &str) -> Result<YtStream> {
-    let out = tokio::time::timeout(Duration::from_secs(90), crate::platform::command("yt-dlp").args(ytdlp_resolve_args(url)).stdin(std::process::Stdio::null()).kill_on_drop(true).output())
+    let out = tokio::time::timeout(Duration::from_secs(90), crate::platform::command("yt-dlp").args(ytdlp_resolve_args(url, &ytdlp_js_args(deno_path().as_deref()))).stdin(std::process::Stdio::null()).kill_on_drop(true).output())
         .await
         .map_err(|_| anyhow!("yt-dlp timed out finding the stream"))??;
     let err: Vec<String> = String::from_utf8_lossy(&out.stderr).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
@@ -1113,7 +1145,7 @@ async fn video_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<
         ffc.args(&args).stderr(std::process::Stdio::piped()).kill_on_drop(true);
         if piped {
             let mut d = crate::platform::command("yt-dlp");
-            d.args(ytdlp_pipe_args(&c.url, &ffmpeg_location())).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
+            d.args(ytdlp_pipe_args(&c.url, &[ffmpeg_location(), ytdlp_js_args(deno_path().as_deref())].concat())).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
             #[cfg(unix)]
             d.process_group(0);
             let mut d = d.spawn().map_err(|e| anyhow!("yt-dlp: {e}"))?;
@@ -1492,7 +1524,7 @@ mod tests {
 
     #[test]
     fn youtube_args() {
-        let a = ytdlp_resolve_args("https://www.youtube.com/watch?v=abc");
+        let a = ytdlp_resolve_args("https://www.youtube.com/watch?v=abc", &[]);
         assert!(a.windows(2).any(|w| w[0] == "-f" && w[1] == YT_FORMAT));
         assert!(a.contains(&"-j".to_string()));
         assert_eq!(&a[a.len() - 2..], &["--".to_string(), "https://www.youtube.com/watch?v=abc".to_string()]);
@@ -1504,6 +1536,14 @@ mod tests {
         assert!(j.contains("--ffmpeg-location /opt/ffmpeg"));
         assert!(j.ends_with("-o - -- https://youtu.be/x"));
         assert!(p.contains(&"--no-part".to_string()));
+        // 0.8.2: Deno for yt-dlp's YouTube challenge solver, only when found, before the URL
+        assert!(ytdlp_js_args(None).is_empty());
+        let js = ytdlp_js_args(Some(Path::new("/srv/server/bin/deno")));
+        assert_eq!(js, vec!["--js-runtimes".to_string(), "deno:/srv/server/bin/deno".to_string()]);
+        let a = ytdlp_resolve_args("https://youtu.be/x", &js);
+        assert!(a.join(" ").ends_with("-j --js-runtimes deno:/srv/server/bin/deno -- https://youtu.be/x"));
+        let p = ytdlp_pipe_args("https://youtu.be/x", &js);
+        assert!(p.join(" ").contains("--js-runtimes deno:/srv/server/bin/deno -o - -- https://youtu.be/x"));
 
         // ffmpeg: copy into fragmented MP4 (playable when cut short), never +faststart
         let h = vec![("User-Agent".to_string(), "UA/1".to_string()), ("Accept".to_string(), "*/*".to_string())];
