@@ -1,0 +1,90 @@
+/* 0.8.2: Recordings tab sections + camera Rec button (click = start/stop, Shift+click / caret = Record for…) */
+
+.rec-sec {
+  margin-top: 4px;
+}
+.rec-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 4px 5px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.55px;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+}
+.rec-sec-head:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+.rec-sec-head svg {
+  flex: none;
+  transition: transform 0.15s;
+}
+.rec-sec-head svg.rot {
+  transform: rotate(90deg);
+}
+.rec-sec-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rec-sec-count {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rec-sec-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  flex: none;
+  animation: rec082-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rec082-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.rec-sec-body {
+  padding-left: 4px;
+}
+.tl-head {
+  flex: 1;
+  width: auto;
+}
+.tl-sec.closed {
+  padding-bottom: 0;
+}
+
+/* camera viewer Rec button */
+.cam-rec.cam-rec-caret {
+  padding: 3px 3px;
+  gap: 0;
+}
+.cam-rec.cam-rec-caret.open svg {
+  transform: rotate(180deg);
+}
+.cam-rec.warn {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.6);
+  color: #fde68a;
+}
+.cam-rec .cam-rec-sq {
+  margin-left: 2px;
+  opacity: 0.85;
+}

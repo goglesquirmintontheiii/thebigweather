@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import Hls from "hls.js";
 import { api } from "../api";
 import { activeServer, settings, update, toast } from "../store";
-import { X, ExternalLink, RefreshCw, Pause, Play as PlayIcon, PictureInPicture2, Circle, Square, Info, Trash2 } from "lucide-preact";
+import { X, ExternalLink, RefreshCw, Pause, Play as PlayIcon, PictureInPicture2, Circle, Square, Info, Trash2, ChevronDown, AlertTriangle } from "lucide-preact";
+import "./recordings082.css"; // 0.8.2
 import { activeTime } from "../active";
 import { fileUrl, recs, loadRecs, recordCamera, stopRec, ytdlp, ffmpeg } from "./panels/RecordPanel";
 import { popout, canPopout } from "../popout";
@@ -325,20 +326,43 @@ function RecControl({ c }: { c: CamView }) {
     const t = setTimeout(() => window.addEventListener("pointerdown", close), 0);
     return () => (clearTimeout(t), window.removeEventListener("pointerdown", close));
   }, [menu]);
+  // 0.8.2: tell the user when a recording of this camera is struggling or ended with nothing
+  const mine = recs.value.filter((x) => x.kind === "camera" && x.camera?.id === c.id && x.error);
+  const opened = useRef(Date.now());
+  useEffect(() => {
+    for (const x of mine) {
+      const k = `${x.id}|${x.status}|${x.error.replace(/\(\d+\/\d+\)/, "")}`;
+      if (recToasted.has(k) || (x.status !== "recording" && x.status !== "error")) continue;
+      recToasted.add(k);
+      // errors from before this viewer opened stay in the Recordings tab
+      if (x.status === "error" && (x.end ?? x.created) < opened.current) continue;
+      toast(x.status === "error" ? `Recording failed: ${x.error}` : `Recording: ${x.error}`, x.status === "error" ? "error" : "warn", 9000);
+    }
+  }, [mine.map((x) => x.id + x.status + x.error).join()]);
   if (c.type === "rec" || c.type === "page") return null;
   const stop = (e: Event) => e.stopPropagation();
+  // 0.8.2: click = start/stop (until stopped); Shift+click or the caret = Record for…
+  const caret = (
+    <button class={`cam-rec cam-rec-caret${r ? " on" : ""}${menu ? " open" : ""}`} title={r ? "Stop after…" : "Record for…"} aria-label={r ? "Stop after…" : "Record for…"} onClick={() => setMenu(!menu)}>
+      <ChevronDown size={11} />
+    </button>
+  );
   if (r) {
     const left = r.end ? r.end - Date.now() : null;
+    const ends = r.end ? `stops at ${new Date(r.end).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}` : "until stopped";
     return (
       <span class="cam-rec-wrap" onPointerDown={stop}>
-        <button class="cam-rec on" title={r.end ? `Recording · stops at ${new Date(r.end).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })} (click to change)` : "Recording until stopped (click to set a duration)"} onClick={() => setMenu(!menu)}>
-          <i class="rec-pulse" />
+        <button
+          class={`cam-rec on${r.error ? " warn" : ""}`}
+          title={`Recording ${ends}${r.error ? `\n${r.error}` : ""}\nClick: stop · Shift+click: stop after…`}
+          onClick={(e) => (e.shiftKey ? setMenu(!menu) : (setMenu(false), stopRec(r.id)))}
+        >
+          {r.error ? <AlertTriangle size={11} /> : <i class="rec-pulse" />}
           {fmtElapsed(Date.now() - (r.t0 || r.start || r.created))}
           {left != null && <small class="cam-rec-left">−{fmtElapsed(left)}</small>}
+          <Square size={9} class="cam-rec-sq" />
         </button>
-        <button class="cam-rec on stop" title="Stop recording" onClick={() => (setMenu(false), stopRec(r.id))}>
-          <Square size={11} />
-        </button>
+        {caret}
         {menu && <DurMenu running onPick={(m) => (setMenu(false), setRecEnd(r.id, m))} />}
       </span>
     );
@@ -351,15 +375,21 @@ function RecControl({ c }: { c: CamView }) {
         : (c.type === "hls" || c.type === "yt") && !ffmpeg.value
           ? "Install ffmpeg on the server to record video"
           : "";
+  const start = (m: number | null) => (setMenu(false), recordCamera({ id: c.id, n: c.name, t: c.type, i: c.img, v: c.video, r: c.refresh, lat: c.lat, lon: c.lon }, m ?? 0));
   return (
     <span class="cam-rec-wrap" onPointerDown={stop}>
-      <button class="cam-rec" disabled={!!why} title={why || "Record this camera on the server: until stopped, or for a set time"} onClick={() => setMenu(!menu)}>
+      <button class="cam-rec" disabled={!!why} title={why || "Record on the server until stopped\nShift+click: record for…"} onClick={(e) => (e.shiftKey ? setMenu(!menu) : start(null))}>
         <Circle size={10} class="rec-dot" /> Rec
       </button>
-      {menu && <DurMenu running={false} onPick={(m) => (setMenu(false), recordCamera({ id: c.id, n: c.name, t: c.type, i: c.img, v: c.video, r: c.refresh, lat: c.lat, lon: c.lon }, m ?? 0))} />}
+      {!why && caret}
+      {menu && <DurMenu running={false} onPick={start} />}
     </span>
   );
 }
+
+/** 0.8.2: recording problems already shown as a toast (id|status|reason) */
+const recToasted = new Set<string>();
+(window as any).__tbwCam = { openCamera }; // 0.8.2: console / screenshots
 
 function fmtVal(v: any): string {
   if (v == null || v === "") return "";
