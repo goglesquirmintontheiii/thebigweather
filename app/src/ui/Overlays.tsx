@@ -18,7 +18,7 @@ import { siteShown, type AnySite } from "../intl/sites";
 import { intlSource, intlSources, groupOf, selectIntl } from "../intl/radar";
 import { nearest, radarFamily } from "../alertlist";
 import { openAlertLayerOptions } from "./AlertConfig";
-import { AlertTypeMenu } from "./panels/AlertsPanel";
+import { AlertTypeMenu, alertTypeMenu } from "./panels/AlertsPanel";
 import { Plus, SlidersHorizontal } from "lucide-preact";
 
 /** "Add camera" dialog: at a map position, or linked to a ship (cruise bridge cams). */
@@ -215,3 +215,5 @@ function MapMenu() {
   );
 }
 /* ---------- end 0.8.2 ---------- */
+
+(window as any).__tbwAlerts = { contextMenu, alertTypeMenu, openAlertLayerOptions }; // 0.8.2: console / screenshots

@@ -38,7 +38,7 @@
 }
 .al-tl-menu {
   position: absolute;
-  right: 0;
+  left: 0;
   top: calc(100% + 4px);
   z-index: 20;
   min-width: 170px;
