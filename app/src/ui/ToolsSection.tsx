@@ -101,7 +101,7 @@ export function ToolsSection() {
           </div>
         );
       })}
-      <div class="muted small">Downloads go to {st.dir} on the server.</div>
+      <div class="muted small s83-tdir">Downloads go to {st.dir} on the server.</div>
     </section>
   );
 }

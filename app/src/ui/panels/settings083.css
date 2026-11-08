@@ -235,3 +235,7 @@ html[data-theme="light"] .s83-bar {
   align-items: center;
   gap: 3px;
 }
+/* integration 0.8.3: a long server path wrapped instead of running past the panel */
+.s83-tdir {
+  overflow-wrap: anywhere;
+}
