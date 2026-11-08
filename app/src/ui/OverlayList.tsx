@@ -612,7 +612,7 @@ function ItemRow({ it, sub }: { it: Item; sub?: boolean }) {
     <div class={`ovl-row ${it.on ? "is-on" : ""}`} onContextMenu={(e) => (e.preventDefault(), (captureFor.value = it.key))}>
       <div class="ovl-line">
         <button class={`ovl-star ${fav ? "on" : ""}`} title={fav ? "Remove from favourites" : "Add to favourites"} onClick={() => setOvl(it.key, (x) => (x.fav = fav ? undefined : true))}>
-          <Star size={12} />
+          <Star size={15} /> {/* 0.8.2: bigger (was 12) */}
         </button>
         <label class="ovl-toggle" title={`${it.name} · ${it.group}${it.desc ? `\n${it.desc}` : ""}\nRight-click to set a keyboard shortcut`}>
           <input type="checkbox" checked={it.on} onChange={(e) => it.set((e.target as HTMLInputElement).checked)} />

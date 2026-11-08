@@ -32,7 +32,7 @@ export const BUILTIN_HOTKEYS: [string, string][] = [
   ["S", "Screenshot"],
   ["C", "Crosshair"],
   ["D", "Draw"],
-  ["V", "Value under cursor"],
+  ["V", "Data inspector"], // 0.8.2: renamed
   ["M", "Measure"],
   ["B", "Bearing"],
   ["R", "Radar sites"],

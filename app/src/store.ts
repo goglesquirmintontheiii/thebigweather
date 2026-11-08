@@ -273,6 +273,10 @@ export interface Settings {
   /* ---------- data 0.8 ---------- */
   p8?: P8Settings;
   /* ---------- end data 0.8 ---------- */
+  /* 0.8.2: toolbar pins (ui/Toolbar.tsx), dashboards (ui/Dashboard.tsx), MIDI mappings (midi/) */
+  tbPins?: string[];
+  dashboards?: import("./ui/dashgrid").DashState;
+  midi?: import("./midi/midicore").MidiSettings;
 }
 
 /* ---------- data 0.8 ---------- */

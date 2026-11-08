@@ -165,6 +165,7 @@ function settingDefs(): SetDef[] {
     { label: "Volume", section: "Alerts & sound" },
     { label: "API keys", section: "API keys" },
     { label: "Pane layouts", section: "Pane layouts", kw: "custom grid editor" },
+    { label: "MIDI", section: "MIDI", kw: "controller knob fader pad learn" }, // 0.8.2
     { label: "Accessibility", section: "Accessibility", kw: "a11y" },
     { label: "Colour vision", section: "Accessibility", kw: "colorblind deuteranopia protanopia tritanopia cvd" },
     { label: "Text size", section: "Accessibility", kw: "large font bigger" },
@@ -177,7 +178,9 @@ function settingDefs(): SetDef[] {
 }
 const ANCHOR: Record<string, string> = { "Pane layouts": "pane-layouts", Accessibility: "a11y" };
 
-function buildItems(): PItem[] {
+/** 0.8.2: exported for MIDI mappings (midi/), which reuse these commands */
+export type { PItem, Cat };
+export function buildItems(): PItem[] {
   const s = settings.value;
   const out: PItem[] = [];
   const cmd = (id: string, label: string, run: () => void, hint?: string, kw?: string, on?: boolean, key?: string) => out.push({ id: `cmd:${id}`, cat: "command", label, run, hint, kw, on, key });
@@ -190,8 +193,9 @@ function buildItems(): PItem[] {
   cmd("measure", "Measure distance", () => (tool.value = tool.value === "measure" ? "none" : "measure"), undefined, "ruler", tool.value === "measure", "M");
   cmd("draw", "Drawing mode", () => (tool.value = tool.value === "draw" ? "none" : "draw"), undefined, "pen annotate", tool.value === "draw", "D");
   cmd("bearing", "Distance & direction from radar", () => (tool.value = tool.value === "bearing" ? "none" : "bearing"), undefined, "bearing azimuth", tool.value === "bearing", "B");
-  cmd("cross", "Center crosshair value", () => (crosshair.value = !crosshair.value), undefined, undefined, crosshair.value, "C");
-  cmd("cursor", "Value under mouse", () => update((x) => (x.ui.cursorValue = !x.ui.cursorValue)), undefined, "readout", s.ui.cursorValue, "V");
+  /* 0.8.2: renamed (were "Center crosshair value" / "Value under mouse"; old names kept as keywords) */
+  cmd("cross", "Crosshair", () => (crosshair.value = !crosshair.value), undefined, "center crosshair value centre", crosshair.value, "C");
+  cmd("cursor", "Data inspector", () => update((x) => (x.ui.cursorValue = !x.ui.cursorValue)), undefined, "readout value under mouse cursor", s.ui.cursorValue, "V");
   cmd("insp", "Inspector (all moments)", toggleInspector, undefined, "radar readout", !!s.radar6?.inspector, "I");
   cmd("xs", "Cross-section (Level II)", startXSection, "Click two points on the map", "vertical slice rhi");
   cmd("hist", histRange.value ? "Back to live (exit history mode)" : "History mode: pick a past time", () => (histRange.value ? exitHistory() : (histPicker.value = true)), undefined, "archive past replay historical");

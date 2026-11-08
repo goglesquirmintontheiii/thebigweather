@@ -681,6 +681,9 @@ function setupMediaHeaders() {
 app.whenReady().then(() => {
   setupMediaHeaders();
   setupDisplayMedia();
+  // 0.8.2: grant Web MIDI ("midi", "midiSysex") for Settings → MIDI. Every other permission keeps
+  // Electron's default (granted), exactly as before this handler existed.
+  session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(true));
   protocol.handle("app", (req) => {
     const u = new URL(req.url);
     let p = path.normalize(decodeURIComponent(u.pathname)).replace(/^([/\\])+/, "");

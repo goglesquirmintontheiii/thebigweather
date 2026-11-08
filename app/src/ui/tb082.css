@@ -1,0 +1,377 @@
+/* 0.8.2: toolbar pins, layer favourite star, dashboard editor, MIDI settings */
+
+/* ---------- toolbar pins ---------- */
+.toolbar {
+  width: max-content;
+}
+.toolbar > * {
+  flex-shrink: 0;
+}
+.tb-more {
+  width: 268px;
+}
+.tb-more-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.tb-more-row > .tb-more-item {
+  flex: 1;
+  min-width: 0;
+}
+.tb-pin-btn {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  opacity: 0.45;
+}
+.tb-more-row:hover .tb-pin-btn,
+.tb-pin-btn:focus-visible {
+  opacity: 0.9;
+}
+.tb-pin-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.tb-pin-btn.on {
+  opacity: 1;
+  color: var(--accent);
+}
+.tb-pin-btn.on svg {
+  fill: currentColor;
+  transform: rotate(-30deg);
+}
+.tb-ctx {
+  position: absolute;
+  bottom: 56px;
+  min-width: 180px;
+  padding: 6px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tbw-viewer .tb-pin:has(.p6-owner) {
+  display: none;
+}
+
+/* ---------- layers menu: bigger favourite star ---------- */
+.ovl-star {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+}
+.ovl-star svg {
+  flex: none;
+}
+
+/* ---------- dashboard ---------- */
+.cmodal.dash .cm-title h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dash-switch {
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 0 4px;
+  max-width: 260px;
+}
+.dash-switch:hover {
+  border-color: var(--line);
+}
+.dash-name-in {
+  font-size: 16px;
+  font-weight: 650;
+  padding: 2px 6px;
+  width: 220px;
+}
+.dash-grid.d82 {
+  grid-template-columns: repeat(var(--dash-cols, 3), minmax(0, 1fr));
+}
+.dash-grid.d82 > .dash-card {
+  position: relative;
+}
+.dash-grid.d82.editing {
+  grid-auto-rows: minmax(110px, auto);
+  user-select: none;
+  outline: 1px dashed rgba(255, 255, 255, 0.12);
+  outline-offset: 6px;
+  border-radius: 12px;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+}
+.dash-grid.d82.editing > .dash-card {
+  cursor: grab;
+  border-style: dashed;
+  border-color: rgba(63, 183, 255, 0.45);
+  overflow: hidden;
+  max-height: 340px;
+}
+.dash-grid.d82.editing > .dash-card.dragging {
+  opacity: 0.8;
+  box-shadow: 0 0 0 2px var(--accent);
+  cursor: grabbing;
+}
+.dash-grid.d82.editing > .dash-card:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.dash-card-body {
+  display: contents;
+}
+.dash-grid.d82.editing .dash-card-body {
+  pointer-events: none;
+}
+.dash-wtools {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 2px;
+  z-index: 3;
+  background: rgba(10, 14, 20, 0.85);
+  border-radius: 8px;
+  padding: 2px;
+}
+.dash-wtools .icon-btn {
+  width: 24px;
+  height: 24px;
+}
+.dash-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  z-index: 3;
+  background: linear-gradient(135deg, transparent 50%, var(--accent) 50%);
+  border-bottom-right-radius: 11px;
+  opacity: 0.8;
+}
+.dash-grid.d82.editing > .dash-card.opts-open {
+  overflow: visible;
+  z-index: 5;
+}
+.dash-wopts {
+  background: rgba(14, 19, 27, 0.98) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  position: absolute;
+  top: 34px;
+  right: 6px;
+  z-index: 4;
+  width: 220px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: default;
+  font-size: 12px;
+}
+.dash-wopts label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.dash-edbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(63, 183, 255, 0.06);
+  font-size: 12px;
+}
+.dash-edbar .sp {
+  flex: 1;
+}
+.dash-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.dash-palette .btn {
+  white-space: nowrap;
+}
+.dash-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 30px;
+}
+.dash-days {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 6px;
+}
+.dash-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  text-align: center;
+}
+.dash-day b {
+  font-size: 13px;
+}
+.dash-big {
+  font-size: 26px;
+  font-weight: 700;
+}
+.dash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.dash-list > div {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.dash-list > div > :first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dash-sumimg {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+@media (max-width: 760px) {
+  .dash-grid.d82:not(.editing) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dash-grid.d82:not(.editing) > .dash-card {
+    grid-column: auto !important;
+    grid-row: auto !important;
+  }
+}
+
+/* ---------- MIDI settings ---------- */
+.midi-dev {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.midi-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b7280;
+  flex: none;
+}
+.midi-dot.on {
+  background: var(--ok, #22c55e);
+}
+.midi-dot.hit {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(63, 183, 255, 0.3);
+}
+.midi-maps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.midi-dev {
+  flex-wrap: wrap;
+}
+.midi-map {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+.midi-map-l {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.midi-map code {
+  font-size: 10.5px;
+  color: var(--muted);
+  background: none;
+  padding: 0;
+}
+.midi-map .linkish {
+  white-space: nowrap;
+}
+.midi-map select {
+  font-size: 11px;
+  padding: 2px 4px;
+}
+.midi-map .linkish {
+  color: inherit;
+  text-align: left;
+  padding: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.midi-map .linkish:hover {
+  color: var(--accent);
+}
+.midi-devbox {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+.midi-learn {
+  border: 1px solid rgba(63, 183, 255, 0.5);
+  border-radius: 10px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(63, 183, 255, 0.06);
+}
+.midi-acts {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.midi-acts button {
+  text-align: left;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  display: flex;
+  gap: 6px;
+  color: #c4cdd8;
+}
+.midi-acts button:hover,
+.midi-acts button.sel {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+.midi-acts small {
+  margin-left: auto;
+  color: var(--muted);
+  white-space: nowrap;
+  flex: none;
+}
