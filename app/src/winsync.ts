@@ -6,12 +6,14 @@
 //   full / set   settings: the whole set for a new pop-out, then only the top-level keys that changed,
 //                both ways (main saves; pop-outs never write settings to disk)
 //   dock         a pop-out's dock button: the main window opens that window again
+//   open         0.8.2 integration: a pop-out opened another window (Settings → Data sources, a layer's
+//                gear, …): it opens in the main window instead (the pop-out doesn't draw other windows)
 // Map / pane windows keep their own settings and use linkwin.ts instead.
 
-import { effect } from "@preact/signals";
+import { effect, untracked } from "@preact/signals";
 import { settings } from "./store";
 import { popoutSpec } from "./popout";
-import { IN_OS_WIN, POP_WIN, POPPERS, popped, setDockImpl } from "./ui/winframe";
+import { IN_OS_WIN, POP_WIN, POPPERS, popped, setDockImpl, popWindow } from "./ui/winframe";
 import { changedKeys, livePeers } from "./ui/wincore";
 
 type Msg =
@@ -20,7 +22,8 @@ type Msg =
   | { t: "who" }
   | { t: "full"; to: string; keys: Record<string, unknown> }
   | { t: "set"; keys: Record<string, unknown> }
-  | { t: "dock"; id: string; arg: any };
+  | { t: "dock"; id: string; arg: any }
+  | { t: "open"; id: string; arg: any };
 type Env = Msg & { from: string };
 
 const isMain = !popoutSpec;
@@ -117,6 +120,13 @@ function onMsg(m: Env) {
       POPPERS.get(m.id)?.open(m.arg);
       return;
     }
+    case "open": {
+      // 0.8.2 integration: opened from inside a pop-out
+      if (!isMain) return;
+      if (popped.peek()[m.id]) return void popWindow(m.id); // already in its own window: focus it
+      POPPERS.get(m.id)?.open(m.arg);
+      return;
+    }
   }
 }
 
@@ -135,6 +145,24 @@ if (ch) {
     setInterval(() => send({ t: "here", id: POP_WIN ?? "" }), 3000);
     window.addEventListener("beforeunload", () => send({ t: "bye", id: POP_WIN ?? "" }));
     setDockImpl((id, arg) => send({ t: "dock", id, arg }));
+    // 0.8.2 integration: centre windows / layer settings / floating panels opened from inside this
+    // pop-out open in the main window (registered by winreg.tsx after this module loaded)
+    setTimeout(() => {
+      effect(() => {
+        const open: [string, any][] = [];
+        for (const [id, p] of POPPERS) {
+          if (id === POP_WIN || !/^[cof]:/.test(id) || p.hideWhenPopped || !p.isOpen()) continue;
+          open.push([id, untracked(() => p.arg?.())]);
+        }
+        if (!open.length) return;
+        queueMicrotask(() => {
+          for (const [id, arg] of open) {
+            POPPERS.get(id)?.close();
+            send({ t: "open", id, arg });
+          }
+        });
+      });
+    }, 0);
   }
   effect(() => {
     void settings.value;

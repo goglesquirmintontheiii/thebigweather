@@ -279,7 +279,11 @@ export const onBarDbl = (fn: () => void) => (e: MouseEvent) => {
 /** the text of a title (for the minimized chip) */
 export function titleText(title: ComponentChildren, el?: Element | null, sel = "h2,h3,.fpanel-title,.cam-title,.rp-title,span"): string {
   if (typeof title === "string" || typeof title === "number") return String(title);
-  return el?.querySelector(sel)?.textContent?.trim() || "Window";
+  const t = el?.querySelector(sel);
+  // 0.8.2 integration: a title that is a name field / switcher (dashboard editor) → its current value
+  const f = t?.querySelector("input,select") as HTMLInputElement | HTMLSelectElement | null;
+  if (f) return (f instanceof HTMLSelectElement ? f.selectedOptions[0]?.textContent : f.value)?.trim() || "Window";
+  return t?.textContent?.trim() || "Window";
 }
 
 /* ---------- tray of minimized windows (bottom left) ---------- */

@@ -38,7 +38,8 @@ export const hover = signal<{ lat: number; lon: number; value: number; range: nu
 export const centerReadout = signal<{ value: number; range: number; az: number; height: number; lat: number; lon: number } | null>(null);
 export const measurePts = signal<[number, number][]>([]);
 export const bearingInfo = signal<{ dist: number; brg: number } | null>(null);
-export const contextMenu = signal<{ x: number; y: number; lat: number; lon: number } | null>(null);
+/** right-click menu; 0.8.2: `pane` = opened in that map pane (`px`/`py` = point in the pane's map) */
+export const contextMenu = signal<{ x: number; y: number; lat: number; lon: number; pane?: number; px?: number; py?: number } | null>(null);
 /** map frames rendered in the last second (null = idle) */
 export const fps = signal<number | null>(null);
 /* ---------- workflow: map click hooks (return true to consume the click) ---------- */

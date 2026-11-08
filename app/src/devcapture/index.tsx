@@ -6,8 +6,10 @@ import { installDevCapture, captureEnabled, setCaptureEnabled } from "./DevCaptu
 import { popoutSpec } from "../popout";
 import { Toggle } from "../ui/panels/RadarPanel";
 
-// main window only (not pop-outs / pane windows / widgets)
-if (typeof window !== "undefined" && !popoutSpec && !/widget\.html$/.test(location.pathname)) {
+// main window and popped-out windows (0.8.2 integration: "win" / radio centre pop-outs too; not pane
+// windows / widgets). The shot is of the window the shortcut was pressed in.
+const POP_OK = ["win", "radiocenter"];
+if (typeof window !== "undefined" && (!popoutSpec || POP_OK.includes(popoutSpec.kind)) && !/widget\.html$/.test(location.pathname)) {
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", installDevCapture, { once: true });
   else installDevCapture();
 }

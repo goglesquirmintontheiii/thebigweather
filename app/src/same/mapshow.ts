@@ -46,7 +46,7 @@ const hooked = new WeakSet<MLMap>();
 function hook(map: MLMap) {
   if (hooked.has(map)) return;
   hooked.add(map);
-  map.on("style.load", () => shown.size && render(map));
+  map.on("style.load", () => shown.size && render(map, false));
 }
 
 function draw(map: MLMap) {
@@ -65,13 +65,25 @@ function draw(map: MLMap) {
   }
 }
 
+/* 0.8.2 integration: the outlines show in the map panes too (panes register their maps) */
+const paneMaps = new Set<MLMap>();
+export function addSameMap(map: MLMap) {
+  paneMaps.add(map);
+  if (shown.size) render(map, false);
+}
+export function removeSameMap(map: MLMap) {
+  paneMaps.delete(map);
+}
+
 let retry: number | undefined;
-function render(map: MLMap) {
+function render(map: MLMap, all = true) {
+  if (all) for (const m of paneMaps) if (m !== map) render(m, false);
   hook(map);
   try {
     draw(map);
   } catch {
     // style still loading: draw as soon as it is ready
+    if (!all) return void map.once("idle", () => paneMaps.has(map) && shown.size && render(map, false)); // a pane
     clearTimeout(retry);
     const again = () => {
       clearTimeout(retry);

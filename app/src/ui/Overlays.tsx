@@ -20,6 +20,7 @@ import { nearest, radarFamily } from "../alertlist";
 import { openAlertLayerOptions } from "./AlertConfig";
 import { AlertTypeMenu, alertTypeMenu } from "./panels/AlertsPanel";
 import { Plus, SlidersHorizontal } from "lucide-preact";
+import { paneMap } from "../map/panes"; // 0.8.2 integration: right-click in a map pane
 
 /** "Add camera" dialog: at a map position, or linked to a ship (cruise bridge cams). */
 export const camDialog = signal<{ lat?: number; lon?: number; ship?: string } | null>(null);
@@ -80,8 +81,25 @@ export function Toasts() {
 /* ---------- 0.8.2: map right-click menu ---------- */
 /** "Nearest radar": the closest radar of the current single-site product family, or null when the
  * weather layer isn't a single-site radar. */
-function nearestRadar(lat: number, lon: number): { id: string; label: string; go: () => void } | null {
+function nearestRadar(lat: number, lon: number, pane?: number): { id: string; label: string; go: () => void } | null {
   const w = settings.value.weather;
+  // 0.8.2 integration: a pane with its own radar site switches that pane (others follow the main radar)
+  const pc = pane ? settings.value.panes.list[pane - 1] : undefined;
+  if (pc?.weather.kind === "radar" && pc.site) {
+    const cur = (sites.value as AnySite[]).find((x) => x.id === pc.site);
+    const fam = radarFamily((sites.value as AnySite[]).filter((x) => siteShown(x)), pc.source ?? "L2", cur);
+    const n = nearest(fam, lat, lon);
+    if (!n) return null;
+    return {
+      id: n.item.id,
+      label: n.item.id,
+      go: () =>
+        update((s) => {
+          const c = s.panes.list[pane! - 1];
+          if (c?.weather.kind === "radar") s.panes.list[pane! - 1] = { ...c, site: n.item.id };
+        }),
+    };
+  }
   if (w.kind === "radar") {
     const cur = currentSite.value as AnySite | undefined;
     const fam = radarFamily((sites.value as AnySite[]).filter((x) => siteShown(x)), settings.value.radar.source, cur);
@@ -102,8 +120,8 @@ function nearestRadar(lat: number, lon: number): { id: string; label: string; go
 }
 
 /** alert types under the right-click (most urgent first) */
-function alertTypesAt(x: number, y: number): string[] {
-  const map = mapRef.peek();
+function alertTypesAt(x: number, y: number, pane?: number): string[] {
+  const map = pane ? paneMap(pane) : mapRef.peek(); // 0.8.2 integration
   if (!map) return [];
   const layers = ALERT_HIT_LAYERS.filter((l) => map.getLayer(l));
   if (!layers.length) return [];
@@ -126,10 +144,10 @@ function MapMenu() {
   if (!m) return null;
   void hover.value;
   const s = displaySweep.value;
-  const r = s ? sampleAt(s, m.lat, m.lon) : null;
+  const r = s && !m.pane ? sampleAt(s, m.lat, m.lon) : null; // 0.8.2 integration: a pane shows its own product
   const close = () => (contextMenu.value = null);
-  const types = alertTypesAt(m.x, m.y);
-  const nr = nearestRadar(m.lat, m.lon);
+  const types = m.pane ? alertTypesAt(m.px ?? 0, m.py ?? 0, m.pane) : alertTypesAt(m.x, m.y);
+  const nr = nearestRadar(m.lat, m.lon, m.pane);
   return (
     <div class="ctx glass" style={{ left: `${m.x + 8}px`, top: `${m.y + 8}px` }} onMouseLeave={close}>
       <div class="ctx-title">

@@ -39,7 +39,9 @@ import { isOn, popup, ovlData, ovlDataVer, activeOverlayIds, overlaySig, addOver
 import { registerMlIcons } from "../ml/targets";
 import { attachDrawPane, refreshDrawPanes } from "./draw";
 /* 0.8.2 */
-import { addBaseLayers, applyBaseStyles, applyBaseVisibility, alertFeatures, siteEl, markerDensity, hookAlertHover, setAlertData } from "./baselayers";
+import { addBaseLayers, applyBaseStyles, applyBaseVisibility, alertFeatures, siteEl, markerDensity, hookAlertHover, setAlertData, ALERT_HIT_LAYERS } from "./baselayers";
+import { contextMenu } from "./mapview"; // 0.8.2 integration: the map's right-click menu in panes
+import { addSameMap, removeSameMap } from "../same/mapshow"; // 0.8.2 integration: SAME outlines in panes
 import { registerIcons } from "../overlays/icons";
 import { registerPatterns } from "../alertstyle";
 import { fileOverlays } from "../overlays/files";
@@ -248,7 +250,15 @@ class PaneView {
     this.offDraw = attachDrawPane(this.map, () => settings.value.panes.drawAll !== false && synced(this.idx));
     this.map.on("zoom", () => this.siteDensity());
     this.map.on("dblclick", (e) => tool.peek() === "measure" && e.preventDefault()); // 0.8.2
-    this.map.on("contextmenu", () => tool.peek() === "measure" && (tool.value = "none")); // 0.8.2: like the main map
+    this.map.on("contextmenu", (e) => {
+      // 0.8.2: like the main map (measure: right-click ends it); otherwise the map's right-click menu for this pane
+      if (tool.peek() === "measure") return void (tool.value = "none");
+      // the menu is placed like the main map's (relative to the main map's corner)
+      const r = this.map.getContainer().getBoundingClientRect();
+      const mr = mapRef.peek()?.getContainer().getBoundingClientRect();
+      contextMenu.value = { x: r.left - (mr?.left ?? 0) + e.point.x, y: r.top - (mr?.top ?? 0) + e.point.y, lat: e.lngLat.lat, lon: e.lngLat.lng, pane: this.idx, px: e.point.x, py: e.point.y };
+    });
+    addSameMap(this.map); // 0.8.2 integration
     this.map.on("moveend", () => {
       clearTimeout(this.timer);
       this.timer = window.setTimeout(() => {
@@ -767,7 +777,7 @@ class PaneView {
     const feats = layers.length ? m.queryRenderedFeatures(e.point, { layers }) : [];
     const c = m.getCanvas().style;
     if (feats.length) c.cursor = "pointer";
-    else if (c.cursor === "pointer" && !m.queryRenderedFeatures(e.point, { layers: ["ovl-alerts-fill", "ovl-alerts-pattern"].filter((l) => m.getLayer(l)) }).length) c.cursor = "";
+    else if (c.cursor === "pointer" && !m.queryRenderedFeatures(e.point, { layers: ALERT_HIT_LAYERS.filter((l) => m.getLayer(l)) }).length) c.cursor = "";
     // 0.8.2: model detections brighten on hover (feature-state on fid, like the main map)
     const det = feats.find((f) => f.layer.id.startsWith(`o-${ML}-`) && f.properties?.fid != null && f.properties.fid !== "");
     this.setDetHover(det ? +det.properties!.fid : null);
@@ -807,10 +817,11 @@ class PaneView {
     }
     if (t !== "none") return;
     popup.value = null;
+    contextMenu.value = null; // 0.8.2 integration
     // 0.8.2: the main map's click logic: point features first, then alerts + panel overlays
     const pick = pickOverlay(e, { map: this.map, pane: this.idx });
     if (pick.handled) return;
-    const layers = ["ovl-alerts-fill", "ovl-alerts-pattern"].filter((l) => this.map.getLayer(l));
+    const layers = ALERT_HIT_LAYERS.filter((l) => this.map.getLayer(l));
     const ids = [...new Set(this.map.queryRenderedFeatures(e.point, { layers }).map((f) => String(f.properties?.id)))];
     const al = ids.map((id) => alerts.value.get(id)).filter(Boolean).sort((a: any, b: any) => b.properties.priority - a.properties.priority || String(b.properties.sent).localeCompare(String(a.properties.sent)));
     const items: DetailItem[] = [...al.map((a: any) => ({ kind: "alert" as const, id: a.properties.id })), ...pick.panel];
@@ -845,6 +856,8 @@ class PaneView {
     clearTimeout(this.timer);
     this.offDraw(); // 0.8.1
     tickerMaps.delete(this.map); // 0.8.2
+    removeSameMap(this.map); // 0.8.2 integration
+    if (contextMenu.peek()?.pane === this.idx) contextMenu.value = null;
     for (const id of [...this.own.keys()]) this.stopOwn(id);
     if (popup.peek()?.pane === this.idx) popup.value = null;
     if (paneHover.peek()?.idx === this.idx) paneHover.value = null;

@@ -4,14 +4,18 @@
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useLayoutEffect, useRef } from "preact/hooks";
-import { WinButtons, IN_OS_WIN, isMin, isMax, minimize, toggleMax, forget, useEscClose, raiseWin, canPop, popWindow, onBarDbl, titleText, ghostOut } from "./winframe";
+import { WinButtons, IN_OS_WIN, POP_WIN, isMin, isMax, minimize, toggleMax, forget, useEscClose, raiseWin, canPop, popWindow, onBarDbl, titleText, ghostOut } from "./winframe";
 import { centerId } from "./wincore";
 
 export function CenterModal({ title, sub, icon, actions, onClose, children, cls = "", popped: poppedProp = false }: { title: ComponentChildren; sub?: ComponentChildren; icon?: ComponentChildren; actions?: ComponentChildren; onClose: () => void; children: ComponentChildren; cls?: string; popped?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const backRef = useRef<HTMLDivElement>(null);
-  const popped = poppedProp || IN_OS_WIN;
   const id = centerId(cls, title);
+  // 0.8.2 integration: only the pop-out's own window fills the OS window; a window opened from inside a
+  // pop-out (plugin details over a popped Plugins tab, …) stays a normal window there (its red button
+  // must not close the OS window)
+  const popped = poppedProp || (IN_OS_WIN && POP_WIN === id);
+  const nested = IN_OS_WIN && !popped;
   const min = !popped && isMin(id);
   const max = !popped && isMax(id);
   useEscClose(id, onClose, !popped && !min);
@@ -57,10 +61,10 @@ export function CenterModal({ title, sub, icon, actions, onClose, children, cls 
         <WinButtons
           os={popped}
           onClose={onClose}
-          onMin={() => minimize(id, titleText(title, ref.current, ".cm-title h2"), undefined, onClose)}
+          onMin={nested ? undefined : () => minimize(id, titleText(title, ref.current, ".cm-title h2"), undefined, onClose)}
           onZoom={zoom}
           zoomed={max}
-          onPop={canPop(id) ? () => popWindow(id) : undefined}
+          onPop={!nested && canPop(id) ? () => popWindow(id) : undefined}
         />
         {icon && <span class="cm-icon">{icon}</span>}
         <div class="cm-title">
@@ -74,7 +78,7 @@ export function CenterModal({ title, sub, icon, actions, onClose, children, cls 
   );
   if (popped) return box;
   return (
-    <div ref={backRef} class={`cmodal-back${min ? " wf-minimized" : ""}${max ? " wf-maxback" : ""}`} onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div ref={backRef} class={`cmodal-back${min ? " wf-minimized" : ""}${max ? " wf-maxback" : ""}${nested ? " wf-nested" : ""}`} onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
       {box}
     </div>
   );

@@ -36,6 +36,7 @@ import { startAlerts } from "../alerts";
 import { api } from "../api";
 import { activeServer } from "../store";
 import "../winsync";
+import { Toasts } from "./Overlays"; // 0.8.2 integration: toasts (installs, capture copied, …) in pop-outs too
 
 type Sig = { value: boolean };
 const flag = (id: string, title: string, s: Sig, render: () => any, w = 1100, h = 760): Popper => ({
@@ -171,6 +172,7 @@ export function PopWin({ id, arg }: { id: string; arg?: any }) {
   return (
     <div class={`popout popout-win popout-${id.replace(/[^a-z0-9-]/gi, "_")}`}>
       <Boundary>{p.render()}</Boundary>
+      <Toasts />
     </div>
   );
 }

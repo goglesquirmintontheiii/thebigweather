@@ -329,6 +329,11 @@ html.wf-oswin .wf-bar {
 html.wf-oswin .wf-bar :is(button, input, select, textarea, a, label, [role="button"], .wf-btns, .toggle) {
   -webkit-app-region: no-drag;
 }
+/* 0.8.2 integration: a window opened over a pop-out's content (plugin details) doesn't drag the OS window */
+html.wf-oswin .cmodal-back.wf-nested,
+html.wf-oswin .cmodal-back.wf-nested .wf-bar {
+  -webkit-app-region: no-drag;
+}
 .wf-osbar {
   display: flex;
   align-items: center;

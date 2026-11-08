@@ -31,6 +31,10 @@ import { spaceOpen } from "./SpacePanel";
 import { shakeOpen } from "../shake";
 import { histStormsOpen } from "../histsearch";
 import { mlOpen } from "../ml/client";
+import { dashOpen } from "./Dashboard"; // 0.8.2 integration
+import { timelineOpen } from "./AlertTimeline"; // 0.8.2 integration: no rail button any more (Alerts → Timelines)
+import { sourcesOpen } from "./SourcesWindow"; // 0.8.2 integration: a window now (Settings → Data sources)
+import { winAware } from "./winframe"; // 0.8.2 integration: minimized → restore, popped out → focus
 import { BUILTIN_LAYOUTS, openPaneWindow, defaultCfg, layoutName } from "./Panes";
 import { jumpToSetting } from "../a11y/jump";
 import { A11Y_DEFAULTS, a11y } from "../a11y/a11y";
@@ -125,7 +129,8 @@ function remember(id: string) {
 }
 
 const fly = (lon: number, lat: number, zoom = 8) => mapRef.value?.flyTo({ center: [lon, lat], zoom: Math.max(mapRef.value.getZoom(), zoom) });
-const panel = (id: Exclude<PanelId, null>) => () => (openPanel.value = id);
+const panel = (id: Exclude<PanelId, null>) => winAware(`p:${id}`, () => (openPanel.value = id)); // 0.8.2 integration: winAware
+const win = (wid: string, sig: { value: boolean }) => winAware(wid, () => (sig.value = true)); // 0.8.2 integration
 
 /* ---------- settings index (label must match the control's label for jumping) ---------- */
 type SetDef = { label: string; section: string; kw?: string; get?: () => boolean; set?: (v: boolean) => void };
@@ -243,7 +248,7 @@ export function buildItems(): PItem[] {
     ["map", "Basemap", panel("map"), "map style tiles"],
     ["alerts", "Alerts", panel("alerts"), "warnings watches"],
     ["points", "My points", panel("points"), "places saved"],
-    ["sources", "Data sources", panel("sources"), "status feeds"],
+    ["sources", "Data sources", win("c:srcwin", sourcesOpen), "status feeds"], // 0.8.2 integration: a window now
     ["settings", "Settings", panel("settings"), "preferences options"],
     ["search", "Search", panel("search"), "nearby find"],
     ["record", "Recordings", panel("record")],
@@ -259,6 +264,8 @@ export function buildItems(): PItem[] {
     ["hist", "Historical Storms", () => (histStormsOpen.value = true)],
     ["ml", "Detection models", () => (mlOpen.value = true), "machine learning ai"],
     ["space", "Space weather", () => (spaceOpen.value = true), "aurora solar"],
+    ["dash", "Dashboard", win("c:dash", dashOpen), "summary card widgets"], // 0.8.2 integration
+    ["timeline", "Alert timeline", win("c:atl", timelineOpen), "alerts gantt timelines"], // 0.8.2 integration: was a rail button
   ];
   for (const [id, label, run, kw] of P) out.push({ id: `panel:${id}`, cat: "panel", label, run, kw, hint: "Open panel" });
   // settings
