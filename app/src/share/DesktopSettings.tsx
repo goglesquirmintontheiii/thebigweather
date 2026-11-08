@@ -55,8 +55,8 @@ export function DesktopSection() {
       ) : (
         <div class="muted small">This build has no bundled server.</div>
       )}
-      <Toggle label="Close to the tray (keep alerts running)" on={d.closeToTray} set={(v) => set({ closeToTray: v })} />
-      <Toggle label={`Start with ${d.platform === "win32" ? "Windows" : "the computer"}`} on={d.autoStart} set={(v) => (set({ autoStart: v }), v && !d.closeToTray && toast("Tip: turn on “Close to the tray” to start hidden in the tray"))} />
+      <Toggle label="X button minimizes" /* 0.8.2 */ on={d.closeToTray} set={(v) => set({ closeToTray: v })} />
+      <Toggle label={`Start with ${d.platform === "win32" ? "Windows" : "the computer"}`} on={d.autoStart} set={(v) => (set({ autoStart: v }), v && !d.closeToTray && toast("Tip: turn on “X button minimizes” to start hidden in the tray") /* 0.8.2 */)} />
     </section>
   );
 }

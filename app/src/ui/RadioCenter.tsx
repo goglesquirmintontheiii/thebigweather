@@ -6,12 +6,12 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../api";
 import { settings, update, openPanel } from "../store";
 import { playStream, stopStream, nowPlaying, radioState, openPlayer, players, closePlayer, type Stream } from "../radio";
-import { popout } from "../popout";
+// 0.8.2: pop-out moved to the shared title bar
 import { mapRef } from "../map/mapview";
 import { CenterModal } from "./CenterModal";
 import { NowPlaying } from "./panels/RadioPanel";
 import { Toggle } from "./panels/RadarPanel";
-import { Search, Play, Square, Star, Plus, Trash2, Radio, PictureInPicture2, PanelLeft, MapPin, AudioLines, Loader, Copy, X } from "lucide-preact";
+import { Search, Play, Square, Star, Plus, Trash2, Radio, PanelLeft, MapPin, AudioLines, Loader, Copy, X } from "lucide-preact";
 import { ScanLine } from "lucide-preact"; // radio/dash 0.8
 import { ScannerPanel, ScanRowBtn, scanView } from "./Scanner"; // radio/dash 0.8
 import { scanOn, addToScan, inScan } from "../same/scanner"; // radio/dash 0.8 (0.8.1: addToScan)
@@ -127,9 +127,7 @@ function RadioBody({ popped }: { popped: boolean }) {
           </button>
           {!popped && (
           <>
-            <button class="icon-btn" title="Pop out to its own window" onClick={() => (popout({ kind: "radiocenter", title: "Weather radio", width: 1040, height: 720 }), close())}>
-              <PictureInPicture2 size={15} />
-            </button>
+            {/* 0.8.2: pop-out is the title bar's button */}
             <button class="icon-btn" title="Compact side panel" onClick={() => ((openPanel.value = "radio"), close())}>
               <PanelLeft size={15} />
             </button>

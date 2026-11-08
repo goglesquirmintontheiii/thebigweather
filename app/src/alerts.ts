@@ -219,7 +219,7 @@ export function startAlerts() {
     live = m;
     if (!replaying.value) alerts.value = m;
     // real new alerts still notify while history mode replays old ones
-    if (msg.added?.length) notifyNew(msg.added.map(decorate));
+    if (msg.added?.length && !location.hash.includes("popout=")) notifyNew(msg.added.map(decorate)); // 0.8.2: pop-out windows never notify twice
   });
 }
 

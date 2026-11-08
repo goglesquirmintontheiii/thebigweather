@@ -6,7 +6,7 @@ import { settings, update, type OvlSettings } from "../store";
 import { OVERLAYS, optsFor, overlayDef, type OverlayDef } from "../overlays/defs";
 import { ovlStatus, ovlMeta, refreshOverlay } from "../overlays/manager";
 import { fileOverlays, fileImports, importFile, removeFile } from "../overlays/files";
-import { Settings2, ChevronRight, Upload, Trash2, Loader, AlertTriangle, X, RefreshCw, Keyboard, Star } from "lucide-preact";
+import { Settings2, ChevronRight, Upload, Trash2, Loader, AlertTriangle, RefreshCw, Keyboard, Star } from "lucide-preact";
 import { alerts } from "../alerts";
 import { alertVisible } from "../alertstyle";
 import { KbdBadge, KeyCapture } from "./Shortcuts";
@@ -20,6 +20,7 @@ import { LayerExtra } from "./LayerExtras"; // layers 0.5
 import { LocateFixed } from "lucide-preact"; // 0.8.1
 import { identify, identifying, zoomToLayer } from "../overlays/identify"; // 0.8.1
 import "./hotfix081.css"; // 0.8.1
+import { WinButtons, IN_OS_WIN, isMin, isMax, minimize, toggleMax, forget, useEscClose, canPop, popWindow, onBarDbl } from "./winframe"; // 0.8.2
 
 /** 0.8.1: identify button (pulse the layer's items on the map) + "Zoom to" when none are in view */
 export function IdentifyButton({ id, label, onPick }: { id: string; label?: boolean; onPick?: () => void }) {
@@ -320,12 +321,11 @@ const BASE_STYLE: Record<string, StyleDef> = {
 /** Centered settings window for one layer (RadarOmega style). */
 export function ConfigModal() {
   const id = configModal.value;
-  useEffect(() => {
-    if (!id) return;
-    const k = (e: KeyboardEvent) => e.key === "Escape" && (configModal.value = null);
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
-  }, [id]);
+  // 0.8.2: shared title bar; Esc closes the top window (winframe)
+  const WID = "o:cfg";
+  const os = IN_OS_WIN;
+  useEscClose(WID, () => (configModal.value = null), !!id && !os && !isMin(WID));
+  useEffect(() => () => forget(WID), [!!id]);
   if (!id) return null;
   const close = () => (configModal.value = null);
   let title = id;
@@ -388,10 +388,12 @@ export function ConfigModal() {
     body = <OverlayConfig d={d} />;
     if (d.feed !== "client") reload = () => refreshOverlay(id);
   }
-  return (
-    <div class="modal-back" onPointerDown={(e) => e.target === e.currentTarget && close()}>
-      <div class={`modal glass ovl-modal ${id === "base:alerts" ? "wide" : ""}`}>
-        <div class="ovl-modal-head">
+  const max = !os && isMax(WID);
+  const zoom = () => toggleMax(WID);
+  const win = (
+      <div class={`modal glass ovl-modal ${id === "base:alerts" ? "wide" : ""}${max ? " wf-max" : ""}${os ? " wf-osframe" : ""}`}>
+        <div class="ovl-modal-head wf-bar" onDblClick={os ? undefined : (onBarDbl(zoom) as any)}>
+          <WinButtons os={os} onClose={close} onMin={() => minimize(WID, title, undefined, close)} onZoom={zoom} zoomed={max} onPop={canPop(WID) ? () => popWindow(WID) : undefined} />
           <h3>{title}</h3>
           {onToggle && (
             <label class="toggle compact" title="Show on the map">
@@ -413,13 +415,15 @@ export function ConfigModal() {
               <RefreshCw size={14} />
             </button>
           )}
-          <button class="icon-btn" title="Close (Esc)" onClick={close}>
-            <X size={16} />
-          </button>
         </div>
         {captureFor.value === id && <KeyCapture id={id} onClose={() => (captureFor.value = null)} />}
         <div class="ovl-modal-body">{body}</div>
       </div>
+  );
+  if (os) return win;
+  return (
+    <div class={`modal-back${isMin(WID) ? " wf-minimized" : ""}`} onPointerDown={(e) => e.target === e.currentTarget && close()}>
+      {win}
     </div>
   );
 }

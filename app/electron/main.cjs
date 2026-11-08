@@ -264,6 +264,12 @@ function createWindow() {
   // Phase 6: closing can hide the window to the tray instead of quitting
   const self = win; // 0.8.1: handlers act on their own window, never a later one
   win.on("close", (e) => {
+    // 0.8.2: "X button minimizes": no tray (some Linux desktops) → minimize to the taskbar instead
+    if (!quitting && desktop.closeToTray && !tray && !process.env.TBW_SHOT) {
+      e.preventDefault();
+      self.minimize();
+      return;
+    }
     if (!quitting && desktop.closeToTray && tray && !process.env.TBW_SHOT) {
       e.preventDefault();
       self.hide();
@@ -326,17 +332,68 @@ ipcMain.handle("download", async (_e, url, name) => {
 });
 
 // pop-out windows: a camera, the radio, or a second map, in its own OS window
+// 0.8.2: any window ("win": a rail tab, centre window, layer settings, floating panel) can pop out.
+// Those (and camera / radio / METAR) are frameless: the page draws the shared title bar (dock back ·
+// close · minimize · maximize) and drags the window by it. Bounds are remembered per window; a
+// window that is already out is focused instead of opened twice. Crashes / hangs: the generic
+// pop-out handling above (quiet reload, Wait / Reload); safe mode reaches them through the preload.
 const popouts = new Set();
+const popByKey = new Map(); // single-instance pop-outs: key -> BrowserWindow
+const popBoundsFile = () => path.join(app.getPath("userData"), "popouts.json");
+let popBounds = null;
+let popBoundsTimer = null;
+function popBoundsLoad() {
+  if (popBounds) return popBounds;
+  try {
+    popBounds = JSON.parse(fs.readFileSync(popBoundsFile(), "utf8")) || {};
+  } catch {
+    popBounds = {};
+  }
+  return popBounds;
+}
+function popBoundsSave() {
+  clearTimeout(popBoundsTimer);
+  popBoundsTimer = setTimeout(() => {
+    try {
+      fs.mkdirSync(app.getPath("userData"), { recursive: true });
+      fs.writeFileSync(popBoundsFile(), JSON.stringify(popBounds || {}));
+    } catch {}
+  }, 400);
+}
+const PW = require("./popwin.cjs"); // 0.8.2: keys, frameless kinds, on-screen check
+const popBoundsKey = PW.boundsKey;
+const popSingleKey = PW.singleKey;
+const onScreen = (b) => PW.onScreen(b, screen.getAllDisplays().map((d) => d.workArea));
 ipcMain.handle("popout", (_e, spec) => {
+  spec = spec || {};
+  const single = popSingleKey(spec);
+  const had = single && popByKey.get(single);
+  if (alive(had)) {
+    if (had.isMinimized()) had.restore();
+    had.show();
+    had.focus();
+    return true;
+  }
+  const frameless = PW.FRAMELESS.has(spec.kind);
+  const bk = popBoundsKey(spec);
+  const saved = popBoundsLoad()[bk];
+  const b = onScreen(saved) ? saved : null;
   const w = new BrowserWindow({
-    width: spec.width || 640,
-    height: spec.height || 420,
+    width: (b && b.width) || spec.width || 640,
+    height: (b && b.height) || spec.height || 420,
+    x: b ? b.x : undefined,
+    y: b ? b.y : undefined,
+    minWidth: frameless ? 240 : undefined,
+    minHeight: frameless ? 120 : undefined,
+    frame: !frameless,
     title: spec.title || "TheBigWeather",
     backgroundColor: "#07090c",
     autoHideMenuBar: true,
+    icon: ICON,
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: false },
   });
   w.setMenuBarVisibility(false);
+  if (b && b.maximized) w.maximize();
   const hash = "#popout=" + encodeURIComponent(JSON.stringify(spec));
   if (isDev) w.loadURL(process.env.TBW_DEV_URL + hash);
   else w.loadURL("app://tbw/index.html" + hash);
@@ -344,9 +401,35 @@ ipcMain.handle("popout", (_e, spec) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: "deny" };
   });
+  w.webContents.on("console-message", (e) => {
+    if (process.env.TBW_LOG_CONSOLE) console.log(`[popout] ${e.message}`);
+  });
+  const remember = () => {
+    if (!alive(w) || w.isMinimized()) return;
+    popBoundsLoad()[bk] = { ...w.getNormalBounds(), maximized: w.isMaximized() };
+    popBoundsSave();
+  };
+  w.on("resize", remember);
+  w.on("move", remember);
+  w.on("maximize", () => (remember(), alive(w) && w.webContents.send("win-max", true)));
+  w.on("unmaximize", () => (remember(), alive(w) && w.webContents.send("win-max", false)));
+  w.on("close", remember);
   popouts.add(w);
-  w.on("closed", () => popouts.delete(w));
+  if (single) popByKey.set(single, w);
+  w.on("closed", () => {
+    popouts.delete(w);
+    if (single && popByKey.get(single) === w) popByKey.delete(single);
+  });
   return true;
+});
+// 0.8.2: the title-bar buttons of a frameless pop-out (never the main window)
+ipcMain.handle("win-ctl", (e, a) => {
+  const w = BrowserWindow.fromWebContents(e.sender);
+  if (!alive(w) || w === win) return false;
+  if (a === "close") w.close();
+  else if (a === "min") w.minimize();
+  else if (a === "max") w.isMaximized() ? w.unmaximize() : w.maximize();
+  return alive(w) && w.isMaximized();
 });
 
 // ---------- screen recording (toolbar): the renderer streams WebM chunks, saved to Downloads/TheBigWeather ----------
@@ -807,7 +890,7 @@ function rebuildTrayMenu() {
         if (win && !win.isDestroyed()) win.webContents.send("tray-mute", item.checked);
       },
     },
-    { label: "Close to tray", type: "checkbox", checked: !!desktop.closeToTray, click: (item) => setDesktop({ closeToTray: item.checked }) },
+    { label: "X button minimizes" /* 0.8.2 */, type: "checkbox", checked: !!desktop.closeToTray, click: (item) => setDesktop({ closeToTray: item.checked }) },
     { type: "separator" },
     {
       label: "Quit",
