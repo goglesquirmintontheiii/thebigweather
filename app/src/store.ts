@@ -420,6 +420,8 @@ export interface PluginCfg {
   /** "file:<name>" | "url:<url>" | "paste" | "folder:<file>" */
   src: string;
   on: boolean;
+  /** 0.8.2: installed from a marketplace registry (plugins/market.ts) */
+  market?: { pid: string; reg: string; version: string; base: string };
 }
 export interface Wf6Settings {
   themeMode: "dark" | "light" | "auto";
@@ -434,6 +436,8 @@ export interface Wf6Settings {
   kiosk: { workspaces: string[]; seconds: number; resume: number };
   offline: { regions: OfflineRegion[]; prefer: boolean };
   plugins: PluginCfg[];
+  /** 0.8.2: plugin marketplace registry URLs (empty/undefined = the built-in one) */
+  pluginRegistries?: string[];
 }
 export const WF6_DEFAULTS: Wf6Settings = {
   themeMode: "dark",
@@ -579,7 +583,7 @@ export function update(fn: (s: Settings) => void) {
 export const activeServer = computed(() => settings.value.servers.find((s) => s.id === settings.value.activeServer) ?? settings.value.servers[0]);
 
 // ---------- transient UI state ----------
-export type PanelId = "layers" | "map" | "radar" | "alerts" | "points" | "sources" | "settings" | "radio" | "forecast" | "search" | "files" | "draw" | "record" | "workspaces" /* workflow */ | "route" | "rules" | "widgets" /* workflow 0.6 */ | "placefiles" /* radar 0.6 */ | null;
+export type PanelId = "layers" | "map" | "radar" | "alerts" | "points" | "sources" | "settings" | "radio" | "forecast" | "search" | "files" | "draw" | "record" | "workspaces" /* workflow */ | "route" | "rules" | "widgets" /* workflow 0.6 */ | "placefiles" /* radar 0.6 */ | "plugins" /* 0.8.2 */ | null;
 export const openPanel = signal<PanelId>("radar");
 export const tool = signal<"none" | "measure" | "bearing" | "draw" | "xsect" /* workflow */>("none");
 export const crosshair = signal(false);

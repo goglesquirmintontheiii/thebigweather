@@ -125,6 +125,14 @@ contextBridge.exposeInMainWorld("tbw", {
     },
   },
   perf: { setThrottle: (on) => ipcRenderer.invoke("perf-throttle", !!on) },
+  // 0.8.2: TEMPORARY dev-only feedback capture (src/devcapture): area screenshot (CSS px → window px) + clipboard
+  devcap: {
+    shot: (r) => {
+      const z = webFrame.getZoomFactor() || 1;
+      return ipcRenderer.invoke("devcap-shot", { x: Math.floor(r.x * z), y: Math.floor(r.y * z), width: Math.ceil(r.width * z), height: Math.ceil(r.height * z) });
+    },
+    copy: (text) => ipcRenderer.invoke("devcap-copy", String(text)),
+  },
   // automated screenshots keep today's full quality (their software GL would pick Low-end)
   perfForce: process.env.TBW_PERF || (process.env.TBW_SHOT ? "quality" : ""),
   onOpenFile: (cb) => {

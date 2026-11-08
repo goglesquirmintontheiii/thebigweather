@@ -144,7 +144,6 @@ function settingDefs(): SetDef[] {
     { label: "3D terrain (tilt with right-drag)", section: "Appearance" },
     { label: "Wall / kiosk mode", section: "Kiosk" },
     { label: "Offline maps", section: "Offline", kw: "tiles cache" },
-    { label: "Plugins", section: "Plugins" },
     { label: "Data use", section: "Data use" },
     { label: "Bandwidth saver", section: "Data use", get: () => !!s.saver, set: (v) => update((x) => (x.saver = v)) },
     { label: "Notify when a storm cell will reach my points", section: "Data use", kw: "eta", get: () => !!s.etaNotify, set: (v) => update((x) => (x.etaNotify = v)) },
@@ -214,6 +213,7 @@ export function buildItems(): PItem[] {
   for (const l of s.paneLayouts ?? []) cmd(`layout:custom:${l.id}`, `Panes: ${l.name}`, () => update((x) => (x.panes.layout = `custom:${l.id}`)), "My layout", "layout custom", s.panes.layout === `custom:${l.id}`);
   cmd("panewin", "New pane window", () => openPaneWindow(defaultCfg(1), { pos: true, time: true, layers: true }), "A window with just a map and product selector, linked to this one", "popout pop-out second monitor");
   cmd("linkall", "Panes: link all (position, time, layers)", () => update((x) => ((x.panes.sync = true), (x.panes.links = {}))), `Layout: ${layoutName(s.panes.layout)}`, "sync");
+  cmd("plugins", "Plugins", panel("plugins"), "Installed plugins and the marketplace", "plugin marketplace extensions addons install"); // 0.8.2
   cmd("saver", "Bandwidth saver", () => update((x) => (x.saver = !x.saver)), undefined, "data", !!s.saver);
   // layers (overlays + base layers)
   for (const l of allLayers()) out.push({ id: `layer:${l.id}`, cat: "layer", label: l.name, hint: l.group, kw: `${l.group} overlay`, on: isLayerOn(l.id), run: () => toggleLayer(l.id) });

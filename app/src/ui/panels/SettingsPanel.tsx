@@ -14,6 +14,7 @@ import { AccessibilitySection } from "../../a11y/A11yUI"; // panes/palette/a11y 
 import { PaneLayoutsSection } from "../PaneLayoutEditor"; // panes/palette/a11y 0.8
 import { PerfSection } from "../PerfSettings"; // 0.8.1 perf
 import { MidiSection } from "../../midi/MidiSection"; // 0.8.2
+import { DevCaptureSetting } from "../../devcapture"; // 0.8.2: TEMPORARY dev-only feedback capture
 
 const KEY_LABELS: Record<string, string> = {
   google_maps: "Google Map Tiles",
@@ -244,6 +245,7 @@ export function SettingsPanel() {
         <label class="lbl">API keys</label>
         <KeysEditor />
       </section>
+      <DevCaptureSetting /> {/* 0.8.2: TEMPORARY dev-only feedback capture (Settings → Advanced) */}
       <section>
         <label class="lbl">About</label>
         <div class="muted small">

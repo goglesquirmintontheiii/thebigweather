@@ -1,9 +1,11 @@
 # TheBigWeather plugins
 
 Plugins are small JavaScript files that add map layers, data sources or panels to the app.
-Manage them in **Settings → Plugins**: load a `.js` file, add one by URL, paste code, or (desktop app)
-drop files into the plugin folder shown there (`<userData>/plugins`). Each plugin can be enabled,
-disabled, reloaded and removed. Errors are caught and shown next to the plugin.
+Manage them in the **Plugins** tab of the sidebar (0.8.2): install from the **Marketplace** (see
+[plugins/README.md](../plugins/README.md) to publish one), or under **Installed → Add your own** load a
+`.js` file, add one by URL, paste code, or (desktop app) drop files into the plugin folder shown there
+(`<userData>/plugins`). Click a plugin to enable, disable, update or uninstall it. Errors are caught and
+shown on the plugin.
 
 > **Security:** a plugin runs inside the app's window with the same rights as the app itself
 > (your settings, the server token, the network). Only use code you wrote or trust.
@@ -32,7 +34,8 @@ Everything a plugin registers through the API is removed automatically when it i
 | Member | Description |
 | --- | --- |
 | `tbw.version` | API version (1). |
-| `tbw.plugin` | `{ id, name }` of this plugin. |
+| `tbw.plugin` | `{ id, name, version?, base? }` of this plugin (`version` / `base` folder URL for marketplace plugins). |
+| `tbw.asset(path)` | URL of a file in a marketplace plugin's folder (sounds, images), or `null`. |
 | `tbw.map` | The MapLibre GL map (`maplibregl.Map`). Use it freely; things added directly are not cleaned up for you. |
 | `tbw.addGeoJSONLayer(id, data, style?)` | Add a GeoJSON source + layer(s) that survive basemap changes. `data` is a GeoJSON object or URL. `style` is `{ type?, paint?, layout?, filter?, minzoom? }` or an array of them (one layer each). The type defaults from the geometry (circle / line / fill). Returns `{ setData(data), remove() }`. |
 | `tbw.addSource(id, sourceSpec, layers?)` | Add a raw MapLibre source and layers (layer ids are prefixed). Not re-added after a basemap change. Returns the source id. |
