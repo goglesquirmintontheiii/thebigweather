@@ -16,11 +16,15 @@ import { alerts } from "../alerts";
 import { sites, currentSite, selectSite } from "../radar/controller";
 import { siteShown, type AnySite } from "../intl/sites";
 import { intlSource, intlSources, groupOf, selectIntl } from "../intl/radar";
-import { nearest, radarFamily } from "../alertlist";
+import { radarFamily } from "../alertlist";
 import { openAlertLayerOptions } from "./AlertConfig";
 import { AlertTypeMenu, alertTypeMenu } from "./panels/AlertsPanel";
 import { Plus, SlidersHorizontal } from "lucide-preact";
 import { paneMap } from "../map/panes"; // 0.8.2 integration: right-click in a map pane
+import { paneLink } from "../map/panes"; // 0.8.3 inspector
+import { nearestN, siteClickTarget } from "../radar/insp083"; // 0.8.3 inspector
+import { fmtDist } from "../util";
+import { ChevronDown } from "lucide-preact";
 
 /** "Add camera" dialog: at a map position, or linked to a ship (cruise bridge cams). */
 export const camDialog = signal<{ lat?: number; lon?: number; ship?: string } | null>(null);
@@ -81,42 +85,40 @@ export function Toasts() {
 /* ---------- 0.8.2: map right-click menu ---------- */
 /** "Nearest radar": the closest radar of the current single-site product family, or null when the
  * weather layer isn't a single-site radar. */
-function nearestRadar(lat: number, lon: number, pane?: number): { id: string; label: string; go: () => void } | null {
+/* 0.8.3 inspector (R8): the three closest radars (the button takes the first, its dropdown lists the next two) */
+type NearPick = { id: string; label: string; km: number; go: () => void };
+function nearestRadar(lat: number, lon: number, pane?: number): NearPick[] {
   const w = settings.value.weather;
-  // 0.8.2 integration: a pane with its own radar site switches that pane (others follow the main radar)
+  // 0.8.2 integration: a pane with its own radar site switches that pane (others follow the main radar);
+  // 0.8.3 inspector: so does an unlinked pane (same rule as clicking a radar site there)
   const pc = pane ? settings.value.panes.list[pane - 1] : undefined;
-  if (pc?.weather.kind === "radar" && pc.site) {
-    const cur = (sites.value as AnySite[]).find((x) => x.id === pc.site);
+  if (pc?.weather.kind === "radar" && (pc.site || siteClickTarget(paneLink(pane!), true) === "pane")) {
+    const cur = (sites.value as AnySite[]).find((x) => x.id === (pc.site ?? settings.value.radar.site));
     const fam = radarFamily((sites.value as AnySite[]).filter((x) => siteShown(x)), pc.source ?? "L2", cur);
-    const n = nearest(fam, lat, lon);
-    if (!n) return null;
-    return {
+    return nearestN(fam, lat, lon, 3).map((n) => ({
       id: n.item.id,
       label: n.item.id,
+      km: n.km,
       go: () =>
         update((s) => {
           const c = s.panes.list[pane! - 1];
           if (c?.weather.kind === "radar") s.panes.list[pane! - 1] = { ...c, site: n.item.id };
         }),
-    };
+    }));
   }
   if (w.kind === "radar") {
     const cur = currentSite.value as AnySite | undefined;
     const fam = radarFamily((sites.value as AnySite[]).filter((x) => siteShown(x)), settings.value.radar.source, cur);
-    const n = nearest(fam, lat, lon);
-    if (!n) return null;
-    return { id: n.item.id, label: n.item.id, go: () => selectSite(n.item.id) };
+    return nearestN(fam, lat, lon, 3).map((n) => ({ id: n.item.id, label: n.item.id, km: n.km, go: () => selectSite(n.item.id) }));
   }
   if (w.kind === "intl") {
     const src = intlSource(w.id);
-    if (!src?.site) return null; // mosaics and groups aren't single-site
+    if (!src?.site) return []; // mosaics and groups aren't single-site
     const g = groupOf(src);
     const fam = intlSources.value.filter((x) => x.site && groupOf(x) === g).map((x) => ({ id: x.id, lat: x.site!.lat, lon: x.site!.lon, name: x.site!.name }));
-    const n = nearest(fam, lat, lon);
-    if (!n) return null;
-    return { id: n.item.id, label: n.item.name || n.item.id, go: () => selectIntl(n.item.id) };
+    return nearestN(fam, lat, lon, 3).map((n) => ({ id: n.item.id, label: n.item.name || n.item.id, km: n.km, go: () => selectIntl(n.item.id) }));
   }
-  return null;
+  return [];
 }
 
 /** alert types under the right-click (most urgent first) */
@@ -135,6 +137,36 @@ export function ContextMenu() {
     <>
       <MapMenu />
       <AlertTypeMenu />
+    </>
+  );
+}
+
+/** 0.8.3 inspector (R8): "Nearest radar" plus a dropdown with the next two closest radars */
+function NearestRadarItem({ list, close }: { list: NearPick[]; close: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [first, ...more] = list;
+  const pick = (n: NearPick) => {
+    n.go();
+    close();
+  };
+  return (
+    <>
+      <div class="i83-near">
+        <button class="i83-near-main" title={`Switch to the radar nearest this point (${first.label}, ${fmtDist(first.km * 1000)})`} onClick={() => pick(first)}>
+          Nearest radar <small class="muted">{first.label}</small>
+        </button>
+        {more.length > 0 && (
+          <button class={`i83-near-more ${open ? "on" : ""}`} title="Next closest radars" aria-label="Next closest radars" aria-expanded={open} onClick={() => setOpen(!open)}>
+            <ChevronDown size={13} />
+          </button>
+        )}
+      </div>
+      {open &&
+        more.map((n) => (
+          <button key={n.id} class="i83-near-alt" title={`Switch to ${n.label}`} onClick={() => pick(n)}>
+            {n.label} <small class="muted">{fmtDist(n.km * 1000)}</small>
+          </button>
+        ))}
     </>
   );
 }
@@ -183,17 +215,7 @@ function MapMenu() {
       >
         <Plus size={13} /> Camera
       </button>
-      {nr && (
-        <button
-          title={`Switch to the radar nearest this point (${nr.label})`}
-          onClick={() => {
-            nr.go();
-            close();
-          }}
-        >
-          Nearest radar <small class="muted">{nr.label}</small>
-        </button>
-      )}
+      {nr.length > 0 && <NearestRadarItem key={`${m.x},${m.y}`} list={nr} close={close} /> /* 0.8.3 inspector */}
       <button
         onClick={() => {
           openSounding(m.lat, m.lon);

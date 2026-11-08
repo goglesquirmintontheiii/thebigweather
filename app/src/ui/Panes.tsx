@@ -27,6 +27,11 @@ import { OVERLAYS } from "../overlays/defs";
 import { fileOverlays } from "../overlays/files";
 import { dropPane } from "../map/panesync";
 import "./panes082.css";
+/* 0.8.3 inspector: radar Inspector and distance & direction tool in panes */
+import { PaneInspector } from "./Inspector";
+import { paneBearing } from "../map/panes";
+import { tool } from "../store";
+import { fmtDist, compass } from "../util";
 
 /** Product dropdown options: Level II moments, Level III families (for the site's radar type), gridded layers.
  * 0.8.2: as data for the searchable dropdown (same groups and labels as before). */
@@ -287,6 +292,18 @@ function PaneCursorValue({ idx }: { idx: number }) {
 }
 /* ---------- end 0.8.2 ---------- */
 
+/** 0.8.3 inspector: distance & direction from this pane's radar to its centre */
+function PaneBearing({ idx }: { idx: number }) {
+  if (tool.value !== "bearing") return null;
+  const b = paneBearing.value[idx];
+  if (!b) return null;
+  return (
+    <div class="tool-readout glass i83-pane-brg">
+      From {b.site}: {fmtDist(b.dist)} · {Math.round(b.brg)}° {compass(b.brg)}
+    </div>
+  );
+}
+
 /** Second map window / pane window: what this window follows. */
 function LinkControls({ onLayers }: { onLayers?: (x: number, y: number) => void }) {
   if (myKind === "main") return null;
@@ -512,6 +529,8 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
       </div>
       {!swipe && <PaneCrosshair idx={idx} /> /* 0.8.1 */}
       <PaneCursorValue idx={idx} /* 0.8.2 */ />
+      <PaneInspector idx={idx} /* 0.8.3 inspector */ />
+      <PaneBearing idx={idx} /* 0.8.3 inspector */ />
       {menu && <PaneLayerMenu idx={idx} what={what} at={menu} onClose={() => setMenu(null)} /* 0.8.2 */ />}
     </div>
   );

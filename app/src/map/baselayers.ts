@@ -161,14 +161,14 @@ export function hookAlertHover(map: MLMap, blocked: () => boolean) {
 }
 
 /** Radar site marker button (same element on every map). */
-export function siteEl(id: string, type: string, region = "US"): HTMLElement {
+export function siteEl(id: string, type: string, region = "US", onPick?: (id: string, additive: boolean) => void /* 0.8.3 inspector: map panes */): HTMLElement {
   const el = document.createElement("button");
   el.className = `site-marker ${type === "TDWR" ? "tdwr" : "nexrad"}${region !== "US" ? ` intl-site r-${region.toLowerCase()}` : ""}`;
   el.textContent = id;
   el.title = `${id} — click to view · Ctrl+click to add/remove alongside the current radar`;
   el.addEventListener("click", (e) => {
     e.stopPropagation();
-    selectSite(id, e.ctrlKey || e.metaKey);
+    (onPick ?? selectSite)(id, e.ctrlKey || e.metaKey); // 0.8.3 inspector
   });
   return el;
 }

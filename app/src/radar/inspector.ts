@@ -30,9 +30,14 @@ async function fetchAll(key: string, angle: number) {
   ctl?.abort();
   const c = new AbortController();
   ctl = c;
+  await loadInto(key, angle, c, (d) => (inspData.value = d));
+}
+
+/** every moment of one volume at one tilt, published as it arrives */
+async function loadInto(key: string, angle: number, c: AbortController, out: (d: InspData) => void) {
   const cur: InspData = { key, sweeps: {}, missing: [], loading: true, rot: [] };
-  inspData.value = cur;
-  const pub = () => !c.signal.aborted && (inspData.value = { ...cur, sweeps: { ...cur.sweeps } });
+  out(cur);
+  const pub = () => !c.signal.aborted && out({ ...cur, sweeps: { ...cur.sweeps } });
   try {
     const meta = await volMeta(key);
     if (c.signal.aborted) return;
@@ -90,4 +95,55 @@ effect(() => {
   if (a === lastTilt) return;
   lastTilt = a;
   if (inspectorOn() && currentFrame.value?.key && !playing.peek()) fetchAll(currentFrame.value.key, a);
+});
+
+/* ---------- 0.8.3 inspector: map panes (their own radar / time / tilt) ---------- */
+/** per-pane Inspector data (pane index → data of the frame shown there) */
+export const paneInspData = signal<Record<number, InspData>>({});
+const paneCtl = new Map<number, { key: string; angle: number; c: AbortController; timer?: number; own: boolean }>();
+const sameAsMain = (key: string, angle: number) => inspData.peek()?.key === key && Math.abs(settings.peek().radar.tiltAngle - angle) < 0.05;
+
+/** Ask for every moment of the volume a pane shows (debounced; cancels that pane's previous load).
+ * Reuses the main map's data when the pane shows the same volume and tilt. Cheap to call often. */
+export function wantPaneInsp(idx: number, key: string | undefined, angle: number) {
+  const prev = paneCtl.get(idx);
+  if (!key || !inspectorOn()) {
+    if (prev) (prev.c.abort(), clearTimeout(prev.timer), paneCtl.delete(idx));
+    return;
+  }
+  const main = sameAsMain(key, angle);
+  if (prev && prev.key === key && prev.angle === angle && (prev.own || main)) return;
+  if (prev) (prev.c.abort(), clearTimeout(prev.timer));
+  const c = new AbortController();
+  const ent = { key, angle, c, timer: undefined as number | undefined, own: !main };
+  paneCtl.set(idx, ent);
+  if (main) return; // same as the main map
+  ent.timer = window.setTimeout(() => {
+    if (c.signal.aborted) return;
+    loadInto(key, angle, c, (d) => (paneInspData.value = { ...paneInspData.peek(), [idx]: d }));
+  }, 250);
+}
+
+/** the Inspector data for what a pane shows (null until loaded) */
+export function paneInspFor(idx: number, key: string | undefined, angle: number): InspData | null {
+  if (!key) return null;
+  const main = inspData.value;
+  if (main?.key === key && Math.abs(settings.value.radar.tiltAngle - angle) < 0.05) return main;
+  const d = paneInspData.value[idx];
+  return d?.key === key ? d : null;
+}
+
+/** forget a closed pane */
+export function dropPaneInsp(idx: number) {
+  const p = paneCtl.get(idx);
+  if (p) (p.c.abort(), clearTimeout(p.timer), paneCtl.delete(idx));
+  if (paneInspData.peek()[idx]) {
+    const n = { ...paneInspData.peek() };
+    delete n[idx];
+    paneInspData.value = n;
+  }
+}
+
+effect(() => {
+  if (!inspectorOn()) for (const i of [...paneCtl.keys()]) dropPaneInsp(i);
 });

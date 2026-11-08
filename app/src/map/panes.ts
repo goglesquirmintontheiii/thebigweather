@@ -11,7 +11,7 @@ import * as maplibregl from "maplibre-gl";
 import type { Map as MLMap, GeoJSONSource } from "maplibre-gl";
 import { signal, effect, untracked } from "@preact/signals";
 import { api, lastHello } from "../api";
-import { settings, type PaneCfg, type PaneLink } from "../store";
+import { settings, update, type PaneCfg, type PaneLink } from "../store"; // 0.8.3 inspector: update
 import { buildStyle } from "./basemaps";
 import { RadarLayer } from "../radar/RadarLayer";
 import { GridLayer } from "../grid/GridLayer";
@@ -51,6 +51,15 @@ import { tickerMaps, addAnim, wakeTicker } from "../overlays/ticker";
 import { refreshMul, pollPaused } from "../saver";
 import { xsPick, xsLine, xsFirst, xsPane } from "../ui/XSection";
 import { paneLayerOn, nearestFrame, nearestReady, preloadOrder } from "./panesync";
+/* 0.8.3 inspector: radar inspector, bearing tool and radar-site clicks in every pane */
+import { selectSite } from "../radar/controller";
+import { wantPaneInsp, dropPaneInsp } from "../radar/inspector";
+import { bearing, distance } from "../util";
+import { siteClickTarget, inspLayers } from "../radar/insp083";
+/** the radar Inspector's cursor in a pane (pane-local pixels) */
+export const paneInsp = signal<{ idx: number; x: number; y: number; lat: number; lon: number } | null>(null);
+/** distance & direction tool in each pane: from that pane's radar to its centre */
+export const paneBearing = signal<Record<number, { site: string; dist: number; brg: number }>>({});
 
 export const paneStatus = signal<Record<number, { loading?: boolean; error?: string; time?: number; label?: string }>>({});
 const panes = new Map<number, PaneView>();
@@ -234,6 +243,7 @@ class PaneView {
     this.map.on("style.load", () => this.addLayers());
     this.map.on("move", () => {
       this.readCenter(); // 0.8.1
+      if (tool.peek() === "bearing") this.refreshTools(); // 0.8.3 inspector
       this.followPopup();
       if (syncing || !synced(this.idx)) return; // data 0.6, panes 0.8
       syncing = true;
@@ -358,7 +368,7 @@ class PaneView {
     for (const st of list) {
       let m = this.siteMarkers.get(st.id);
       if (!m) {
-        m = new maplibregl.Marker({ element: siteEl(st.id, st.type, siteRegion(st)), anchor: "center" }).setLngLat([st.lon, st.lat]).addTo(this.map);
+        m = new maplibregl.Marker({ element: siteEl(st.id, st.type, siteRegion(st), (id, add) => this.pickSite(id, add) /* 0.8.3 inspector */), anchor: "center" }).setLngLat([st.lon, st.lat]).addTo(this.map);
         this.siteMarkers.set(st.id, m);
       }
       m.getElement().classList.toggle("selected", st.id === sel);
@@ -369,6 +379,26 @@ class PaneView {
 
   siteDensity() {
     markerDensity(this.map);
+  }
+
+  /** 0.8.3 inspector (R35): a radar-site click in an unlinked pane switches only this pane's radar */
+  pickSite(id: string, additive: boolean) {
+    const swipe = myKind !== "pane" && settings.peek().panes.layout === "swipe";
+    const lk = myKind === "pane" ? myLink.peek() : paneLink(this.idx);
+    const radar = this.cfg?.weather.kind === "radar";
+    if (swipe || siteClickTarget(lk, radar) === "main") {
+      if (this.cfg?.site)
+        update((s) => {
+          const c = s.panes.list[this.idx - 1];
+          if (c?.site) s.panes.list[this.idx - 1] = { ...c, site: undefined }; // linked: follow the main radar again
+        });
+      selectSite(id, additive);
+      return;
+    }
+    update((s) => {
+      const c = s.panes.list[this.idx - 1];
+      if (c?.weather.kind === "radar") s.panes.list[this.idx - 1] = { ...c, site: id };
+    });
   }
 
   /* ---------- 0.8.2: overlays (same layer specs as the main map) ---------- */
@@ -474,6 +504,20 @@ class PaneView {
     const pts = tool.peek() === "measure" ? measurePts.peek() : [];
     const feats: any[] = pts.map((p) => ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: p } }));
     if (pts.length > 1) feats.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: pts } });
+    // 0.8.3 inspector: distance & direction from this pane's radar to its centre
+    const id = this.cfg?.weather.kind === "radar" && this.cfg.site ? this.cfg.site : settings.peek().radar.site;
+    const st = tool.peek() === "bearing" ? (sites.peek() as AnySite[]).find((x) => x.id === id) : undefined;
+    const pb = paneBearing.peek();
+    if (st) {
+      const c = this.map.getCenter();
+      feats.push({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [[st.lon, st.lat], [c.lng, c.lat]] } });
+      feats.push({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [st.lon, st.lat] } });
+      paneBearing.value = { ...pb, [this.idx]: { site: st.id, dist: distance(st.lat, st.lon, c.lat, c.lng), brg: bearing(st.lat, st.lon, c.lat, c.lng) } };
+    } else if (pb[this.idx]) {
+      const n = { ...pb };
+      delete n[this.idx];
+      paneBearing.value = n;
+    }
     src.setData({ type: "FeatureCollection", features: feats } as any);
   }
 
@@ -494,6 +538,7 @@ class PaneView {
     this.grid.gateKey = cfg.weather.kind === "grid" ? gridGateKey(cfg.weather.id) : "";
     this.refreshSites();
     this.refreshRings();
+    if (tool.peek() === "bearing") this.refreshTools(); // 0.8.3 inspector: the pane's radar changed
     const gen = ++this.gen;
     this.frames = [];
     this.radar.setItems([]);
@@ -764,20 +809,57 @@ class PaneView {
     setCenter(this.idx, this.valueAt(c.lat, c.lng));
   }
 
+  /* 0.8.3 inspector (R4): mouse moves are coalesced to one update per animation frame (the readout
+   * follows the pointer smoothly instead of every 50 ms), and the rendered-feature queries for the
+   * pointer cursor / detection highlight run at most ~12 times a second with a trailing update. */
+  hovEv: { lat: number; lon: number; x: number; y: number } | null = null;
+  hovRaf = 0;
+  lastQ = 0;
+  qTimer: number | undefined;
   onHover(e: maplibregl.MapMouseEvent) {
-    const now = performance.now();
-    if (now - this.lastHover < 50) return;
-    this.lastHover = now;
+    this.hovEv = { lat: e.lngLat.lat, lon: e.lngLat.lng, x: e.point.x, y: e.point.y };
+    if (!this.hovRaf) this.hovRaf = requestAnimationFrame(() => this.hoverFrame());
+  }
+  hoverFrame() {
+    this.hovRaf = 0;
+    const h = this.hovEv;
+    if (!h || this.dead) return;
     // 0.8.2: data inspector (the value under the mouse in this pane's product)
-    const r = settings.peek().ui.cursorValue || shiftHeld.peek() ? this.valueAt(e.lngLat.lat, e.lngLat.lng) : null;
-    if (r || paneHover.peek()) paneHover.value = r ? { idx: this.idx, x: e.point.x, y: e.point.y, ...r } : null;
+    const r = settings.peek().ui.cursorValue || shiftHeld.peek() ? this.valueAt(h.lat, h.lon) : null;
+    const ph = paneHover.peek();
+    if (r) {
+      if (!ph || ph.idx !== this.idx || ph.x !== h.x || ph.y !== h.y || ph.v !== r.v || ph.sub !== r.sub) paneHover.value = { idx: this.idx, x: h.x, y: h.y, ...r };
+    } else if (ph?.idx === this.idx) paneHover.value = null;
+    // radar Inspector in this pane
+    if (settings.peek().radar6?.inspector) {
+      paneInsp.value = { idx: this.idx, ...h };
+      const cfg = this.cfg;
+      const l2 = cfg?.weather.kind === "radar" && (cfg.source ?? "L2") === "L2";
+      wantPaneInsp(this.idx, l2 ? this.cur?.key : undefined, cfg?.tilt ?? settings.peek().radar.tiltAngle);
+    } else if (paneInsp.peek()) paneInsp.value = null;
     if (tool.peek() !== "none") return;
+    clearTimeout(this.qTimer);
+    const wait = 80 - (performance.now() - this.lastQ);
+    if (wait > 0) this.qTimer = window.setTimeout(() => this.queryHover(), wait);
+    else this.queryHover();
+  }
+  queryHover() {
+    const h = this.hovEv;
+    if (!h || this.dead || tool.peek() !== "none") return;
+    this.lastQ = performance.now();
     const m = this.map;
-    const layers = (m.getStyle()?.layers ?? []).filter((l) => l.id.startsWith("o-") && !l.id.endsWith("-text") && !l.id.endsWith("-label")).map((l) => l.id);
-    const feats = layers.length ? m.queryRenderedFeatures(e.point, { layers }) : [];
+    let order: string[] = [];
+    try {
+      order = m.getLayersOrder(); // cheap (getStyle() serialised the whole style on every move)
+    } catch {
+      return; // style not ready
+    }
+    const layers = inspLayers(order, []);
+    const pt: [number, number] = [h.x, h.y];
+    const feats = layers.length ? m.queryRenderedFeatures(pt, { layers }) : [];
     const c = m.getCanvas().style;
     if (feats.length) c.cursor = "pointer";
-    else if (c.cursor === "pointer" && !m.queryRenderedFeatures(e.point, { layers: ALERT_HIT_LAYERS.filter((l) => m.getLayer(l)) }).length) c.cursor = "";
+    else if (c.cursor === "pointer" && !m.queryRenderedFeatures(pt, { layers: ALERT_HIT_LAYERS.filter((l) => m.getLayer(l)) }).length) c.cursor = "";
     // 0.8.2: model detections brighten on hover (feature-state on fid, like the main map)
     const det = feats.find((f) => f.layer.id.startsWith(`o-${ML}-`) && f.properties?.fid != null && f.properties.fid !== "");
     this.setDetHover(det ? +det.properties!.fid : null);
@@ -798,6 +880,9 @@ class PaneView {
     set(fid, true);
   }
   onLeave() {
+    this.hovEv = null; // 0.8.3 inspector
+    clearTimeout(this.qTimer);
+    if (paneInsp.peek()?.idx === this.idx) paneInsp.value = null;
     if (paneHover.peek()?.idx === this.idx) paneHover.value = null;
     this.setDetHover(null);
   }
@@ -861,6 +946,16 @@ class PaneView {
     for (const id of [...this.own.keys()]) this.stopOwn(id);
     if (popup.peek()?.pane === this.idx) popup.value = null;
     if (paneHover.peek()?.idx === this.idx) paneHover.value = null;
+    /* 0.8.3 inspector */
+    cancelAnimationFrame(this.hovRaf);
+    clearTimeout(this.qTimer);
+    if (paneInsp.peek()?.idx === this.idx) paneInsp.value = null;
+    dropPaneInsp(this.idx);
+    if (paneBearing.peek()[this.idx]) {
+      const n = { ...paneBearing.peek() };
+      delete n[this.idx];
+      paneBearing.value = n;
+    }
     setCenter(this.idx, null);
     // 0.8.1 perf: free GPU copies and drop the module-level references (the radar layer registry kept
     // closed panes' maps alive) before the map and its WebGL context go
@@ -959,6 +1054,12 @@ export function paneMap(idx: number): MLMap | null {
 }
 export function paneCount() {
   return panes.size;
+}
+/** 0.8.3 inspector: what a pane shows (its config, frame and the value reader) for the Inspector */
+export function paneView(idx: number): { cfg: PaneCfg | null; key?: string; sweep?: Sweep; valueAt: (lat: number, lon: number) => { v: string; sub?: string } | null } | null {
+  const p = panes.get(idx);
+  if (!p) return null;
+  return { cfg: p.cfg, key: p.cur?.key, sweep: p.cur?.sweep, valueAt: (lat, lon) => p.valueAt(lat, lon) };
 }
 
 export function resizePanes() {

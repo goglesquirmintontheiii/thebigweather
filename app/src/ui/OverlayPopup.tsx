@@ -76,7 +76,7 @@ export function SkyGraph({ raw }: { raw: string }) {
         </text>
       )}
       <text x={W / 2 + 14} y={H - 3} text-anchor="middle" font-size="8.5" fill="#8b97a6">
-        Sky (ft above ground)
+        Sky (AGL)
       </text>
     </svg>
   );
