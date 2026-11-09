@@ -96,11 +96,15 @@ export function relDelta(v: number): number {
   return v < 64 ? v : v - 128;
 }
 
+/** a repeat of the same high CC value this long after the last one is a new press (ms) */
+export const CC_REPRESS_MS = 150;
 /** does this message press a button? notes / program changes on press; a CC when it crosses 64
- *  upward (buttons that send 127 / 0), so holding or releasing doesn't repeat */
-export function isPress(m: MidiMsg, prevVal: number | undefined): boolean {
+ *  upward (buttons that send 127 / 0), so holding or releasing doesn't repeat. 0.8.4: buttons that
+ *  send only 127 (no release message) never cross 64 again: the same value after a gap (`gapMs`,
+ *  ms since this control's last message) is a new press too. */
+export function isPress(m: MidiMsg, prevVal: number | undefined, gapMs?: number): boolean {
   if (m.kind === "note" || m.kind === "pc") return m.on;
-  if (m.kind === "cc") return m.val >= 64 && (prevVal === undefined || prevVal < 64);
+  if (m.kind === "cc") return m.val >= 64 && (prevVal === undefined || prevVal < 64 || (m.val === prevVal && gapMs !== undefined && gapMs >= CC_REPRESS_MS));
   return false;
 }
 
@@ -116,6 +120,46 @@ export function contInput(m: MidiMsg, map: Pick<MidiMap, "mode" | "invert">): { 
   }
   const v = Math.max(0, Math.min(1, m.val / 127));
   return { abs: map.invert ? 1 - v : v };
+}
+
+export interface ContPending {
+  abs?: number;
+  delta: number;
+}
+/** 0.8.4: knob / fader updates waiting to be applied, coalesced per action. The queue is emptied
+ *  before anything runs and each action is isolated: an action that throws is reported and dropped,
+ *  it can't stay queued and stop the others (or itself) from ever running again. */
+export class ContQueue {
+  private q = new Map<string, ContPending>();
+  get size() {
+    return this.q.size;
+  }
+  add(action: string, v: { abs?: number; delta?: number }) {
+    const p = this.q.get(action) ?? { delta: 0 };
+    if (v.abs !== undefined) (p.abs = v.abs), (p.delta = 0);
+    else p.delta += v.delta ?? 0;
+    this.q.set(action, p);
+  }
+  flush(apply: (action: string, p: ContPending) => void, onError: (action: string, e: unknown) => void) {
+    const batch = [...this.q];
+    this.q.clear();
+    for (const [a, p] of batch) {
+      try {
+        apply(a, p);
+      } catch (e) {
+        onError(a, e);
+      }
+    }
+  }
+}
+
+/** Which windows use MIDI: the main window runs the mapped commands. The MIDI tab popped out to its
+ *  own window only needs the devices and Learn. Every other pop-out stays off, or each press would
+ *  run once per window. */
+export type MidiRole = "main" | "view" | "none";
+export function midiRole(popoutKind: string | null | undefined, popWin?: string | null): MidiRole {
+  if (!popoutKind) return "main";
+  return popWin === "p:midi" ? "view" : "none";
 }
 
 /** a 0..1 position onto [lo, hi] */

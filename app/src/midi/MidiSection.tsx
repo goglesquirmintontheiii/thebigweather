@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Toggle } from "../ui/panels/RadarPanel";
 import { Trash2, Radio, X } from "lucide-preact";
-import { midiState, midiError, midiInputs, midiActivity, learning, learned, midiCfg, setMidi, runAction } from "./midi";
+import { midiState, midiError, midiInputs, midiActivity, midiLast, learning, learned, midiCfg, setMidi, runAction } from "./midi";
 import { allActions } from "./midi";
 import { ctlName, isCont, isRangeCtl, setMapping, removeMapping, searchActions, type MidiMap } from "./midicore";
 import "../ui/tb082.css";
@@ -158,6 +158,11 @@ export function MidiSection() {
               </div>
             );
           })}
+          {midiLast.value && (
+            <div class="muted small">
+              Last: {ctlName(midiLast.value.ctl)} → {midiLast.value.label ?? "not mapped"}
+            </div>
+          )}
           {learnOpen ? (
             <Learn onClose={() => setLearnOpen(false)} />
           ) : (
