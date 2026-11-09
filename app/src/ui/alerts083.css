@@ -210,3 +210,30 @@
 .ad-tr-err {
   color: #fca5a5;
 }
+
+/* 0.8.4: timeline search bar */
+.atl-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+}
+.atl-search:focus-within {
+  border-color: var(--accent);
+}
+.atl-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0 !important;
+  background: transparent !important;
+  padding: 6px 0 !important;
+  outline: none;
+  box-shadow: none !important;
+}
+.atl-search input::-webkit-search-cancel-button {
+  display: none;
+}

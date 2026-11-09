@@ -14,6 +14,7 @@ import { paneInsp, paneView, paneMap } from "../map/panes";
 import { ALERT_HIT_LAYERS } from "../map/baselayers";
 import { alerts } from "../alerts";
 import { overlayDef } from "../overlays/defs";
+import { fileClick } from "../overlays/files"; // 0.8.4
 import { sampleAt, type Sweep } from "../radar/sweep";
 import { inspData, INSPECT_MOMENTS, paneInspFor, type InspData } from "../radar/inspector";
 import { currentFrame, displaySweep, activeTable } from "../radar/controller";
@@ -22,7 +23,7 @@ import { hailClass, HAIL_LABEL, HAIL_COLOR, mmToIn } from "../radar/hailfuzzy";
 import { meshReady, meshAt, swathGrid } from "../radar/hail";
 import { tdsHits } from "../radar/tds";
 import { ltgNearPoints } from "../radar/lightning";
-import { inspPlace, inspLayers, overlayIdOf, compactRows, metarRows, dedupeRows, type InspRow } from "../radar/insp083";
+import { inspPlace, inspLayers, overlayIdOf, compactRows, metarRows, dedupeRows, trailingThrottle, type InspRow } from "../radar/insp083";
 import { distance, fmtDist, speedFactor, fmtTime, fmtValue } from "../util";
 import { activeLegend } from "../active";
 import { fmtGrid } from "../util";
@@ -136,9 +137,9 @@ function featureRows(m: MLMap, x: number, y: number): InspRow[] {
         continue;
       }
       const oid = overlayIdOf(lid);
-      if (!oid || oid.startsWith("file:")) continue;
+      if (!oid) continue;
       const def = overlayDef(oid);
-      const p = def?.click?.(props);
+      const p = def?.click ? def.click(props) : oid.startsWith("file:") ? fileClick(props) : null;
       if (!p) continue;
       const area = f.layer.type === "fill" || f.layer.type === "line" || f.layer.type === "fill-extrusion";
       let row: InspRow | null;
@@ -155,23 +156,20 @@ function featureRows(m: MLMap, x: number, y: number): InspRow[] {
 }
 
 // throttled (~10/s, trailing) and only while the Inspector is on
-let fq = { last: 0, timer: 0 as number | undefined, want: null as { pane: number; x: number; y: number } | null };
+let featWant: { pane: number; x: number; y: number } | null = null;
 function runFeats() {
-  const w = fq.want;
-  fq.timer = undefined;
+  const w = featWant;
   if (!w) return;
-  fq.last = performance.now();
   const m = w.pane ? paneMap(w.pane) : mapRef.peek();
   const rows = m ? featureRows(m, w.x, w.y) : [];
   const cur = inspFeats.peek();
   if (cur?.pane === w.pane && JSON.stringify(cur.rows) === JSON.stringify(rows)) return;
   inspFeats.value = { pane: w.pane, rows };
 }
+const schedFeats = trailingThrottle(runFeats, 100);
 function wantFeats(pane: number, x: number, y: number) {
-  fq.want = { pane, x, y };
-  if (fq.timer !== undefined) return;
-  const wait = 100 - (performance.now() - fq.last);
-  fq.timer = window.setTimeout(runFeats, Math.max(0, wait));
+  featWant = { pane, x, y };
+  schedFeats();
 }
 effect(() => {
   const on = !!settings.value.radar6?.inspector;
@@ -179,7 +177,7 @@ effect(() => {
   const p = paneInsp.value;
   untracked(() => {
     if (!on || (!h && !p)) {
-      fq.want = null;
+      featWant = null;
       if (inspFeats.peek()) inspFeats.value = null;
       return;
     }

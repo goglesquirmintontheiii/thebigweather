@@ -6,12 +6,12 @@
 
 import { signal } from "@preact/signals";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { ChartGantt, RefreshCw, ZoomIn, ZoomOut, Play, MapPin, X } from "lucide-preact";
+import { ChartGantt, RefreshCw, ZoomIn, ZoomOut, Play, MapPin, X, Search } from "lucide-preact";
 import { api } from "../api";
 import { settings } from "../store";
 import { alerts, decorateAlert, alertOwnColor } from "../alerts";
 import { alertStyle } from "../alertstyle"; // 0.8.3
-import { groupItems, applyFilter, cycleFilter, typeChips, spanEnd, packRows, vtecKey, type TypeFilter } from "../atlgroup"; // 0.8.3
+import { groupItems, applyFilter, cycleFilter, typeChips, spanEnd, packRows, vtecKey, searchText, searchWords, searchItems, type TypeFilter } from "../atlgroup"; // 0.8.3, 0.8.4 search
 import { mapRef } from "../map/mapview";
 import { pointInGeometry, distance, fmtDist } from "../util";
 import { CenterModal } from "./CenterModal";
@@ -243,6 +243,17 @@ function Body() {
   const [data, setData] = useState<{ items: Item[]; errors: string[]; loading: boolean; area?: Area }>({ items: [], errors: [], loading: true });
   const [sel, setSel] = useState<Item | null>(null);
   const [nonce, setNonce] = useState(0);
+  // 0.8.4: search bar (revealed by the magnifier button)
+  const [searchOn, setSearchOn] = useState(false);
+  const [q, setQ] = useState("");
+  const searchEl = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (searchOn) searchEl.current?.focus();
+  }, [searchOn]);
+  const closeSearch = () => {
+    setSearchOn(false);
+    setQ("");
+  };
   const scroller = useRef<HTMLDivElement>(null);
   const to = useMemo(() => Date.now(), [hours, nonce, areaSel, radius]);
   const from = to - hours * 3600_000;
@@ -276,16 +287,18 @@ function Body() {
   const width = Math.max(600, Math.ceil((end - from) * pxPerMs));
   const xAt = (t: number) => (t - from) * pxPerMs;
   const styleKey = settings.value.alertCfg; // colours follow Alerts → layer options
-  const chips = useMemo(() => typeChips(data.items), [data.items, styleKey]);
+  const texts = useMemo(() => new Map(data.items.map((it) => [it.key, searchText(it)])), [data.items]);
+  const found = useMemo(() => searchItems(data.items, searchWords(q), (it) => texts.get(it.key) ?? ""), [data.items, texts, q]);
+  const chips = useMemo(() => typeChips(found), [found, styleKey]);
   const groups = useMemo(
     () =>
-      groupItems(applyFilter(data.items, filt)).map((g) => {
+      groupItems(applyFilter(found, filt)).map((g) => {
         const rows = packRows(g.items, pxPerMs);
         let n = 1;
         for (const r of rows.values()) n = Math.max(n, r + 1);
         return { ...g, rows, n };
       }),
-    [data.items, filt, pph, styleKey],
+    [found, filt, pph, styleKey],
   );
   const nShown = groups.reduce((a, g) => a + g.items.length, 0);
   const nFilt = Object.keys(filt).length;
@@ -352,6 +365,9 @@ function Body() {
               </button>
             ))}
           </div>
+          <button class={`icon-btn ${searchOn ? "on" : ""}`} title="Search" aria-pressed={searchOn} onClick={() => (searchOn ? closeSearch() : setSearchOn(true))}>
+            <Search size={15} />
+          </button>
           <button class="icon-btn" title="Zoom out (Ctrl+wheel)" onClick={() => zoom(1 / 1.6)}>
             <ZoomOut size={15} />
           </button>
@@ -364,6 +380,30 @@ function Body() {
         </>
       }
     >
+      {searchOn && (
+        <div class="atl-search">
+          <Search size={13} />
+          <input
+            ref={searchEl}
+            type="search"
+            placeholder="Type, city, state, area, description…"
+            aria-label="Search the timeline"
+            value={q}
+            onInput={(e) => setQ((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.stopPropagation();
+              if (q) setQ("");
+              else closeSearch();
+            }}
+          />
+          {q && (
+            <button class="icon-btn" title="Clear" onClick={() => setQ("")}>
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
       {/* 0.8.3: type filter — click: only this type (add more), again: hide it, again: normal */}
       {chips.length > 0 && (
         <div class="atl-chips" role="group" aria-label="Filter by type">
@@ -446,7 +486,7 @@ function Body() {
                 </div>
               </div>
             ))}
-            {!groups.length && data.items.length > 0 && <div class="muted small atl-none">Every type is filtered out.</div>}
+            {!groups.length && data.items.length > 0 && <div class="muted small atl-none">{searchWords(q).length && !found.length ? `Nothing matches “${q.trim()}”.` : "Every type is filtered out."}</div>}
           </div>
         </div>
       </div>

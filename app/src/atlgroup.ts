@@ -119,3 +119,40 @@ export function packRows<T extends { key: string; t0: number; t1: number; point?
   }
   return out;
 }
+
+/* ---------- 0.8.4: timeline search ---------- */
+const STATES: Record<string, string> = { AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California", CO: "Colorado", CT: "Connecticut", DE: "Delaware", DC: "District of Columbia", FL: "Florida", GA: "Georgia", HI: "Hawaii", ID: "Idaho", IL: "Illinois", IN: "Indiana", IA: "Iowa", KS: "Kansas", KY: "Kentucky", LA: "Louisiana", ME: "Maine", MD: "Maryland", MA: "Massachusetts", MI: "Michigan", MN: "Minnesota", MS: "Mississippi", MO: "Missouri", MT: "Montana", NE: "Nebraska", NV: "Nevada", NH: "New Hampshire", NJ: "New Jersey", NM: "New Mexico", NY: "New York", NC: "North Carolina", ND: "North Dakota", OH: "Ohio", OK: "Oklahoma", OR: "Oregon", PA: "Pennsylvania", RI: "Rhode Island", SC: "South Carolina", SD: "South Dakota", TN: "Tennessee", TX: "Texas", UT: "Utah", VT: "Vermont", VA: "Virginia", WA: "Washington", WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming", PR: "Puerto Rico", GU: "Guam" };
+
+/** lower case, accents removed (so "Yucatan" finds "Yucatán") */
+export function foldText(s: string): string {
+  return s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+export function searchWords(q: string): string[] {
+  return foldText(q).split(/\s+/).filter(Boolean);
+}
+
+const SEARCH_PROPS = ["event", "headline", "description", "instruction", "areaDesc", "senderName", "sender", "wfo", "city", "st", "state", "county", "country", "remark", "text", "concerning", "typetext", "source"];
+
+/** everything the timeline search looks through for one item (folded); state codes also count as their names */
+export function searchText(it: { type: string; title?: string; sub?: string; props?: any }): string {
+  const parts: string[] = [KIND_LANES[it.type] ?? it.type, it.title ?? "", it.sub ?? ""];
+  for (const k of SEARCH_PROPS) {
+    const v = it.props?.[k];
+    if (typeof v === "string" && v) parts.push(v);
+  }
+  const places = `${it.props?.areaDesc ?? ""} ${it.props?.st ?? ""} ${it.props?.state ?? ""}`;
+  const names = new Set<string>();
+  for (const m of places.matchAll(/\b[A-Z]{2}\b/g)) if (STATES[m[0]]) names.add(STATES[m[0]]);
+  return foldText([...parts, ...names].join(" "));
+}
+
+/** items whose text has every search word (the list itself when there are no words) */
+export function searchItems<T>(items: T[], words: string[], textOf: (it: T) => string): T[] {
+  if (!words.length) return items;
+  return items.filter((it) => {
+    const t = textOf(it);
+    return words.every((w) => t.includes(w));
+  });
+}
+/* ---------- end 0.8.4 ---------- */

@@ -1,6 +1,6 @@
 // 0.8.3 inspector: nearest-radar ranking, Inspector placement / feature rows, pane site clicks.
 import assert from "node:assert/strict";
-import { nearestN, normLon, inspPlace, overlayIdOf, inspLayers, compactRows, metarRows, dedupeRows, siteClickTarget, gcKm } from "../src/radar/insp083";
+import { nearestN, normLon, inspPlace, overlayIdOf, inspLayers, compactRows, metarRows, dedupeRows, siteClickTarget, gcKm, trailingThrottle, layerOptionsAt } from "../src/radar/insp083";
 
 const SITES = [
   { id: "KTLX", lat: 35.333, lon: -97.278 },
@@ -85,4 +85,34 @@ export function testSiteClickTarget() {
   assert.equal(siteClickTarget({ ...all, layers: false }, true), "pane");
   assert.equal(siteClickTarget({ ...all, time: false }, true), "pane");
   assert.equal(siteClickTarget({ pos: false, time: false, layers: false }, false), "main"); // not a radar pane
+}
+
+// 0.8.4: the first hover has to be looked up (0.8.3's timer never armed)
+export function testThrottleRunsFromTheFirstCall() {
+  let t = 1000, runs = 0;
+  const q: { fn: () => void; d: number }[] = [];
+  const go = trailingThrottle(() => runs++, 100, () => t, (fn, d) => q.push({ fn, d }));
+  go();
+  assert.equal(q.length, 1, "first call arms the timer");
+  assert.equal(q[0].d, 0);
+  go();
+  assert.equal(q.length, 1, "one timer at a time");
+  q.shift()!.fn();
+  assert.equal(runs, 1);
+  t += 30;
+  go();
+  assert.equal(q[0].d, 70, "waits out the rest of the interval");
+  q.shift()!.fn();
+  assert.equal(runs, 2);
+  t += 500;
+  go();
+  assert.equal(q[0].d, 0);
+}
+
+export function testLayerOptionsUnderCursor() {
+  const names: Record<string, string> = { metar: "METARs", "file:abc": "my.kml", quakes: "Earthquakes" };
+  const r = layerOptionsAt(["o-metar-icon", "o-metar-text", "o-file:abc-fill", "ovl-alerts-fill", "o-hidden-x", "o-quakes-c"], (id) => names[id]);
+  assert.deepEqual(r, [{ id: "metar", name: "METARs" }, { id: "file:abc", name: "my.kml" }, { id: "quakes", name: "Earthquakes" }]);
+  assert.equal(layerOptionsAt(["o-a-x", "o-b-x"], (id) => id, 1).length, 1);
+  assert.deepEqual(layerOptionsAt([], () => "x"), []);
 }

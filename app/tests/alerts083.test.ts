@@ -1,7 +1,7 @@
 // 0.8.3: alert timeline grouping / type filter, Translate button rules, lightning legend window.
 import assert from "node:assert/strict";
-import { groupItems, typeRank, cycleFilter, passes, applyFilter, typeChips, spanEnd, packRows, vtecKey, type GItem } from "../src/atlgroup";
-import { alertLang, offerTranslate, scriptLang } from "../src/trlang";
+import { groupItems, typeRank, cycleFilter, passes, applyFilter, typeChips, spanEnd, packRows, vtecKey, searchText, searchWords, searchItems, foldText, type GItem } from "../src/atlgroup";
+import { alertLang, offerTranslate, scriptLang, looksSpanish } from "../src/trlang";
 import { ltgWindow, ltgPaint, ltgFilter, ltgSpan, ltgTicks } from "../src/radar/ltgpaint";
 
 const H = 3600_000;
@@ -98,7 +98,7 @@ export function testTranslateOffer() {
   assert.equal(offerTranslate(undefined, ru), "ru", "default: Russian alerts");
   assert.equal(offerTranslate("off", ru), null);
   const es = { lang: "es-ES", description: "Lluvias intensas" };
-  assert.equal(offerTranslate(undefined, es), null, "default is Russian only");
+  assert.equal(offerTranslate(undefined, es), "es", "default: Russian and Spanish (0.8.4)");
   assert.equal(offerTranslate("all", es), "es");
   const en = { lang: "en-GB", description: "Heavy rain" };
   assert.equal(offerTranslate("all", en), null);
@@ -129,4 +129,39 @@ export function testLightningWindow() {
   const z = (ltgPaint([300, 300], 1).color as any[]).slice(3).filter((_, i) => i % 2 === 0);
   assert.ok(z.every((v, i) => i === 0 || v > z[i - 1]));
   assert.deepEqual(ltgTicks(600), ["now", "2.5 min", "5 min", "7.5 min", "10 min"]);
+}
+
+// 0.8.4: timeline search
+export function testTimelineSearch() {
+  const a = { key: "a", type: "Tornado Warning", title: "Tornado Warning", props: { areaDesc: "Cleveland, OK; McClain, OK", description: "Radar indicated rotation near Norman.", senderName: "NWS Norman OK" } };
+  const b = { key: "b", type: "Aviso de tormenta", title: "Aviso de tormenta", props: { areaDesc: "Mérida, Yucatán", description: "Lluvias fuertes" } };
+  const c = { key: "c", type: "lsr", title: "Hail 1.00 in", sub: "Dallas, TX", props: { city: "Dallas", st: "TX", remark: "Quarter hail" } };
+  const find = (q: string) => searchItems([a, b, c], searchWords(q), searchText).map((x) => x.key);
+  assert.deepEqual(find(""), ["a", "b", "c"]);
+  assert.deepEqual(find("tornado"), ["a"]);
+  assert.deepEqual(find("cleveland"), ["a"], "county / city");
+  assert.deepEqual(find("oklahoma"), ["a"], "state name from its code");
+  assert.deepEqual(find("texas hail"), ["c"], "every word must match");
+  assert.deepEqual(find("rotation norman"), ["a"], "description");
+  assert.deepEqual(find("yucatan"), ["b"], "accents ignored");
+  assert.deepEqual(find("storm reports"), ["c"], "lane name");
+  assert.deepEqual(find("nothing-here"), []);
+  assert.equal(foldText("MÉRIDA"), "merida");
+}
+
+// 0.8.4: Spanish alerts get the Translate button, labelled or not
+export function testSpanishAlerts() {
+  const smn = "Se prevén lluvias muy fuertes con descargas eléctricas y granizo en la zona norte de Sonora";
+  const nws = "The National Weather Service in Las Vegas has issued a Flood Warning for the Los Angeles River until 5 PM. Heavy rain is expected.";
+  assert.equal(alertLang({ lang: "es-MX", description: "Lluvia" }), "es");
+  assert.equal(alertLang({ description: smn }), "es", "no language given");
+  assert.equal(alertLang({ lang: "en", description: smn }), "es", "labelled English");
+  assert.equal(alertLang({ lang: "en", description: nws }), "");
+  assert.equal(alertLang({ headline: "Flood Warning for El Paso" }), "");
+  assert.ok(!looksSpanish(nws));
+  assert.equal(offerTranslate(undefined, { lang: "es-MX", description: smn }), "es");
+  assert.equal(offerTranslate("ru", { description: smn }), "es");
+  assert.equal(offerTranslate("off", { description: smn }), null);
+  assert.equal(offerTranslate(undefined, { lang: "fr", description: "Vent fort" }), null, "other languages still need 'every non-English'");
+  assert.equal(offerTranslate("all", { lang: "fr", description: "Vent fort" }), "fr");
 }

@@ -17,6 +17,21 @@ export function scriptLang(text: string): string {
   return lat ? "latin" : "";
 }
 
+// common Spanish words in warnings, and English ones to tell the two apart. Place names like
+// "Las Vegas" or "El Paso" give one or two Spanish hits at most, against many English ones.
+const ES = new Set("el la los las de del en y por para con se una un que al muy lluvia lluvias tormenta tormentas viento vientos granizo nieve oleaje aviso alerta fuerte fuertes intensa intensas intenso intensos zona zonas probabilidad precipitaciones temperatura temperaturas descargas electricas inundaciones calor frio torrenciales rachas".split(" "));
+const EN = new Set("the of and in for to with is are will be at from by this until warning watch advisory wind winds rain storm storms expected issued heavy flood snow".split(" "));
+
+/** Latin text that reads as Spanish (feeds often leave the language out or say "en") */
+export function looksSpanish(text: string): boolean {
+  let es = 0, en = 0;
+  for (const w of text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().split(/[^\p{L}]+/u)) {
+    if (ES.has(w)) es++;
+    else if (EN.has(w)) en++;
+  }
+  return es >= 2 && es > en * 2;
+}
+
 /** the alert's language: CAP `lang` when given, else guessed from the text ("" = English / unknown Latin) */
 export function alertLang(p: { lang?: string; description?: string; headline?: string; event?: string }): string {
   const l = (p.lang ?? "").toLowerCase().split(/[-_]/)[0];
@@ -24,15 +39,16 @@ export function alertLang(p: { lang?: string; description?: string; headline?: s
   // feeds label their documents "en" even when the text is Russian (Hydrometcenter)
   if (s === "ru") return "ru";
   if (s === "other") return l && l !== "en" ? l : "auto";
-  return l && l !== "en" ? l : "";
+  if (l && l !== "en") return l;
+  return s === "latin" && looksSpanish(`${p.event ?? ""} ${p.headline ?? ""} ${p.description ?? ""}`) ? "es" : "";
 }
 
-/** offer Translate: mode "ru" = Russian (Cyrillic) alerts only (default), "all" = any non-English, "off" */
+/** offer Translate: mode "ru" = Russian and Spanish alerts (default; 0.8.4 added Spanish), "all" = any non-English, "off" */
 export function offerTranslate(mode: string | undefined, p: Parameters<typeof alertLang>[0]): string | null {
   if (mode === "off") return null;
   const l = alertLang(p);
   if (!l) return null;
-  if ((mode ?? "ru") === "ru" && l !== "ru") return null;
+  if ((mode ?? "ru") === "ru" && l !== "ru" && l !== "es") return null;
   return l;
 }
 
