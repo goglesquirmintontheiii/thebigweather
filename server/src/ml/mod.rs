@@ -1149,9 +1149,21 @@ impl Ml {
         let (mb, mn) = self.store.count_bytes();
         vec![
             crate::caches::CacheInfo::mem("ml-detections", "Detection models: live detections & tracked cells", rb, rn, 0),
-            crate::caches::CacheInfo::mem("ml-downloads", "Detection models: gridded / label downloads", fb, fn_, 0),
+            {
+                let (limit, default) = self.fetch.cache_limits();
+                crate::caches::CacheInfo::mem("ml-downloads", "Detection models: gridded / label downloads", fb, fn_, limit).default(default)
+            },
             crate::caches::CacheInfo::mem("ml-models", "Detection models: loaded models", mb, mn, 0),
         ]
+    }
+
+    /// 0.8.4: byte budget for the downloads cache (the only one of ours that can evict).
+    pub fn set_cache_limit(&self, id: &str, limit: Option<usize>) -> bool {
+        if id != "ml-downloads" {
+            return false;
+        }
+        self.fetch.set_cache_limit(limit);
+        true
     }
 
     pub fn clear_cache(&self, id: &str) -> bool {

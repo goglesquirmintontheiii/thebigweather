@@ -3,6 +3,8 @@
 
 import type { StyleSpecification, LayerSpecification, SourceSpecification } from "maplibre-gl";
 import type { Basemap, CustomBasemap } from "../store";
+import { dsOff } from "../datasrc"; // 0.8.4
+import { basemapSource } from "../datasrcCore";
 
 export const BASEMAPS: { id: Basemap; name: string; needsKey?: string }[] = [
   { id: "dark", name: "Dark" },
@@ -182,6 +184,9 @@ function vectorLayers(t: Theme, labels: boolean): LayerSpecification[] {
 }
 
 export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey?: string; labels: boolean; provider?: "openfreemap" | "carto"; custom?: CustomBasemap[] }): StyleSpecification {
+  // 0.8.4: a basemap whose data source is off shows the built-in map instead (no tile requests)
+  const bs = basemapSource(b, opts.provider);
+  if (bs && dsOff.value.has(bs)) b = "offline" as Basemap;
   const dark = isDarkBasemap(b, opts.custom);
   const off = offlineLayers(dark);
   const style: StyleSpecification = {
@@ -194,7 +199,7 @@ export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey
     style.sources[id] = src;
     style.layers.push({ id: `${top ? "top" : "base"}-${id}`, type: "raster", source: id, paint } as LayerSpecification);
   };
-  const labels = (st: string) => opts.labels && addRaster("labels", raster(carto(st), CARTO_ATTR, 20, 512), true);
+  const labels = (st: string) => opts.labels && !dsOff.value.has("carto") && addRaster("labels", raster(carto(st), CARTO_ATTR, 20, 512), true);
   const ofm = (t: Theme) => {
     style.sources.ofm = { type: "vector", url: "https://tiles.openfreemap.org/planet", attribution: OFM_ATTR };
     style.layers.push(...vectorLayers(t, opts.labels));
@@ -207,7 +212,7 @@ export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey
       style.sources.custom = { type: "raster", tiles: customTiles(c).map((u) => u.replace("{-y}", "{y}")), tileSize: 256, minzoom: c.minzoom, maxzoom: c.maxzoom, attribution: c.name, ...(tms ? { scheme: "tms" } : {}) } as any;
       style.layers.push({ id: "base-custom", type: "raster", source: "custom" } as LayerSpecification);
       // keep place names readable on top when labels are on
-      if (opts.labels && c.labels) addRaster("labels", raster(carto(dark ? "dark_only_labels" : "voyager_only_labels"), CARTO_ATTR, 20, 512), true);
+      if (opts.labels && c.labels && !dsOff.value.has("carto")) addRaster("labels", raster(carto(dark ? "dark_only_labels" : "voyager_only_labels"), CARTO_ATTR, 20, 512), true);
     }
     return style;
   }
@@ -250,7 +255,7 @@ export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey
       break;
     case "satellite":
       addRaster("imagery", raster(["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], ESRI_ATTR, 19));
-      if (opts.labels) addRaster("ref", raster(["https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"], ESRI_ATTR, 19), true);
+      if (opts.labels && !dsOff.value.has("esri")) addRaster("ref", raster(["https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"], ESRI_ATTR, 19), true);
       break;
     case "google":
       if (opts.googleSession && opts.googleKey) {
@@ -258,7 +263,7 @@ export function buildStyle(b: Basemap, opts: { googleSession?: string; googleKey
           "google",
           raster([`https://tile.googleapis.com/v1/2dtiles/{z}/{x}/{y}?session=${opts.googleSession}&key=${opts.googleKey}`], "Map data © Google", 22),
         );
-        if (opts.labels) addRaster("ref", raster(["https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"], ESRI_ATTR, 19), true);
+        if (opts.labels && !dsOff.value.has("esri")) addRaster("ref", raster(["https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"], ESRI_ATTR, 19), true);
       } else {
         addRaster("imagery", raster(["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], ESRI_ATTR, 19));
       }

@@ -482,21 +482,68 @@ html.wf-oswin .stats.wf-osframe.wf-measure > .stats-zoom > :not(.stats-head) {
   gap: 8px;
 }
 
-/* ---------- Settings → Data sources ---------- */
-.srcwin-btn {
-  position: relative;
-  align-self: flex-start;
-  margin-top: 6px;
+/* ---------- 0.8.4: Settings → Data sources ---------- */
+.ds-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-.srcwin-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--warn);
+.ds-h {
+  margin: 8px 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.7;
 }
-.srcwin-dot.offline,
-.srcwin-dot.unauthorized {
-  background: var(--err);
+.ds-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  border-radius: 6px;
+}
+.ds-row .sname {
+  flex: 0 1 auto;
+}
+.ds-row .sdetail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+.ds-row.off .sname {
+  opacity: 0.55;
+}
+.sdot.disabled {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px currentColor;
+  opacity: 0.5;
+}
+.ds-warn {
+  position: fixed;
+  left: 50%;
+  bottom: 74px;
+  transform: translateX(-50%);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 8px 10px 8px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+.ds-warn .linklike {
+  all: unset;
+  cursor: pointer;
+  color: var(--accent, #3fb7ff);
+  text-decoration: underline;
+}
+.ds-warn .linklike:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
 }
 .cmodal.srcwin {
   width: min(600px, 94vw);

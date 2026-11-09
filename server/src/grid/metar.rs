@@ -501,6 +501,8 @@ pub struct MetarArchive {
     dir: std::path::PathBuf,
     url: parking_lot::RwLock<String>,
     disk_cap: std::sync::atomic::AtomicU64,
+    /// 0.8.4: byte budget of the in-memory snapshots (0 = none)
+    mem_limit: std::sync::atomic::AtomicUsize,
     /// snapshot time → (fetched, observations)
     mem: parking_lot::Mutex<lru::LruCache<i64, (std::time::Instant, std::sync::Arc<Vec<Obs>>)>>,
     /// IEM allows ~1 request/s per address
@@ -520,6 +522,7 @@ impl MetarArchive {
             dir,
             url: parking_lot::RwLock::new(crate::config::GridCfg::default().metar_archive_url),
             disk_cap: std::sync::atomic::AtomicU64::new(512 << 20),
+            mem_limit: Default::default(),
             mem: parking_lot::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(24).unwrap())),
             gate: tokio::sync::Mutex::new(None),
             inflight: parking_lot::Mutex::new(HashMap::new()),
@@ -552,6 +555,32 @@ impl MetarArchive {
         self.mem.lock().clear();
     }
 
+    pub fn mem_limit(&self) -> usize {
+        self.mem_limit.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 0.8.4: run the memory snapshots at a byte budget, least recently used first.
+    pub fn set_mem_limit(&self, limit: Option<usize>) {
+        self.mem_limit.store(limit.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+        self.trim_mem();
+    }
+
+    fn trim_mem(&self) {
+        let cap = self.mem_limit();
+        if cap == 0 {
+            return;
+        }
+        let mut m = self.mem.lock();
+        let size = |v: &Vec<Obs>| v.iter().map(|o| 96 + o.id.len() + o.raw.len() + o.cat.len()).sum::<usize>();
+        let mut b: usize = m.iter().map(|(_, (_, v))| size(v)).sum();
+        while b > cap {
+            match m.pop_lru() {
+                Some((_, (_, v))) => b -= size(&v),
+                None => break,
+            }
+        }
+    }
+
     fn path(&self, t: i64) -> std::path::PathBuf {
         let d = chrono::DateTime::from_timestamp_millis(t).unwrap_or_default();
         self.dir.join(format!("{}.csv.gz", d.format("%Y%m%d%H%M")))
@@ -573,6 +602,7 @@ impl MetarArchive {
         self.inflight.lock().remove(&t);
         let v = std::sync::Arc::new(res?);
         self.mem.lock().put(t, (std::time::Instant::now(), v.clone()));
+        self.trim_mem();
         Ok((t, v))
     }
 
@@ -615,6 +645,7 @@ impl MetarArchive {
     }
 
     async fn fetch(&self, url: &str) -> Result<String> {
+        crate::datasources::check(url)?; // 0.8.4
         for attempt in 0..3 {
             {
                 let mut g = self.gate.lock().await;

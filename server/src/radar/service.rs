@@ -112,11 +112,13 @@ struct SizedLru<V> {
     map: lru::LruCache<String, (V, usize)>,
     bytes: usize,
     cap: usize,
+    /// 0.8.4: the user's budget, in force instead of `cap`
+    limit: Option<usize>,
 }
 
 impl<V: Clone> SizedLru<V> {
     fn new(cap: usize) -> Self {
-        Self { map: lru::LruCache::unbounded(), bytes: 0, cap }
+        Self { map: lru::LruCache::unbounded(), bytes: 0, cap, limit: None }
     }
     fn get(&mut self, k: &str) -> Option<V> {
         self.map.get(k).map(|(v, _)| v.clone())
@@ -125,8 +127,11 @@ impl<V: Clone> SizedLru<V> {
         self.map.clear();
         self.bytes = 0;
     }
+    fn max(&self) -> usize {
+        self.limit.unwrap_or(self.cap)
+    }
     fn trim(&mut self) {
-        while self.bytes > self.cap {
+        while self.bytes > self.max() {
             match self.map.pop_lru() {
                 Some((_, (_, s))) => self.bytes -= s,
                 None => break,
@@ -138,12 +143,15 @@ impl<V: Clone> SizedLru<V> {
             self.bytes -= s;
         }
         self.bytes += size;
-        while self.bytes > self.cap {
-            match self.map.pop_lru() {
-                Some((_, (_, s))) => self.bytes -= s,
-                None => break,
-            }
-        }
+        self.trim();
+    }
+    /// 0.8.4: set the budget (oldest entries go at once).
+    fn set_limit(&mut self, limit: Option<usize>) {
+        self.limit = limit;
+        self.trim();
+    }
+    fn stats(&self) -> (usize, usize, usize, usize) {
+        (self.bytes, self.map.len(), self.max(), self.cap)
     }
 }
 
@@ -172,6 +180,7 @@ pub struct RadarService {
     vol3d: Mutex<SizedLru<Bytes>>,
     /// rotation GeoJSON per volume key
     rotation: Mutex<lru::LruCache<String, Bytes>>,
+    rotation_limit: std::sync::atomic::AtomicUsize,
     decode: crate::caches::Limiter,
     pub health: Arc<Health>,
     pub l3_catalog: Vec<serde_json::Value>,
@@ -272,6 +281,7 @@ impl RadarService {
             encoded: Mutex::new(SizedLru::new(0)),
             vol3d: Mutex::new(SizedLru::new(0)),
             rotation: Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(48).unwrap())),
+            rotation_limit: std::sync::atomic::AtomicUsize::new(0),
             decode: crate::caches::Limiter::new(threads),
             health,
             l3_catalog,
@@ -314,28 +324,50 @@ impl RadarService {
 
     pub fn cache_stats(&self) -> Vec<crate::caches::CacheInfo> {
         use crate::caches::CacheInfo;
-        let (vb, vn, vc) = {
-            let g = self.volumes.lock();
-            (g.bytes, g.map.len(), g.cap)
-        };
-        let (eb, en, ec) = {
-            let g = self.encoded.lock();
-            (g.bytes, g.map.len(), g.cap)
-        };
-        let (tb, tn, tc) = {
-            let g = self.vol3d.lock();
-            (g.bytes, g.map.len(), g.cap)
-        };
+        let (vb, vn, vc, vd) = self.volumes.lock().stats();
+        let (eb, en, ec, ed) = self.encoded.lock().stats();
+        let (tb, tn, tc, td) = self.vol3d.lock().stats();
         let (rb, rn) = {
             let g = self.rotation.lock();
             (g.iter().map(|(_, b)| b.len()).sum::<usize>(), g.len())
         };
         vec![
-            CacheInfo::mem("radar-volumes", "Radar volumes (decoded)", vb, vn, vc),
-            CacheInfo::mem("radar-sweeps", "Radar sweeps (encoded)", eb, en, ec),
-            CacheInfo::mem("radar-3d", "Radar 3D volumes / cross-sections", tb, tn, tc),
-            CacheInfo::mem("radar-rotation", "Rotation detections", rb, rn, 0),
+            CacheInfo::mem("radar-volumes", "Radar volumes (decoded)", vb, vn, vc).default(vd),
+            CacheInfo::mem("radar-sweeps", "Radar sweeps (encoded)", eb, en, ec).default(ed),
+            CacheInfo::mem("radar-3d", "Radar 3D volumes / cross-sections", tb, tn, tc).default(td),
+            CacheInfo::mem("radar-rotation", "Rotation detections", rb, rn, self.rotation_limit.load(Ordering::Relaxed)).default(0),
         ]
+    }
+
+    /// 0.8.4: run one memory cache at a byte budget (`None`: its default). True if the id is ours.
+    pub fn set_cache_limit(&self, id: &str, limit: Option<usize>) -> bool {
+        match id {
+            "radar-volumes" => self.volumes.lock().set_limit(limit),
+            "radar-sweeps" => self.encoded.lock().set_limit(limit),
+            "radar-3d" => self.vol3d.lock().set_limit(limit),
+            "radar-rotation" => {
+                self.rotation_limit.store(limit.unwrap_or(0), Ordering::Relaxed);
+                self.trim_rotation();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Rotation detections are counted, not sized, by default: only a budget trims by bytes.
+    fn trim_rotation(&self) {
+        let cap = self.rotation_limit.load(Ordering::Relaxed);
+        if cap == 0 {
+            return;
+        }
+        let mut g = self.rotation.lock();
+        let mut b: usize = g.iter().map(|(_, v)| v.len()).sum();
+        while b > cap {
+            match g.pop_lru() {
+                Some((_, v)) => b -= v.len(),
+                None => break,
+            }
+        }
     }
 
     /// Clear one memory cache by id (true if the id is a radar cache).
@@ -784,6 +816,7 @@ impl RadarService {
         let k = key.to_string();
         let b = Bytes::from(tokio::task::spawn_blocking(move || serde_json::to_vec(&super::rotation::geojson(&v, &k))).await??);
         self.rotation.lock().put(id, b.clone());
+        self.trim_rotation();
         Ok(b)
     }
 

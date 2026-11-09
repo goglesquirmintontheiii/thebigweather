@@ -16,6 +16,9 @@ pub struct SourceStatus {
     pub last_error_at: Option<i64>,
     pub detail: String,
     pub failures: u32,
+    /// 0.8.4: the toggleable data source this row belongs to
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ds: Option<&'static str>,
 }
 
 pub struct Health {
@@ -43,6 +46,7 @@ impl Health {
                 last_error_at: None,
                 detail: String::new(),
                 failures: 0,
+                ds: crate::datasources::health_source(id),
             });
             let before = e.status.clone();
             f(e);
@@ -72,6 +76,11 @@ impl Health {
     }
     pub fn err(&self, id: &str, name: &str, err: impl std::fmt::Display) {
         let msg = err.to_string();
+        // 0.8.4: switched off by the user: not a failure
+        if msg.contains(crate::datasources::DISABLED) {
+            self.disabled(id, name, "Off");
+            return;
+        }
         tracing::warn!("source {id}: {msg}");
         self.update(id, name, |e| {
             e.failures += 1;
@@ -89,7 +98,34 @@ impl Health {
             e.detail = why.into();
         });
     }
+    /// 0.8.4: a source was switched back on: its "off" rows wait for the next fetch.
+    pub fn source_on(&self, ds: &str) {
+        let rows: Vec<(String, String)> = self.map.read().values().filter(|e| e.ds == Some(ds) || (e.ds.is_none() && e.id == ds)).filter(|e| e.status == "disabled").map(|e| (e.id.clone(), e.name.clone())).collect();
+        for (id, name) in rows {
+            self.update(&id, &name, |e| {
+                e.status = "idle".into();
+                e.detail.clear();
+            });
+        }
+    }
     pub fn list(&self) -> Vec<SourceStatus> {
         self.map.read().values().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switched_off_is_not_a_failure_and_clears_when_back_on() {
+        let h = Health::new(Hub::new());
+        h.ok("grid-mrms", "MRMS", "");
+        h.err("grid-mrms", "MRMS", format!("MRMS: {}", crate::datasources::DISABLED));
+        let row = |h: &Health| h.list().into_iter().find(|r| r.id == "grid-mrms").unwrap();
+        assert_eq!(row(&h).status, "disabled");
+        assert_eq!(row(&h).failures, 0);
+        h.source_on("mrms");
+        assert_eq!(row(&h).status, "idle");
     }
 }

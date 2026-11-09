@@ -12,6 +12,7 @@ use bytes::Bytes;
 use chrono::{Datelike, TimeZone, Timelike, Utc};
 use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
+use std::sync::atomic::Ordering;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,13 +45,18 @@ struct SizedLru {
     map: lru::LruCache<String, (Arc<Grid>, usize)>,
     bytes: usize,
     cap: usize,
+    /// 0.8.4: the user's budget, in force instead of `cap`
+    limit: Option<usize>,
 }
 impl SizedLru {
+    fn max(&self) -> usize {
+        self.limit.unwrap_or(self.cap)
+    }
     fn get(&mut self, k: &str) -> Option<Arc<Grid>> {
         self.map.get(k).map(|(g, _)| g.clone())
     }
     fn trim(&mut self) {
-        while self.bytes > self.cap {
+        while self.bytes > self.max() {
             match self.map.pop_lru() {
                 Some((_, (_, s))) => self.bytes -= s,
                 None => break,
@@ -63,12 +69,7 @@ impl SizedLru {
             self.bytes -= s;
         }
         self.bytes += n;
-        while self.bytes > self.cap {
-            match self.map.pop_lru() {
-                Some((_, (_, s))) => self.bytes -= s,
-                None => break,
-            }
-        }
+        self.trim();
     }
 }
 
@@ -78,6 +79,11 @@ pub struct GridService {
     pub layers: Vec<LayerDef>,
     cache_dir: PathBuf,
     grids: Mutex<SizedLru>,
+    /// 0.8.4: default sizes and budgets of the RGB / cube / wind caches
+    lru_defaults: Mutex<[usize; 3]>,
+    lru_limits: Mutex<[Option<usize>; 3]>,
+    metar_limit: std::sync::atomic::AtomicUsize,
+    nowcast_limit: std::sync::atomic::AtomicUsize,
     listings: Mutex<HashMap<String, (Instant, Arc<Vec<s3::Object>>)>>,
     texts: Mutex<HashMap<String, (Instant, Arc<String>)>>,
     ndfd: tokio::sync::Mutex<HashMap<String, (Instant, i64, Bytes, Vec<MessageInfo>)>>,
@@ -209,7 +215,11 @@ impl GridService {
             health,
             layers: sources::all_layers(),
             cache_dir,
-            grids: Mutex::new(SizedLru { map: lru::LruCache::unbounded(), bytes: 0, cap: 0 }),
+            grids: Mutex::new(SizedLru { map: lru::LruCache::unbounded(), bytes: 0, cap: 0, limit: None }),
+            lru_defaults: Mutex::new([0; 3]),
+            lru_limits: Mutex::new([None; 3]),
+            metar_limit: Default::default(),
+            nowcast_limit: Default::default(),
             listings: Mutex::new(HashMap::new()),
             texts: Mutex::new(HashMap::new()),
             ndfd: tokio::sync::Mutex::new(HashMap::new()),
@@ -251,6 +261,12 @@ impl GridService {
             g.cap = rest * 7 / 10;
             g.trim();
         }
+        *self.lru_defaults.lock() = [rest * 3 / 10, cube, wind];
+        self.apply_lru_limits();
+    }
+
+    /// 0.8.4: put the RGB / cube / wind caches on their budget or default size, oldest first.
+    fn apply_lru_limits(&self) {
         fn trim<V>(c: &mut (lru::LruCache<String, V>, usize, usize), cap: usize, size: impl Fn(&V) -> usize) {
             c.2 = cap;
             while c.1 > c.2 && c.0.len() > 1 {
@@ -260,9 +276,81 @@ impl GridService {
                 }
             }
         }
-        trim(&mut self.rgbs.lock(), rest * 3 / 10, |v| v.1);
-        trim(&mut self.cubes.lock(), cube, |v| v.len());
-        trim(&mut self.winds.lock(), wind, |v| v.1.len());
+        let d = *self.lru_defaults.lock();
+        let l = self.lru_limits.lock().clone();
+        trim(&mut self.rgbs.lock(), l[0].unwrap_or(d[0]), |v| v.1);
+        trim(&mut self.cubes.lock(), l[1].unwrap_or(d[1]), |v| v.len());
+        trim(&mut self.winds.lock(), l[2].unwrap_or(d[2]), |v| v.1.len());
+    }
+
+    /// 0.8.4: run one memory cache at a byte budget (`None`: its default). True if the id is ours.
+    pub fn set_cache_limit(&self, id: &str, limit: Option<usize>) -> bool {
+        match id {
+            "grid-decoded" => {
+                let mut g = self.grids.lock();
+                g.limit = limit;
+                g.trim();
+            }
+            "grid-rgb" | "grid-cubes" | "grid-wind" => {
+                self.lru_limits.lock()[match id {
+                    "grid-rgb" => 0,
+                    "grid-cubes" => 1,
+                    _ => 2,
+                }] = limit;
+                self.apply_lru_limits();
+            }
+            "metar-live" => {
+                self.metar_limit.store(limit.unwrap_or(0), Ordering::Relaxed);
+                self.trim_metar();
+            }
+            "metar-archive" => self.metar_archive.set_mem_limit(limit),
+            "nowcast" => {
+                self.nowcast_limit.store(limit.unwrap_or(0), Ordering::Relaxed);
+                self.trim_nowcast();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Oldest snapshots go first; the newest one (the current picture) always stays.
+    fn trim_metar(&self) {
+        let cap = self.metar_limit.load(Ordering::Relaxed);
+        if cap == 0 {
+            return;
+        }
+        let mut q = self.metar.write();
+        let size = |o: &Vec<Obs>| o.iter().map(|o| 96 + o.raw.len() + o.id.len()).sum::<usize>();
+        let mut b: usize = q.iter().map(|(_, o)| size(o)).sum();
+        while b > cap && q.len() > 1 {
+            match q.pop_front() {
+                Some((_, o)) => b -= size(&o),
+                None => break,
+            }
+        }
+    }
+
+    /// Oldest runs go first, across every layer's history.
+    fn trim_nowcast(&self) {
+        let cap = self.nowcast_limit.load(Ordering::Relaxed);
+        if cap == 0 {
+            return;
+        }
+        let mut m = self.nowcast.lock();
+        let size = |r: &NowcastRun| r.motion.u.len() * 8 + 256;
+        let mut b: usize = m.values().flatten().map(size).sum();
+        while b > cap {
+            let oldest = m.iter().filter_map(|(k, q)| q.front().map(|r| (r.base_ms, k.clone()))).min();
+            let Some((_, k)) = oldest else { break };
+            let Some(q) = m.get_mut(&k) else { break };
+            match q.pop_front() {
+                Some(r) => b -= size(&r),
+                None => break,
+            }
+            if q.is_empty() {
+                m.remove(&k);
+            }
+        }
     }
 
     /// Concurrent decodes (CPU share); applies as running work finishes.
@@ -275,27 +363,28 @@ impl GridService {
         let mut v = vec![];
         {
             let g = self.grids.lock();
-            v.push(CacheInfo::mem("grid-decoded", "Gridded data (decoded)", g.bytes, g.map.len(), g.cap));
+            v.push(CacheInfo::mem("grid-decoded", "Gridded data (decoded)", g.bytes, g.map.len(), g.max()).default(g.cap));
         }
+        let d = *self.lru_defaults.lock();
         {
             let g = self.rgbs.lock();
-            v.push(CacheInfo::mem("grid-rgb", "Satellite RGB composites", g.1, g.0.len(), g.2));
+            v.push(CacheInfo::mem("grid-rgb", "Satellite RGB composites", g.1, g.0.len(), g.2).default(d[0]));
         }
         {
             let g = self.cubes.lock();
-            v.push(CacheInfo::mem("grid-cubes", "MRMS 3D cubes", g.1, g.0.len(), g.2));
+            v.push(CacheInfo::mem("grid-cubes", "MRMS 3D cubes", g.1, g.0.len(), g.2).default(d[1]));
         }
         {
             let g = self.winds.lock();
-            v.push(CacheInfo::mem("grid-wind", "Wind particle fields", g.1, g.0.len(), g.2));
+            v.push(CacheInfo::mem("grid-wind", "Wind particle fields", g.1, g.0.len(), g.2).default(d[2]));
         }
         {
             let q = self.metar.read();
             let b = q.iter().map(|(_, o)| o.iter().map(|o| 96 + o.raw.len() + o.id.len()).sum::<usize>()).sum();
-            v.push(CacheInfo::mem("metar-live", "METAR snapshots (live)", b, q.len(), 0));
+            v.push(CacheInfo::mem("metar-live", "METAR snapshots (live)", b, q.len(), self.metar_limit.load(Ordering::Relaxed)).default(0));
         }
         let (b, n, cap) = self.metar_archive.mem_stats();
-        v.push(CacheInfo::mem("metar-archive", &format!("METAR archive hours (max {cap})"), b, n, 0));
+        v.push(CacheInfo::mem("metar-archive", &format!("METAR archive hours (max {cap})"), b, n, self.metar_archive.mem_limit()).default(0));
         {
             let p = self.mlpred.read();
             let b = p.iter().map(|l| l.frames.iter().map(|g| g.bytes()).sum::<usize>()).sum();
@@ -305,7 +394,7 @@ impl GridService {
             let r = self.nowcast.lock();
             let runs: Vec<&NowcastRun> = r.values().flatten().collect();
             let b = runs.iter().map(|x| x.motion.u.len() * 8 + 256).sum();
-            v.push(CacheInfo::mem("nowcast", "Radar nowcast motion fields", b, runs.len(), 0));
+            v.push(CacheInfo::mem("nowcast", "Radar nowcast motion fields", b, runs.len(), self.nowcast_limit.load(Ordering::Relaxed)).default(0));
         }
         v
     }
@@ -472,6 +561,7 @@ impl GridService {
 
     /// GET (optionally a byte range) with an on-disk cache for immutable objects.
     pub(super) async fn fetch(&self, url: &str, range: Option<(u64, Option<u64>)>, cache: bool) -> Result<Bytes> {
+        crate::datasources::check(url)?; // 0.8.4
         let ck = match range {
             Some((a, b)) => format!("{url}#{a}-{}", b.map(|x| x.to_string()).unwrap_or_default()),
             None => url.to_string(),
@@ -1535,6 +1625,7 @@ impl GridService {
                 q.pop_front();
             }
         }
+        self.trim_nowcast();
         let (mu, mv) = run.motion.mean();
         self.health.ok("grid-nowcast", "Radar nowcast", format!("{} blocks with motion; mean {:.2},{:.2} cells/min", run.motion.measured, mu, mv));
         Ok(run)
@@ -1822,6 +1913,7 @@ impl GridService {
                             q.pop_front();
                         }
                         drop(q);
+                        me.trim_metar();
                         me.health.ok("metar", "METAR observations", format!("{n} stations"));
                     }
                     Ok(_) => me.health.err("metar", "METAR observations", "empty file"),
@@ -1841,6 +1933,7 @@ impl GridService {
         let obs = metar::parse_csv(bytes)?;
         let t = Utc::now().timestamp_millis() / 60_000 * 60_000;
         self.metar.write().push_back((t, Arc::new(obs)));
+        self.trim_metar();
         Ok(())
     }
 }

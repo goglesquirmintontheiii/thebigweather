@@ -46,6 +46,7 @@ pub struct AppState {
     pub collab: Arc<crate::collab::Collab>,
     pub rules: Arc<crate::rules::Rules>,
     pub ml: Arc<crate::ml::Ml>,
+    pub budgets: Arc<crate::caches::Budgets>,
     pub radio: Arc<crate::radio::Radio>,
     pub notify: Arc<crate::notify::Notify>,
     pub srules: Arc<crate::srules::ServerRules>,
@@ -192,6 +193,7 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/alerts/want", post(alert_want)) // 0.8.2
         .route("/alerts/translate", post(alert_translate)) // 0.8.3
         .route("/sources", get(sources))
+        .route("/datasources", get(datasources_get).put(datasources_put)) // 0.8.4
         .route("/keys", get(keys_get).put(keys_put))
         .route("/stats", get(stats))
         .route("/grid/catalog", get(grid_catalog))
@@ -713,6 +715,7 @@ async fn ws_conn(st: Arc<AppState>, mut sock: WebSocket) {
         "profile": st.profile,
         "stats": *st.stats.read(),
         "sources": st.health.list(),
+        "ds_off": crate::datasources::off_list(), // 0.8.4
     });
     if sock.send(Message::Text(hello.to_string().into())).await.is_err() {
         return;
@@ -937,7 +940,46 @@ async fn traffic_incidents(State(st): St, Query(q): Query<HashMap<String, String
 }
 
 async fn grid_catalog(State(st): St) -> Json<Value> {
-    Json(st.grids.catalog())
+    let mut c = st.grids.catalog();
+    // 0.8.4: which data source each layer needs
+    if let Some(a) = c["layers"].as_array_mut() {
+        for l in a {
+            let ds = crate::datasources::grid_source(l["source"].as_str().unwrap_or(""), l["model"].as_str(), l["id"].as_str().unwrap_or(""));
+            if let Some(ds) = ds {
+                l["ds"] = json!(ds);
+            }
+        }
+    }
+    Json(c)
+}
+
+/// 0.8.4: the data source list with on/off state, plus which source each overlay feed needs.
+async fn datasources_get() -> Json<Value> {
+    use crate::datasources as ds;
+    let feeds: HashMap<&str, &str> = ds::FEEDS.iter().copied().collect();
+    let list: Vec<Value> = ds::SOURCES.iter().map(|s| json!({"id": s.id, "name": s.name, "group": s.group, "enabled": ds::enabled(s.id)})).collect();
+    Json(json!({"sources": list, "feeds": feeds}))
+}
+
+#[derive(Deserialize)]
+struct DataSourcePut {
+    id: String,
+    enabled: bool,
+}
+
+async fn datasources_put(State(st): St, Json(q): Json<DataSourcePut>) -> Result<Json<Value>, ApiError> {
+    match crate::datasources::set_enabled(&q.id, q.enabled) {
+        Ok(true) => {}
+        Ok(false) => return Err(bad(&format!("unknown data source {}", q.id))),
+        Err(e) => return Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+    tracing::info!("data source {} {}", q.id, if q.enabled { "on" } else { "off" });
+    if q.enabled {
+        st.health.source_on(&q.id);
+    }
+    let off = crate::datasources::off_list();
+    st.hub.send(json!({"type": "datasources", "off": off}));
+    Ok(Json(json!({"ok": true, "off": off})))
 }
 
 #[derive(Deserialize)]

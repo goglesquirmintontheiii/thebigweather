@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { signal } from "@preact/signals"; // 0.8.3
-import { settings, update, uid, toast, connection, openPanel } from "../../store"; // 0.8.3: openPanel
-import { sourcesOpen } from "../SourcesWindow"; // 0.8.2
+import { settings, update, uid, toast, openPanel } from "../../store"; // 0.8.3: openPanel
+import { SourcesPanel } from "./SourcesPanel"; // 0.8.4: a category here (was a window)
 import { api, lastHello } from "../../api";
 import { Toggle } from "./RadarPanel";
-import { Trash2, Check, Plus, Server, Activity } from "lucide-preact";
+import { Trash2, Check, Plus, Server, Activity, Settings as Gear } from "lucide-preact";
 import { Palette, Map as MapIcon, Bell, Gauge, AppWindow, Search, X, ChevronRight, KeyboardMusic } from "lucide-preact"; // 0.8.3
 import { ToolsSection } from "../ToolsSection"; // 0.8.3: one-click yt-dlp / Deno
 import { filterCategory, queryWords, HIDE } from "../setfilter"; // 0.8.3: settings search
@@ -13,7 +13,8 @@ import { playAlertSound } from "../../sound";
 import { ACCENTS } from "../../theme"; // workflow
 import { DesktopSection } from "../../share/DesktopSettings"; // Phase 6
 import { UpdatesSection } from "../../update/UpdatesSection"; // p8: updates
-import { ServerSettingsSection } from "../ServerSettings"; // shake/stats/server 0.6
+import { serverSettingsOpen } from "../ServerSettings"; // shake/stats/server 0.6
+import { sameHost, refreshInfo } from "../../clientstats"; // 0.8.4: the gear on the server card
 import { LookSection, KioskSection, OfflineSection, PluginsSection } from "../Wf6Settings"; // workflow 0.6
 import { AccessibilitySection } from "../../a11y/A11yUI"; // panes/palette/a11y 0.8
 import { PaneLayoutsSection } from "../PaneLayoutEditor"; // panes/palette/a11y 0.8
@@ -140,11 +141,8 @@ const CATS: Cat[] = [
     sub: "Servers, API keys, recording tools",
     body: () => (
       <>
-        <Sec kw="server connect url token address remote add data sources feeds status health">
+        <Sec kw="server connect url token address remote add local bundled settings gear memory cpu budgets caches logs restart credentials">
           <ServersSection />
-        </Sec>
-        <Sec kw="local bundled memory cpu budgets caches logs restart credentials">
-          <ServerSettingsSection /> {/* shake/stats/server 0.6 */}
         </Sec>
         <Sec kw="keys credentials token google synoptic airnow tomtom eumetsat">
           <section>
@@ -156,6 +154,21 @@ const CATS: Cat[] = [
           <ToolsSection /> {/* 0.8.3 */}
         </Sec>
       </>
+    ),
+  },
+  {
+    // 0.8.4: was a window opened from a button under Servers
+    id: "sources",
+    name: "Data sources",
+    icon: Activity,
+    sub: "Feeds, status, on/off",
+    body: () => (
+      <Sec kw="data sources feeds status health enable disable off toggle provider stats panel">
+        <section>
+          <label class="lbl">Data sources</label>
+          <SourcesPanel />
+        </section>
+      </Sec>
     ),
   },
   {
@@ -415,6 +428,10 @@ function ServersSection() {
   const s = settings.value;
   const [adding, setAdding] = useState(false);
   const hello = lastHello.value;
+  // 0.8.4: decides whether the active card gets its Server settings gear
+  useEffect(() => {
+    refreshInfo();
+  }, [s.activeServer]);
   return (
     <section>
       <label class="lbl">Servers</label>
@@ -427,6 +444,11 @@ function ServersSection() {
               <small>{sv.url}</small>
             </span>
           </button>
+          {sv.id === s.activeServer && sameHost.value && (
+            <button class="icon-btn" title="Server settings" aria-label="Server settings" onClick={() => (serverSettingsOpen.value = true)}>
+              <Gear size={14} />
+            </button>
+          )}
           <button
             class="icon-btn danger"
             title="Remove"
@@ -453,11 +475,6 @@ function ServersSection() {
           Server: {hello.profile.name} profile · {hello.profile.cores} cores · {hello.profile.threads} decode threads · v{hello.version}
         </div>
       )}
-      {/* 0.8.2: Data sources (was a rail tab) */}
-      <button class="btn sm ghost srcwin-btn" title="Feed status, health and timing" onClick={() => (sourcesOpen.value = true)}>
-        <Activity size={13} /> Data sources
-        {connection.value !== "online" && <i class={`srcwin-dot ${connection.value}`} />}
-      </button>
     </section>
   );
 }

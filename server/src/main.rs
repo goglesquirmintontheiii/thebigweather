@@ -3,6 +3,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod admin;
+mod datasources; // 0.8.4
 mod alerts;
 mod alerts_cap; // 0.8.2
 mod alerts_intl; // 0.8.2
@@ -263,11 +264,15 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
     );
     rayon::ThreadPoolBuilder::new().num_threads(profile.threads).build_global().ok();
 
+    datasources::init(&data_dir, &cfg.radar); // 0.8.4
     let http = reqwest::Client::builder()
         .user_agent(cfg.alerts.user_agent.clone())
         .timeout(std::time::Duration::from_secs(60))
         .connect_timeout(std::time::Duration::from_secs(10))
         .pool_max_idle_per_host(16)
+        // 0.8.4: a switched-off source loses its idle connections soon, and DNS refuses new ones
+        .pool_idle_timeout(std::time::Duration::from_secs(20))
+        .dns_resolver(Arc::new(datasources::GuardResolver))
         .build()?;
 
     let hub = hub::Hub::new();
@@ -392,9 +397,11 @@ async fn run(cli: &Cli, cfg: config::Config) -> anyhow::Result<bool> {
             o
         },
         ml: ml.clone(),
+        budgets: caches::Budgets::load(&data_dir),
     });
     ml_state.set(Arc::downgrade(&state)).ok();
     ml.spawn();
+    admin::spawn_budget_janitor(state.clone());
 
     recorder::spawn(state.clone());
     srules::spawn(state.clone());

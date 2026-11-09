@@ -10,7 +10,7 @@ import { effect } from "@preact/signals"; // 0.8.2
 import { WinButtons, IN_OS_WIN, isMin, isMax, isPopped, minimize, unminimize, toggleMax, canPop, popWindow, onBarDbl, winAware, animOn, ANIM_MS } from "./winframe"; // 0.8.2
 import { railWinId } from "./wincore"; // 0.8.2
 import { PluginRailButtons } from "../plugins/PluginRail"; // 0.8.3 plugins
-import { sourcesOpen } from "./SourcesWindow"; // 0.8.2
+import { jumpToSetting } from "../a11y/jump"; // 0.8.4
 import { viewer } from "../share/share"; // share & collab
 import { alerts } from "../alerts";
 import { Layers, Radar, TriangleAlert, MapPin, Settings, Radio, FolderOpen, CloudSun, Search, X, Map as MapIcon, CircleDot } from "lucide-preact";
@@ -260,12 +260,9 @@ export const PANEL_TITLES = TITLES; // 0.8.2: pop-out window titles
 const OWNER_ONLY = new Set(["settings", "record", "files", "workspaces", "rules", "widgets", "placefiles", "plugins" /* 0.8.2 */, "midi" /* 0.8.3 */]);
 
 /* ---------- 0.8.2: side panel window (title bar, 0.2 s open/close, minimize, maximize, pop-out) ---------- */
-// old links / the command palette may still ask for the Data sources tab: open its window instead
+// old links may still ask for the Data sources tab: it is a Settings category now (0.8.4)
 effect(() => {
-  if (openPanel.value === "sources") {
-    openPanel.value = null;
-    sourcesOpen.value = true;
-  }
+  if (openPanel.value === "sources") jumpToSetting("data-sources");
 });
 // a minimized panel opened again (rail, palette, hotkey): drop its chip
 effect(() => {

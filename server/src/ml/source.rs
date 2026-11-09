@@ -93,6 +93,12 @@ pub trait Fetch: Send + Sync {
         (0, 0)
     }
     fn clear_cache(&self) {}
+    /// 0.8.4: (limit in force, default size) of the download cache
+    fn cache_limits(&self) -> (usize, usize) {
+        (0, 0)
+    }
+    /// 0.8.4: run the download cache at a byte budget, oldest first
+    fn set_cache_limit(&self, _limit: Option<usize>) {}
     /// 0.8.1: the current job will read these radar volume keys (computed when it starts);
     /// returns how many of them another running job planned too.
     fn plan(&self, _keys: &[String]) -> usize {
@@ -111,11 +117,22 @@ struct BytesLru {
     map: lru::LruCache<String, Bytes>,
     bytes: usize,
     cap: usize,
+    /// 0.8.4: the user's budget, in force instead of `cap`
+    limit: Option<usize>,
 }
 
 impl BytesLru {
     fn new(cap: usize) -> Self {
-        Self { map: lru::LruCache::unbounded(), bytes: 0, cap }
+        Self { map: lru::LruCache::unbounded(), bytes: 0, cap, limit: None }
+    }
+    fn trim(&mut self) {
+        let max = self.limit.unwrap_or(self.cap);
+        while self.bytes > max {
+            match self.map.pop_lru() {
+                Some((_, b)) => self.bytes -= b.len(),
+                None => break,
+            }
+        }
     }
     fn get(&mut self, k: &str) -> Option<Bytes> {
         self.map.get(k).cloned()
@@ -125,12 +142,7 @@ impl BytesLru {
         if let Some(old) = self.map.put(k, v) {
             self.bytes -= old.len();
         }
-        while self.bytes > self.cap {
-            match self.map.pop_lru() {
-                Some((_, b)) => self.bytes -= b.len(),
-                None => break,
-            }
-        }
+        self.trim();
     }
 }
 
@@ -1613,6 +1625,17 @@ impl Fetch for NetSource {
     fn cache_bytes(&self) -> (usize, usize) {
         let g = self.raw.lock();
         (g.bytes, g.map.len())
+    }
+
+    fn cache_limits(&self) -> (usize, usize) {
+        let g = self.raw.lock();
+        (g.limit.unwrap_or(g.cap), g.cap)
+    }
+
+    fn set_cache_limit(&self, limit: Option<usize>) {
+        let mut g = self.raw.lock();
+        g.limit = limit;
+        g.trim();
     }
 
     fn clear_cache(&self) {

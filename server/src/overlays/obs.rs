@@ -55,10 +55,37 @@ impl Overlays {
     pub fn cache_stats(&self) -> crate::caches::CacheInfo {
         let c = self.cache.lock();
         let b: usize = c.iter().map(|(k, (_, v))| k.len() + v.len()).sum();
-        crate::caches::CacheInfo::mem("overlays", "Overlay responses", b, c.len(), 0)
+        crate::caches::CacheInfo::mem("overlays", "Overlay responses", b, c.len(), self.cache_limit.load(std::sync::atomic::Ordering::Relaxed)).default(0)
     }
     pub fn clear_cache(&self) {
         self.cache.lock().clear();
+    }
+    /// 0.8.4: run the response cache at a byte budget, oldest responses first.
+    pub fn set_cache_limit(&self, limit: Option<usize>) {
+        self.cache_limit.store(limit.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+        self.trim_cache();
+    }
+    pub(super) fn trim_cache(&self) {
+        let cap = self.cache_limit.load(std::sync::atomic::Ordering::Relaxed);
+        if cap == 0 {
+            return;
+        }
+        let mut c = self.cache.lock();
+        let size = |k: &str, b: &bytes::Bytes| k.len() + b.len();
+        let mut total: usize = c.iter().map(|(k, (_, v))| size(k, v)).sum();
+        if total <= cap {
+            return;
+        }
+        let mut order: Vec<(std::time::Instant, String)> = c.iter().map(|(k, (t, _))| (*t, k.clone())).collect();
+        order.sort();
+        for (_, k) in order {
+            if total <= cap {
+                break;
+            }
+            if let Some((_, b)) = c.remove(&k) {
+                total -= size(&k, &b);
+            }
+        }
     }
     /// Phase 6 caches: placefiles, SPC tornado table, CWOP stations.
     pub fn extra_cache_stats(&self) -> Vec<crate::caches::CacheInfo> {

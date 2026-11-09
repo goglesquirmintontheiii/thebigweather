@@ -201,6 +201,7 @@ impl Alerts {
     }
 
     async fn poll(&self) -> Result<()> {
+        crate::datasources::check(&self.url)?; // 0.8.4
         let r = self.http.get(&self.url).header("Accept", "application/geo+json").send().await?;
         if !r.status().is_success() {
             bail!("HTTP {}", r.status());

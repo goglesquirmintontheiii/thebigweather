@@ -33,10 +33,10 @@ import { histStormsOpen } from "../histsearch";
 import { mlOpen } from "../ml/client";
 import { dashOpen } from "./Dashboard"; // 0.8.2 integration
 import { timelineOpen } from "./AlertTimeline"; // 0.8.2 integration: no rail button any more (Alerts → Timelines)
-import { sourcesOpen } from "./SourcesWindow"; // 0.8.2 integration: a window now (Settings → Data sources)
 import { winAware } from "./winframe"; // 0.8.2 integration: minimized → restore, popped out → focus
 import { BUILTIN_LAYOUTS, openPaneWindow, defaultCfg, layoutName } from "./Panes";
 import { jumpToSetting } from "../a11y/jump";
+import { serverSettingsOpen } from "./ServerSettings"; // 0.8.4
 import { configModal } from "./OverlayList"; // integration 0.8.3
 import { A11Y_DEFAULTS, a11y } from "../a11y/a11y";
 import { Search, CornerDownLeft, Command, Layers, CloudSun, PanelLeft, Settings as Cog, MapPin, Radar, Navigation, History, X, Puzzle } from "lucide-preact";
@@ -118,7 +118,6 @@ function settingDefs(): SetDef[] {
   const s = settings.value;
   return [
     { label: "Servers", section: "Servers", kw: "connect url token" },
-    { label: "Server on this computer", section: "Server", kw: "local bundled" },
     { label: "Desktop", section: "Desktop", kw: "tray autostart startup" },
     { label: "Appearance", section: "Appearance", kw: "theme light dark look" },
     { label: "Accent", section: "Appearance", kw: "colour color" },
@@ -298,8 +297,9 @@ export function buildItems(): PItem[] {
     ["map", "Basemap", panel("map"), "map style tiles"],
     ["alerts", "Alerts", panel("alerts"), "warnings watches"],
     ["points", "My points", panel("points"), "places saved"],
-    ["sources", "Data sources", win("c:srcwin", sourcesOpen), "status feeds"], // 0.8.2 integration: a window now
+    ["sources", "Data sources", () => jumpToSetting("data-sources"), "status feeds enable disable"], // 0.8.4: a Settings category
     ["settings", "Settings", panel("settings"), "preferences options"],
+    ["serversettings", "Server settings", win("c:ss", serverSettingsOpen), "local bundled memory cpu caches logs budgets"], // 0.8.4: was a Settings row (now a gear on the server card)
     ["search", "Search", panel("search"), "nearby find"],
     ["record", "Recordings", panel("record")],
     ["files", "Files & backup", panel("files"), "import export"],

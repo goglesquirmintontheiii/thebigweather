@@ -614,6 +614,9 @@ impl RainViewer {
         tokio::spawn(async move {
             let ids = me.index.lock().await.as_ref().and_then(|i| i.ids.clone()).unwrap_or_default();
             for id in ids.iter() {
+                if !crate::datasources::enabled("rainviewer") {
+                    break; // 0.8.4
+                }
                 let fresh = me.found.lock().get(id).map(|(t, _)| t.elapsed() < PROBE_TTL).unwrap_or(false);
                 if fresh || me.seed.iter().any(|r| r.id.eq_ignore_ascii_case(id)) {
                     continue;

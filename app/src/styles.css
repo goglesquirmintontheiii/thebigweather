@@ -6371,6 +6371,38 @@ body.loopx-hide .loopx {
   text-align: right;
   white-space: nowrap;
 }
+/* 0.8.4: budgets */
+.ss-shared {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 6px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.ss-budget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 180px;
+  margin-top: 4px;
+}
+.ss-budget input[type="range"] {
+  flex: 1;
+  min-width: 60px;
+}
+.ss-bytes {
+  width: 84px;
+  flex: none;
+  text-align: right;
+}
+.ss-cacheact {
+  white-space: nowrap;
+  text-align: right;
+}
 .ss-logs .toggle {
   gap: 8px;
 }

@@ -17,11 +17,13 @@ const CACHE_BYTES: usize = 48 * 1024 * 1024;
 /// Fetched placefiles / icon sheets: url → (fresh until, body, content type).
 pub struct PlaceCache {
     inner: Mutex<(lru::LruCache<String, (Instant, Bytes, String)>, usize)>,
+    /// 0.8.4: byte budget (0 = the default CACHE_BYTES)
+    limit: std::sync::atomic::AtomicUsize,
 }
 
 impl Default for PlaceCache {
     fn default() -> Self {
-        Self { inner: Mutex::new((lru::LruCache::unbounded(), 0)) }
+        Self { inner: Mutex::new((lru::LruCache::unbounded(), 0)), limit: Default::default() }
     }
 }
 
@@ -40,16 +42,33 @@ impl PlaceCache {
             g.1 -= old.len() + old_k.len();
         }
         g.1 += n;
-        while g.1 > CACHE_BYTES && g.0.len() > 1 {
+        drop(g);
+        self.trim();
+    }
+    fn max(&self) -> usize {
+        match self.limit.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => CACHE_BYTES,
+            n => n,
+        }
+    }
+    fn trim(&self) {
+        let max = self.max();
+        let mut g = self.inner.lock();
+        while g.1 > max && g.0.len() > 1 {
             match g.0.pop_lru() {
                 Some((k, (_, b, _))) => g.1 -= b.len() + k.len(),
                 None => break,
             }
         }
     }
+    /// 0.8.4: run at a byte budget, least recently used first.
+    pub fn set_limit(&self, limit: Option<usize>) {
+        self.limit.store(limit.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+        self.trim();
+    }
     pub fn stats(&self) -> crate::caches::CacheInfo {
         let g = self.inner.lock();
-        crate::caches::CacheInfo::mem("placefiles", "Placefiles & icon sheets", g.1, g.0.len(), CACHE_BYTES)
+        crate::caches::CacheInfo::mem("placefiles", "Placefiles & icon sheets", g.1, g.0.len(), self.max()).default(CACHE_BYTES)
     }
     pub fn clear(&self) {
         let mut g = self.inner.lock();
