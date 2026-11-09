@@ -1,440 +1,534 @@
-# id	name	state	cc	country	lat	lon	range_km	display	w	s	e	n
-# data.rainviewer.com/images: directories that publish images (generated from a full copy of the tree, 2026-11); names + positions from github.com/rainviewer/weather-radar-database (MIT) and each directory's 0_products.json
-AU022	Melbourne	VIC	AU	Australia	-37.852	144.752	256	map				
-AU032	Wollongong (Appin)	NSW	AU	Australia	-34.2625	150.8752	256	map				
-AU042	Newcastle	NSW	AU	Australia	-32.73	152.0254	256	map				
-AU062	Geraldton	WA	AU	Australia	-28.8046	114.6973	256	map				
-AU072	Wyndham	WA	AU	Australia	-15.4517	128.1208	256	map				
-AU082	Gympie (Mt Kanigan)	QLD	AU	Australia	-25.9575	152.577	256	map				
-AU142	Mt Gambier	SA	AU	Australia	-37.75	140.78	256	map				
-AU152	Dampier	WA	AU	Australia	-20.6538	116.6832	256	map				
-AU162	Port Hedland	WA	AU	Australia	-20.372	118.6316	256	map				
-AU172	Broome	WA	AU	Australia	-17.9484	122.2353	256	map				
-AU192	Cairns	QLD	AU	Australia	-16.817	145.683	256	map				
-AU222	Mackay	QLD	AU	Australia	-21.1173	149.2175	256	map				
-AU232	Gladstone	QLD	AU	Australia	-23.855	151.2625	256	map				
-AU242	Bowen	QLD	AU	Australia	-19.8858	148.0756	256	map				
-AU252	Alice Springs	NT	AU	Australia	-23.7952	133.889	256	map				
-AU272	Woomera	SA	AU	Australia	-31.156	136.8045	256	map				
-AU282	Grafton	NSW	AU	Australia	-29.622	152.951	256	map				
-AU292	Learmonth	WA	AU	Australia	-22.1033	113.9997	256	map				
-AU312	Albany	WA	AU	Australia	-34.95	117.8	256	map				
-AU322	Esperance	WA	AU	Australia	-33.8302	121.8918	256	map				
-AU332	Ceduna	SA	AU	Australia	-32.13	133.6963	256	map				
-AU362	Mornington Island (Gulf of Carpentaria)	QLD	AU	Australia	-16.666	139.167	256	map				
-AU392	Halls Creek	WA	AU	Australia	-18.229	127.6628	256	map				
-AU402	Canberra (Captains Flat)	NSW	AU	Australia	-35.663	149.511	256	map				
-AU412	Willis Island	QLD	AU	Australia	-16.29	149.97	256	map				
-AU422	Katherine (Tindal)	NT	AU	Australia	-14.511	132.447	256	map				
-AU442	Giles	WA	AU	Australia	-25.0334	128.3017	256	map				
-AU462	Adelaide (Sellicks Hill)	SA	AU	Australia	-35.331	138.501	256	map				
-AU482	Kalgoorlie	WA	AU	Australia	-30.785	121.452	256	map				
-AU492	Yarrawonga	VIC	AU	Australia	-36.03	146.023	256	map				
-AU502	Brisbane (Marburg)	QLD	AU	Australia	-27.606	152.54	256	map				
-AU522	NW Tasmania (West Takone)	TAS	AU	Australia	-41.179	145.58	256	map				
-AU532	Moree	NSW	AU	Australia	-29.5	149.85	256	map				
-AU552	Wagga Wagga	NSW	AU	Australia	-35.167	147.467	256	map				
-AU562	Longreach	QLD	AU	Australia	-23.4281	144.2882	256	map				
-AU622	Norfolk Island	NSW	AU	Australia	-29.0383	167.9413	256	map				
-AU632	Darwin (Berrimah)	NT	AU	Australia	-12.4561	130.9265	256	map				
-AU642	Adelaide (Buckland Park)	SA	AU	Australia	-34.617	138.469	256	map				
-AU662	Brisbane (Mt Stapylton)	QLD	AU	Australia	-27.718	153.24	256	map				
-AU672	Warrego	QLD	AU	Australia	-26.439	147.349	256	map				
-AU682	Bairnsdale	VIC	AU	Australia	-37.888	147.575	256	map				
-AU692	Namoi (Blackjack Mountain)	NSW	AU	Australia	-31.024	150.1915	256	map				
-AU702	Perth (Serpentine)	WA	AU	Australia	-32.3917	115.8669	256	map				
-AU712	Sydney (Terrey Hills)	NSW	AU	Australia	-33.701	151.2095	256	map				
-AU722	Emerald	QLD	AU	Australia	-23.5498	148.2392	256	map				
-AU752	Mount Isa	QLD	AU	Australia	-20.7112	139.5553	256	map				
-AU762	Hobart (Mt Koonya)	TAS	AU	Australia	-43.112	147.806	256	map				
-AU772	Warruwi	NT	AU	Australia	-11.652	133.3716	256	map				
-BBMS			BB	Barbados	13.163	-59.5478	250	map	-63.2298	9.5820	-55.8658	16.7440
-BDBMD2			BD	Bangladesh	23.9892	90.4084	250	map	85.9843	19.9295	94.8325	28.0489
-BH02			BH	Bahrain	25.6654	52.5806	250	panel				
-BMWD			BM	Bermuda	32.3341	-64.6537	250	panel				
-BRAA			BR	Brazil	-28.9321	-49.3623	250	map	-50.6065	-30.0178	-48.1181	-27.8463
-BRBV			BR	Brazil	2.8567	-60.7183	250	panel				
-BRCN			BR	Brazil	-31.3674	-52.6965	250	map	-57.0713	-34.9881	-48.3216	-27.7468
-BRCO2			BR	Brazil	-23.5219	-46.6181	250	panel				
-BRCP			BR	Brazil	-27.0366	-52.6023	250	map	-55.0710	-29.2106	-50.1335	-24.8626
-BRGA			BR	Brazil	-15.9572	-48.0113	250	map	-51.8167	-19.5605	-44.2059	-12.3539
-BRLN			BR	Brazil	-27.2198	-49.4617	250	map	-51.9327	-29.3957	-46.9908	-25.0438
-BRMI			BR	Brazil	-28.11	-49.4667	250	map	-53.6805	-31.7580	-45.2529	-24.4620
-BRMN			BR	Brazil	-3.1338	-59.9968	250	map	-62.1475	-6.7181	-57.8461	0.4506
-BRMO			BR	Brazil	-9.5322	-35.7321	250	map	-39.3850	-13.1270	-32.0792	-5.9375
-BRMQ			BR	Brazil	0.0635	-51.1149	250	panel				
-BRNI			BR	Brazil	-22.929	-43.085	250	map	-44.0614	-23.8283	-42.1085	-22.0297
-BRPB			BR	Brazil	-22.3413	-50.8185	250	panel				
-BRPC			BR	Brazil	-22.4382	-43.2922	250	map	-47.2829	-26.0484	-39.3016	-18.8280
-BRPV			BR	Brazil	-8.68	-63.9028	250	map	-67.4997	-12.2553	-60.3058	-5.1047
-BRSC3			BR	Brazil	-24.7723	-51.492	250	panel				
-BRSG			BR	Brazil	-29.1914	-55.0144	250	map	-59.1897	-32.8093	-50.8390	-25.5734
-BRSL			BR	Brazil	-2.5917	-44.25	250	panel				
-BRSN			BR	Brazil	-2.4069	-54.8168	250	panel				
-BRSR			BR	Brazil	-23.5792	-47.0943	250	map	-51.1249	-27.1906	-43.0637	-19.9678
-BRTF			BR	Brazil	-3.3525	-64.7111	250	panel				
-BRTT			BR	Brazil	-3.5842	-69.944	250	map	-73.5269	-7.8153	-66.3611	0.6469
-CN9002B			CN	China	31.0391	120.9791	250	panel				
-CN9010B			CN	China	39.7879	116.4698	250	panel				
-CN9020B			CN	China	45.5403	119.639	250	panel				
-CN9021B			CN	China	49.5717	117.3065	250	panel				
-CN9060B			CN	China	31.5941	110.3381	250	panel				
-CN9070B			CN	China	18.2061	109.5831	250	panel				
-CN9080B			CN	China	44.3713	84.0973	250	panel				
-CN9081B			CN	China	44.1313	87.5331	250	panel				
-CN9082B			CN	China	39.8635	79.0828	250	panel				
-CN9083B			CN	China	44.8112	82.3442	250	panel				
-CN9084B			CN	China	48.8538	125.2961	250	panel				
-CN9085B			CN	China	47.2337	132.6241	250	panel				
-CN9090B			CN	China	30.7842	108.6721	250	panel				
-CN9091B			CN	China	29.5813	108.7234	250	panel				
-CN9092B			CN	China	29.2241	105.8276	250	panel				
-CN9200B			CN	China	22.9717	113.3735	250	panel				
-CN9220B			CN	China	38.9887	117.7096	250	panel				
-CN9230B			CN	China	29.5092	106.4905	250	panel				
-CN9240B			CN	China	41.9059	123.6552	250	panel				
-CN9250B			CN	China	32.1821	118.6931	250	panel				
-CN9270B			CN	China	30.5071	114.374	250	panel				
-CN9290B			CN	China	34.4363	108.9682	250	panel				
-CN9310B			CN	China	36.4409	114.6655	250	panel				
-CN9311B			CN	China	38.3328	114.7157	250	panel				
-CN9313B			CN	China	41.448	114.5474	250	panel				
-CN9314B			CN	China	40.9617	117.9154	250	panel				
-CN9317B			CN	China	38.226	116.804	250	panel				
-CN9335B			CN	China	39.819	118.8748	250	panel				
-CN9351B			CN	China	37.8253	112.6789	250	panel				
-CN9352B			CN	China	40.0536	113.388	250	panel				
-CN9355B			CN	China	36.2041	113.053	250	panel				
-CN9357B			CN	China	36.0441	111.4934	250	panel				
-CN9358B			CN	China	37.5277	111.1553	250	panel				
-CN9370B			CN	China	34.3959	115.6325	250	panel				
-CN9371B			CN	China	34.6873	113.6936	250	panel				
-CN9377B			CN	China	33.0085	112.4874	250	panel				
-CN9379B			CN	China	34.5402	112.4551	250	panel				
-CN9393B			CN	China	35.749	114.9388	250	panel				
-CN9396B			CN	China	32.9922	114.0196	250	panel				
-CN9398B			CN	China	34.6672	111.1284	250	panel				
-CN9411B			CN	China	38.8545	121.6529	250	panel				
-CN9417B			CN	China	40.5939	122.513	250	panel				
-CN9421B			CN	China	41.5167	120.4988	250	panel				
-CN9431B			CN	China	43.885	125.2503	250	panel				
-CN9433B			CN	China	42.8279	129.4854	250	panel				
-CN9436B			CN	China	45.6012	122.7953	250	panel				
-CN9437B			CN	China	42.8921	125.1641	250	panel				
-CN9451B			CN	China	45.9663	127.2494	250	panel				
-CN9452B			CN	China	47.3536	123.9381	250	panel				
-CN9453B			CN	China	44.577	129.4324	250	panel				
-CN9454B			CN	China	46.7735	130.3099	250	panel				
-CN9456B			CN	China	50.1642	127.319	250	panel				
-CN9457B			CN	China	50.3875	124.1227	250	panel				
-CN9458B			CN	China	47.6856	128.9102	250	panel				
-CN9470B			CN	China	49.1788	119.7497	250	panel				
-CN9471B			CN	China	40.9687	111.704	250	panel				
-CN9475B			CN	China	43.6029	122.2579	250	panel				
-CN9476B			CN	China	42.2217	118.9753	250	panel				
-CN9477B			CN	China	39.7976	110.0376	250	panel				
-CN9478B			CN	China	40.7217	107.3624	250	panel				
-CN9513B			CN	China	32.0318	120.9715	250	panel				
-CN9515B			CN	China	33.387	120.1971	250	panel				
-CN9516B			CN	China	34.2772	117.1496	250	panel				
-CN9517B			CN	China	33.2259	118.8275	250	panel				
-CN9518B			CN	China	34.5988	119.2842	250	panel				
-CN9519B			CN	China	31.8936	119.7721	250	panel				
-CN9523B			CN	China	32.5409	119.9945	250	panel				
-CN9531B			CN	China	36.6953	116.7075	250	panel				
-CN9532B			CN	China	35.9301	120.2318	250	panel				
-CN9535B			CN	China	37.4392	121.3852	250	panel				
-CN9536B			CN	China	36.6102	118.9164	250	panel				
-CN9538B			CN	China	36.2442	117.1029	250	panel				
-CN9539B			CN	China	35.2289	118.4255	250	panel				
-CN9543B			CN	China	37.2983	117.9702	250	panel				
-CN9551B			CN	China	31.8535	117.2319	250	panel				
-CN9552B			CN	China	32.8984	117.4424	250	panel				
-CN9555B			CN	China	31.688	118.5174	250	panel				
-CN9556B			CN	China	30.6084	116.7904	250	panel				
-CN9558B			CN	China	32.8672	115.7449	250	panel				
-CN9559B			CN	China	30.1191	118.1737	250	panel				
-CN9562C			CN	China	30.9425	118.0326	250	panel				
-CN9570B			CN	China	29.0735	118.7073	250	panel				
-CN9571B			CN	China	30.2211	120.3378	250	panel				
-CN9572B			CN	China	30.8221	120.2081	250	panel				
-CN9574B			CN	China	30.035	121.522	250	panel				
-CN9576B			CN	China	28.5821	121.5297	250	panel				
-CN9577B			CN	China	27.862	120.7541	250	panel				
-CN9578B			CN	China	28.5323	119.937	250	panel				
-CN9579B			CN	China	29.2048	119.6483	250	panel				
-CN9580B			CN	China	30.0175	122.1097	250	panel				
-CN9591B			CN	China	25.9528	119.5354	250	panel				
-CN9592B			CN	China	24.484	117.9958	250	panel				
-CN9593B			CN	China	26.9237	120.2135	250	panel				
-CN9595B			CN	China	24.8594	118.4991	250	panel				
-CN9596B			CN	China	23.5629	117.3984	250	panel				
-CN9597B			CN	China	25.0549	117.1931	250	panel				
-CN9598B			CN	China	26.9955	117.0827	250	panel				
-CN9599B			CN	China	27.3336	118.1033	250	panel				
-CN9631B			CN	China	37.0966	122.3743	250	panel				
-CN9660B			CN	China	22.8005	115.3618	250	panel				
-CN9662B			CN	China	21.8165	111.9785	250	panel				
-CN9692B			CN	China	24.4848	98.3441	250	panel				
-CN9710B			CN	China	32.1809	112.217	250	panel				
-CN9713B			CN	China	31.3778	115.3974	250	panel				
-CN9717B			CN	China	30.7121	111.3634	250	panel				
-CN9718B			CN	China	30.2722	109.2649	250	panel				
-CN9722B			CN	China	31.6993	113.5795	250	panel				
-CN9730B			CN	China	29.2855	113.109	250	panel				
-CN9735B			CN	China	25.7204	112.9719	250	panel				
-CN9736B			CN	China	29.1604	111.7041	250	panel				
-CN9739B			CN	China	27.1905	111.437	250	panel				
-CN9744B			CN	China	29.0356	110.4772	250	panel				
-CN9745B			CN	China	27.6185	110.0073	250	panel				
-CN9746B			CN	China	26.2204	111.6293	250	panel				
-CN9751B			CN	China	24.7755	113.5693	250	panel				
-CN9753B			CN	China	24.2405	115.977	250	panel				
-CN9754B			CN	China	23.2377	116.7524	250	panel				
-CN9755B			CN	China	22.6091	113.8425	250	panel				
-CN9758B			CN	China	22.9238	112.5618	250	panel				
-CN9759B			CN	China	20.9766	110.519	250	panel				
-CN9762B			CN	China	23.6905	114.5934	250	panel				
-CN9763B			CN	China	24.7184	112.4004	250	panel				
-CN9770C			CN	China	21.4617	108.2523	250	panel				
-CN9771B			CN	China	22.7924	108.404	250	panel				
-CN9772B			CN	China	24.3473	109.4635	250	panel				
-CN9773B			CN	China	25.3174	110.2952	250	panel				
-CN9774B			CN	China	23.4706	111.2991	250	panel				
-CN9775B			CN	China	22.6425	110.2294	250	panel				
-CN9776B			CN	China	23.8955	106.603	250	panel				
-CN9778B			CN	China	24.9819	107.5069	250	panel				
-CN9779B			CN	China	21.4265	109.0615	250	panel				
-CN9791B			CN	China	28.5755	115.9022	250	panel				
-CN9792B			CN	China	29.5235	115.9498	250	panel				
-CN9793B			CN	China	28.4291	117.9796	250	panel				
-CN9795B			CN	China	27.7855	114.3091	250	panel				
-CN9796B			CN	China	27.0388	114.9069	250	panel				
-CN9798B			CN	China	29.3542	117.207	250	panel				
-CN9816B			CN	China	31.4463	104.768	250	panel				
-CN9817B			CN	China	30.818	106.0829	250	panel				
-CN9818B			CN	China	31.153	107.5422	250	panel				
-CN9831B			CN	China	28.8131	104.5738	250	panel				
-CN9833B			CN	China	29.3984	103.8295	250	panel				
-CN9834B			CN	China	27.8779	102.4219	250	panel				
-CN9839B			CN	China	32.3903	105.8232	250	panel				
-CN9851B			CN	China	26.5831	106.7268	250	panel				
-CN9852B			CN	China	27.6731	106.9129	250	panel				
-CN9854B			CN	China	26.3131	107.5122	250	panel				
-CN9855B			CN	China	26.958	108.689	250	panel				
-CN9856B			CN	China	27.8241	109.2187	250	panel				
-CN9857B			CN	China	27.298	105.3084	250	panel				
-CN9858B			CN	China	26.5457	104.937	250	panel				
-CN9859B			CN	China	25.068	104.9042	250	panel				
-CN9870B			CN	China	27.3765	103.8579	250	panel				
-CN9871B			CN	China	25.048	102.5942	250	panel				
-CN9872B			CN	China	25.5981	100.4034	250	panel				
-CN9876B			CN	China	23.4699	104.2579	250	panel				
-CN9879B			CN	China	22.8239	101.0171	250	panel				
-CN9888B			CN	China	26.7132	100.0367	250	panel				
-CN9891B			CN	China	29.6551	91.1372	250	panel				
-CN9892B			CN	China	29.2531	88.898	250	panel				
-CN9894B			CN	China	29.6231	94.3925	250	panel				
-CN9896B			CN	China	31.4781	92.0618	250	panel				
-CN9898B2			CN	China	19.9823	110.244	250	panel				
-CN9903B			CN	China	37.0136	79.8269	250	panel				
-CN9911B			CN	China	36.5953	109.4885	250	panel				
-CN9912B			CN	China	38.2525	109.7828	250	panel				
-CN9914B			CN	China	33.8706	109.9386	250	panel				
-CN9915B			CN	China	32.6752	109.0324	250	panel				
-CN9916B			CN	China	33.1152	107.0497	250	panel				
-CN9917B			CN	China	34.5152	107.24	250	panel				
-CN9931B			CN	China	36.0003	103.85	250	panel				
-CN9934B			CN	China	35.8953	107.6118	250	panel				
-CN9936B			CN	China	39.0675	100.2742	250	panel				
-CN9937B			CN	China	39.7475	98.3023	250	panel				
-CN9941B			CN	China	34.8926	102.892	250	panel				
-CN9951B			CN	China	38.3875	106.3675	250	panel				
-CN9953B			CN	China	37.4028	106.0484	250	panel				
-CN9954B			CN	China	35.6553	106.2024	250	panel				
-CN9970B			CN	China	36.9347	100.9037	250	panel				
-CN9990B			CN	China	45.4562	84.9608	250	panel				
-CN9993B			CN	China	44.2712	85.9672	250	panel				
-CN9996B			CN	China	41.7459	86.202	250	panel				
-CN9997B			CN	China	41.1165	80.3695	250	panel				
-CN9998B			CN	China	39.4425	76.0232	250	panel				
-CN9999B			CN	China	43.9212	81.3234	250	panel				
-COBAR4			CO	Colombia	6.9273	-73.7571	250	panel				
-COBOG3			CO	Colombia	4.674	-74.1127	250	panel				
-COGUA4			CO	Colombia	2.5283	-72.6239	250	panel				
-COTAB3			CO	Colombia	4.9996	-74.1954	250	panel				
-CWHA			CW	Curacao	12.1701	-68.9495	250	panel				
-ESAM2	Nijar (Almeria)		ES	Spain	36.8286	-2.103	240	panel				
-ESBA2	Corbera (Barcelona)		ES	Spain	41.399	1.8838	240	panel				
-ESCC2	Sierra de Fuentes (Caceres)		ES	Spain	39.5368	-6.2344	240	panel				
-ESCO2	Cerceda ( La Coruna)		ES	Spain	43.1506	-8.5294	240	panel				
-ESMA2	Torrejon de Velasco (Madrid)		ES	Spain	40.1595	-3.7149	240	panel				
-ESML2	Alhaurin el Grande (Sevilla)		ES	Spain	36.597	-4.6559	240	panel				
-ESMU2	Fortuna (Murcia)		ES	Spain	38.2499	-1.1801	240	panel				
-ESPM2	Llucmajor (Baleares)		ES	Spain	39.3459	2.8653	240	panel				
-ESSA2	Aguión (Asturias)		ES	Spain	43.4449	-6.3426	240	panel				
-ESSE2	Castillo las Guardas (Sevilla)		ES	Spain	37.6616	-6.2937	240	panel				
-ESSS2	Baquio (Vizcaya)		ES	Spain	43.371	-2.8462	240	panel				
-ESVA2	Cullera (Valencia)		ES	Spain	39.1557	-0.2479	240	panel				
-ESVD2	Autilla Pino (Palencia)		ES	Spain	42.0025	-4.5921	240	panel				
-ESZA2	(Zaragoza)		ES	Spain	41.7252	-0.5519	240	panel				
-FIMP			MU	Mauritius	-20.3224	57.5163	250	panel				
-FRGF2			FR	France	5.6093	-53.4375	250	panel				
-GRCOMP3	Greece composite		GR	Greece	38.3614	24.0733	250	panel				
-HKTC2			HK	Hong Kong	22.3702	114.1179	250	map	111.5855	20.0583	116.6503	24.6821
-IDAC3			ID	Indonesia	5.5413	95.5002	250	map	93.2526	3.2938	97.7479	7.7889
-IDAD3			ID	Indonesia	-0.7864	100.3049	250	map	98.0575	-3.0341	102.5524	1.4614
-IDAG3			ID	Indonesia	-2.1615	106.1365	250	map	103.8889	-4.4091	108.3841	0.0861
-IDAJ3			ID	Indonesia	-3.5505	118.9808	250	map	116.7329	-5.7979	121.2287	-1.3032
-IDAM3			ID	Indonesia	-3.7119	128.0956	250	map	125.8481	-5.9597	130.3431	-1.4642
-IDAR3			ID	Indonesia	3.3133	117.5813	250	map	115.3337	1.0656	119.8289	5.5609
-IDAS3			ID	Indonesia	-2.5548	120.3237	250	map	118.0764	-4.8027	122.5711	-0.3069
-IDBA3			ID	Indonesia	-3.4614	114.8412	250	map	112.5935	-5.7088	117.0890	-1.2139
-IDBE3			ID	Indonesia	-3.8583	102.3413	250	map	100.0936	-6.1059	104.5890	-1.6108
-IDBI3			ID	Indonesia	-8.5318	118.6996	250	map	116.4518	-10.7793	120.9474	-6.2843
-IDBT3			ID	Indonesia	1.1248	104.1117	250	map	101.8641	-1.1229	106.3593	3.3724
-IDCGK			ID	Indonesia	-6.1239	106.68	250	map	104.4322	-8.3714	108.9277	-3.8764
-IDDE3			ID	Indonesia	-8.739	115.1791	250	map	112.9312	-10.9864	117.4270	-6.4915
-IDGO3			ID	Indonesia	0.6358	123.0104	250	map	120.7630	-1.6120	125.2578	2.8836
-IDIA3			ID	Indonesia	-1.163	136.088	250	map	133.8404	-3.4107	138.3356	1.0846
-IDJA3			ID	Indonesia	-1.6307	103.6424	250	map	101.3946	-3.8781	105.8902	0.6167
-IDJO3			ID	Indonesia	-7.7316	110.3544	250	map	108.1067	-9.9791	112.6022	-5.4840
-IDJY3			ID	Indonesia	-2.5988	140.5276	250	map	138.2802	-4.8466	142.7750	-0.3510
-IDKE3			ID	Indonesia	-4.0599	122.4598	250	map	120.2124	-6.3077	124.7072	-1.8121
-IDKU3			ID	Indonesia	-10.218	123.6242	250	map	121.3764	-12.4655	125.8720	-7.9704
-IDLA3			ID	Indonesia	-5.2084	105.1752	250	map	102.9276	-7.4560	107.4228	-2.9608
-IDLI3			ID	Indonesia	-1.2597	116.897	250	map	114.6494	-3.5073	119.1446	0.9879
-IDLO3			ID	Indonesia	-8.7528	116.2492	250	map	114.0018	-11.0002	118.4966	-6.5054
-IDMA3			ID	Indonesia	-5.0628	119.5308	250	map	117.2834	-7.3107	121.7781	-2.8149
-IDME3			ID	Indonesia	3.5399	98.6374	250	map	96.3896	1.2926	100.8853	5.7873
-IDMR3			ID	Indonesia	-8.5185	140.4167	250	map	138.1689	-10.7660	142.6644	-6.2709
-IDNA3			ID	Indonesia	1.5009	124.9186	250	map	122.6709	-0.7466	127.1664	3.7484
-IDNI3			ID	Indonesia	1.1644	97.7037	250	map	95.4561	-1.0833	99.9513	3.4120
-IDPA3			ID	Indonesia	-2.9173	104.7027	250	map	102.4549	-5.1649	106.9504	-0.6698
-IDPE3			ID	Indonesia	0.4539	101.4639	250	map	99.2165	-1.7940	103.7113	2.7017
-IDPO3			ID	Indonesia	-0.0901	109.393	250	map	107.1456	-2.3379	111.6404	2.1578
-IDPU3			ID	Indonesia	-0.6687	119.8187	250	map	117.5713	-2.9165	122.0661	1.5791
-IDPWK			ID	Indonesia	-6.6098	107.4241	250	map	105.1796	-8.8542	109.6686	-4.3655
-IDSE3			ID	Indonesia	-6.9843	110.3674	250	map	108.1199	-9.2321	112.6149	-4.7365
-IDSI3			ID	Indonesia	-0.043	111.4593	250	map	109.2119	-2.2908	113.7067	2.2049
-IDSO3			ID	Indonesia	-0.8904	131.2857	250	map	129.0382	-3.1382	133.5331	1.3573
-IDSU3			ID	Indonesia	-7.4105	112.7603	250	map	110.5128	-9.6583	115.0077	-5.1626
-IDTA3			ID	Indonesia	-6.1711	106.6468	250	map	104.3990	-8.4185	108.8947	-3.9237
-IDTE3			ID	Indonesia	0.8556	127.3472	250	map	125.0998	-1.3921	129.5947	3.1034
-IDTI3			ID	Indonesia	-4.5291	136.8932	250	map	134.6457	-6.7768	139.1408	-2.2814
-IDWA3			ID	Indonesia	-4.0886	138.9462	250	map	136.6987	-6.3364	141.1936	-1.8408
-INBH3			IN	India	23.1386	69.6467	250	panel				
-INBR3			IN	India	27.4143	95.0142	250	panel				
-INCH2			IN	India	13.0428	80.3082	250	panel				
-INDP2			IN	India	20.2082	86.6772	250	panel				
-INGP3			IN	India	21.0738	79.0569	250	panel				
-INGT3			IN	India	23.836	91.2496	250	panel				
-INHP3			IN	India	23.2031	77.4045	250	panel				
-INJM			IN	India	32.7445	74.8283	250	panel				
-INKC3			IN	India	9.8951	76.3418	250	panel				
-INKL3			IN	India	10.8965	79.8482	250	panel				
-INKU			IN	India	31.0626	77.2575	250	panel				
-INLD			IN	India	29.813	78.6793	250	panel				
-INLH4			IN	India	28.4409	77.2069	250	panel				
-INLK2			IN	India	26.6361	80.8837	250	panel				
-INMK			IN	India	29.4297	79.6621	250	panel				
-INMM3			IN	India	18.8285	72.8173	250	panel				
-INMP			IN	India	16.1405	81.1794	250	panel				
-INMU			IN	India	31.4711	76.812	250	panel				
-INOA3			IN	India	15.4542	73.8293	250	panel				
-INPJ2			IN	India	25.2286	91.7544	250	panel				
-INRN3			IN	India	34.0364	74.7819	250	panel				
-INSU			IN	India	30.3831	78.2853	250	panel				
-INTL3			IN	India	30.358	76.45	250	panel				
-INTN3			IN	India	25.5818	85.0888	250	panel				
-INTV2			IN	India	8.8231	76.3572	250	panel				
-INVS3			IN	India	17.7183	83.3993	250	panel				
-JPCOMP	Japan composite		JP	Japan	34.5595	135.0	250	map	118.1250	16.6362	151.8750	52.4828
-KHPP			KH	Cambodia	11.5086	104.9486	250	panel				
-KRBRI2			KR	South Korea	37.9523	124.6316	250	panel				
-KRGDK2			KR	South Korea	38.111	127.4327	250	panel				
-KRGSN2			KR	South Korea	33.2806	126.1705	250	panel				
-KRIIA2			KR	South Korea	37.4548	126.3534	250	panel				
-KRJNI2			KR	South Korea	34.4621	126.3332	250	panel				
-KRKSN2			KR	South Korea	35.9942	126.793	250	panel				
-KRKWK2			KR	South Korea	37.427	126.9585	250	panel				
-KRMYN2			KR	South Korea	36.1703	129.0006	250	panel				
-KRPSN2			KR	South Korea	35.1132	129.0043	250	panel				
-KRSSP2			KR	South Korea	33.3724	126.8823	250	panel				
-KWAJ			MH	Marshall Islands	8.7018	167.7318	250	panel				
-MXCA6			MX	Mexico	19.5498	-99.5208	250	map	-101.6171	17.5624	-97.4245	21.5372
-MXCC3			MX	Mexico	21.0291	-86.8475	250	map	-91.1757	16.9652	-82.5193	25.0930
-MXLC6			MX	Mexico	22.8802	-109.9253	250	map	-114.3053	18.8456	-105.5452	26.9149
-MXSA2			MX	Mexico	18.9708	-91.1733	250	map	-95.4511	14.9214	-86.8954	23.0202
-MXWR2			MX	Mexico	19.3454	-99.0883	250	panel				
-MYCOMP71	Malaysia composite		MY	Malaysia	3.82	101.5993	250	panel				
-MYCOMP72	Malaysia composite		MY	Malaysia	3.8537	114.1329	250	panel				
-NINU			NI	Nicaragua	11.981	-86.2852	250	map	-90.3276	8.0301	-82.2427	15.9319
-NZAU2	Auckland		NZ	New Zealand	-36.2775	174.698	300	panel				
-NZBA2	Bay of Plenty		NZ	New Zealand	-38.0546	176.0612	300	panel				
-NZCA2	Canterbury		NZ	New Zealand	-43.7679	172.0304	300	panel				
-NZGI2	Gisborne/Hawke's Bay		NZ	New Zealand	-39.16	177.85	300	panel				
-NZNO2	Northland		NZ	New Zealand	-35.0694	173.8082	300	panel				
-NZSO2	Southland		NZ	New Zealand	-46.3926	168.3272	300	panel				
-NZTA2	Taranaki		NZ	New Zealand	-38.9973	174.1725	300	panel				
-NZWE2	Wellington		NZ	New Zealand	-41.2933	174.6525	300	panel				
-NZWS2			NZ	New Zealand	-42.7226	171.0655	250	panel				
-PANM6			PA	Panama	9.2684	-79.8945	250	panel				
-PHCOMP7	Philippines composite		PH	Philippines	13.0573	122.7427	250	panel				
-PTCOMP	Cruz do Leão		PT	Portugal	38.9022	-8.4001	300	map	-12.4548	34.0115	-4.3455	43.7929
-RSCOMP	Bukulja		RS	Serbia	44.2736	20.5611	250	panel				
-SACOMP10	Saudi Arabia composite		SA	Saudi Arabia	23.5	49.0	250	panel				
-SGCOMP	Singapore composite		SG	Singapore	1.35	103.965	250	map	101.7800	-0.8500	106.1500	3.5500
-SKKH	Kojsovska hola		SK	Slovakia	48.7668	20.9943	200	panel				
-SKMJ	Maly Javornik		SK	Slovakia	48.2361	17.1537	240	panel				
-SKSL			SK	Slovakia	48.2174	19.2654	250	panel				
-THCK4			TH	Thailand	13.8332	100.8475	250	panel				
-THCN			TH	Thailand	15.1436	100.1908	250	panel				
-THCOMP	Thailand composite		TH	Thailand	13.2376	101.5093	250	panel				
-THHS			TH	Thailand	16.7618	100.2177	250	panel				
-THHY			TH	Thailand	6.9317	100.3909	250	panel				
-THKM4			TH	Thailand	13.7412	100.3516	250	panel				
-THKN			TH	Thailand	16.4527	102.7891	250	panel				
-THKT2			TH	Thailand	8.1289	98.3324	250	panel				
-THLP3			TH	Thailand	18.5527	99.0388	250	panel				
-THMH			TH	Thailand	19.282	97.9736	250	panel				
-THMI2			TH	Thailand	15.171	102.5735	250	panel				
-THMP5			TH	Thailand	10.4899	99.1962	250	panel				
-THNG2			TH	Thailand	18.312	100.3021	250	panel				
-THOK2			TH	Thailand	17.792	98.433	250	panel				
-THPA3			TH	Thailand	10.7095	99.3634	250	panel				
-THRI3			TH	Thailand	19.9459	99.8812	250	panel				
-THSG			TH	Thailand	7.3263	100.4297	250	panel				
-THSI3			TH	Thailand	15.3068	104.1119	250	panel				
-THSK			TH	Thailand	13.3986	100.0308	250	panel				
-THSN			TH	Thailand	17.1473	104.1303	250	panel				
-THST5			TH	Thailand	9.1263	99.1568	250	panel				
-THTK			TH	Thailand	16.7393	98.9235	250	panel				
-THTR3			TH	Thailand	7.5125	99.6179	250	panel				
-TR03			TR	Turkey	38.3608	30.4078	250	panel				
-TR06			TR	Turkey	39.76	32.9654	250	panel				
-TR07			TR	Turkey	36.2301	30.4237	250	panel				
-TR10			TR	Turkey	39.6993	27.6228	250	panel				
-TR16			TR	Turkey	40.4846	29.8976	250	panel				
-TR25			TR	Turkey	40.1197	41.5439	250	panel				
-TR27			TR	Turkey	37.104	37.1309	250	panel				
-TR31			TR	Turkey	36.2815	35.7839	250	panel				
-TR34			TR	Turkey	41.2897	28.3587	250	panel				
-TR35			TR	Turkey	38.2705	26.9945	250	panel				
-TR48			TR	Turkey	36.8496	28.3302	250	panel				
-TR55			TR	Turkey	41.2694	36.0305	250	panel				
-TR58			TR	Turkey	39.7193	36.8393	250	panel				
-TR61			TR	Turkey	41.0294	39.4642	250	panel				
-TR63			TR	Turkey	37.6691	39.8178	250	panel				
-TR70			TR	Turkey	37.3513	33.1239	250	panel				
-TWCOMP3	Taiwan composite		TW	Taiwan	23.5	120.75	250	map	115.0000	17.7500	126.5000	29.2500
-VNDHA2			VN	Vietnam	16.8054	107.0923	250	map	104.3197	14.0338	109.8650	19.5770
-VNNHB2			VN	Vietnam	10.6592	106.7277	250	map	103.9561	7.8866	109.4994	13.4319
-VNNHT2			VN	Vietnam	12.2117	109.2802	250	map	106.5139	9.4452	112.0466	14.9782
-VNPHA2			VN	Vietnam	21.5715	103.5167	250	panel				
-VNPLE2			VN	Vietnam	14.0352	107.9836	250	map	105.2119	11.2634	110.7553	16.8069
-VNPLI2			VN	Vietnam	20.8092	106.6399	250	panel				
-VNQNH2			VN	Vietnam	13.7486	109.1923	250	map	106.4199	10.9764	111.9647	16.5208
-VNTKY2			VN	Vietnam	15.5681	108.4623	250	map	105.6902	12.7964	111.2344	18.3398
-VNVIN2			VN	Vietnam	18.6562	105.7108	250	map	103.8613	16.8068	107.5603	20.5056
-VNVTR2			VN	Vietnam	21.2914	105.3621	250	panel				
+# id	name	state	cc	country	lat	lon	range_km	display	w	s	e	n	of
+# data.rainviewer.com/images directories that publish images and aren't radars Stormiq already has (generated from a full copy of the tree, 2026-11). Positions: each directory's 0_products.json, github.com/rainviewer/weather-radar-database (MIT), BoM IDR00007, OPERA's radar list. `of`: the site this range variant belongs to.
+AECOMP2	UAE composite		AE	United Arab Emirates	24.0	54.0	250	panel					
+AU012	Melbourne (Broadmeadows)	VIC	AU	Australia	-37.6899	144.9472	256	map					
+AU022	Melbourne (Laverton)	VIC	AU	Australia	-37.8552	144.7554	256	map					
+AU032	Wollongong (Appin)	NSW	AU	Australia	-34.2624	150.8751	256	map					
+AU042	Newcastle	NSW	AU	Australia	-32.7298	152.0254	256	map					
+AU062	Geraldton	WA	AU	Australia	-28.8047	114.6974	256	map					
+AU072	Wyndham	WA	AU	Australia	-15.4517	128.1209	256	map					
+AU082	Gympie (Mount Kanigan)	QLD	AU	Australia	-25.9573	152.5769	256	map					
+AU102	Darwin Airport	NT	AU	Australia	-12.4246	130.8921	256	map					
+AU1062	Townsville	QLD	AU	Australia	-19.4198	146.551	256	map					
+AU1072	Richmond	QLD	AU	Australia	-20.7518	143.1414	256	map					
+AU1082	Toowoomba	QLD	AU	Australia	-27.2741	151.993	256	map					
+AU1112	Karratha	WA	AU	Australia	-20.9924	116.8758	256	map					
+AU1122	Gove	NT	AU	Australia	-12.269	136.8204	256	map					
+AU1142	Carnarvon	WA	AU	Australia	-24.8883	113.6694	256	map					
+AU142	Mount Gambier	SA	AU	Australia	-37.7477	140.7746	256	map					
+AU152	Dampier	WA	AU	Australia	-20.6538	116.6832	256	panel					
+AU162	Port Hedland	WA	AU	Australia	-20.3718	118.6317	256	map					
+AU172	Broome	WA	AU	Australia	-17.9483	122.2353	256	map					
+AU192	Cairns	QLD	AU	Australia	-16.8182	145.663	256	map					
+AU222	Mackay	QLD	AU	Australia	-21.1172	149.2173	256	map					
+AU232	Gladstone	QLD	AU	Australia	-23.8551	151.2625	256	map					
+AU242	Bowen	QLD	AU	Australia	-19.8858	148.0757	256	map					
+AU252	Alice Springs	NT	AU	Australia	-23.795	133.8889	256	map					
+AU262	Perth Airport	WA	AU	Australia	-31.9273	115.9756	256	map					
+AU272	Woomera	SA	AU	Australia	-31.1558	136.8044	256	map					
+AU282	Grafton	NSW	AU	Australia	-29.6207	152.9633	256	map					
+AU292	Learmonth	WA	AU	Australia	-22.1032	113.9997	256	map					
+AU312	Albany	WA	AU	Australia	-34.9418	117.8163	256	map					
+AU322	Esperance	WA	AU	Australia	-33.8302	121.8917	256	map					
+AU332	Ceduna	SA	AU	Australia	-32.1298	133.6964	256	map					
+AU362	Mornington Island (Gulf of Carpentaria)	QLD	AU	Australia	-16.6641	139.1812	256	map					
+AU372	Hobart Airport	TAS	AU	Australia	-42.8374	147.5009	256	map					
+AU382	Newdegate	WA	AU	Australia	-33.0969	119.0088	256	map					
+AU392	Halls Creek	WA	AU	Australia	-18.2289	127.6628	256	map					
+AU402	Canberra (Captains Flat)	NSW	AU	Australia	-35.6614	149.5122	256	map					
+AU412	Willis Island	QLD	AU	Australia	-16.2874	149.9646	256	map					
+AU422	Katherine (Tindal)	NT	AU	Australia	-14.5109	132.447	256	map					
+AU442	Giles	WA	AU	Australia	-25.0332	128.3017	256	map					
+AU462	Adelaide (Sellicks Hill)	SA	AU	Australia	-35.3295	138.5025	256	map					
+AU482	Kalgoorlie	WA	AU	Australia	-30.7842	121.4548	256	map					
+AU492	Yarrawonga	VIC	AU	Australia	-36.0296	146.0228	256	map					
+AU502	Brisbane (Marburg)	QLD	AU	Australia	-27.6063	152.54	256	map					
+AU522	NW Tasmania (West Takone)	TAS	AU	Australia	-41.1792	145.58	256	map					
+AU532	Moree	NSW	AU	Australia	-29.4903	149.8462	256	map					
+AU552	Wagga Wagga	NSW	AU	Australia	-35.1581	147.4563	256	map					
+AU562	Longreach	QLD	AU	Australia	-23.4398	144.2823	256	map					
+AU582	South Doodlakine	WA	AU	Australia	-31.7778	117.9528	256	map					
+AU622	Norfolk Island	NSW	AU	Australia	-29.0383	167.9414	256	map					
+AU632	Darwin (Berrimah)	NT	AU	Australia	-12.4559	130.9266	256	map					
+AU642	Adelaide (Buckland Park)	SA	AU	Australia	-34.617	138.4688	256	map					
+AU662	Brisbane (Mt Stapylton)	QLD	AU	Australia	-27.7177	153.24	256	map					
+AU672	Warrego	QLD	AU	Australia	-26.4402	147.3491	256	map					
+AU682	Bairnsdale	VIC	AU	Australia	-37.8875	147.5755	256	map					
+AU692	Namoi (Blackjack Mountain)	NSW	AU	Australia	-31.0242	150.192	256	map					
+AU702	Perth (Serpentine)	WA	AU	Australia	-32.3918	115.867	256	map					
+AU712	Sydney (Terrey Hills)	NSW	AU	Australia	-33.7008	151.2095	256	map					
+AU722	Emerald	QLD	AU	Australia	-23.5496	148.2392	256	map					
+AU742	Greenvale	QLD	AU	Australia	-18.9977	144.9959	256	map					
+AU752	Mount Isa	QLD	AU	Australia	-20.7112	139.5553	256	map					
+AU762	Hobart (Mt Koonya)	TAS	AU	Australia	-43.1126	147.8052	256	map					
+AU772	Warruwi	NT	AU	Australia	-11.6485	133.38	256	map					
+AU782	Weipa	QLD	AU	Australia	-12.6664	141.9246	256	map					
+AU792	Watheroo	WA	AU	Australia	-30.3602	116.2897	256	map					
+AU932	Brewarrina	NSW	AU	Australia	-29.9708	146.8136	256	map					
+AU942	Hillston	NSW	AU	Australia	-33.5522	145.5286	256	map					
+AU952	Rainbow (Wimmera)	VIC	AU	Australia	-35.9976	142.0133	256	map					
+AU962	Yeoval	NSW	AU	Australia	-32.7445	148.7081	256	map					
+AU972	Mildura	VIC	AU	Australia	-34.2871	141.5982	256	map					
+AU982	Taroom	QLD	AU	Australia	-25.6962	149.8982	256	map					
+BBMS			BB	Barbados	13.163	-59.5478	250	map	-63.2298	9.5820	-55.8658	16.7440	
+BDBMD2			BD	Bangladesh	23.9892	90.4084	250	map	85.9843	19.9295	94.8325	28.0489	
+BDRNP	Rangpur		BD	Bangladesh	25.75	89.25	250	panel					
+BH02			BH	Bahrain	25.6654	52.5806	250	panel					
+BMWD			BM	Bermuda	32.3341	-64.6537	250	panel					
+BMWD2			BM	Bermuda	32.3341	-64.6537	250	panel					BMWD
+BRAA			BR	Brazil	-28.9321	-49.3623	250	map	-50.6065	-30.0178	-48.1181	-27.8463	
+BRBE	Belem		BR	Brazil	-1.41	-48.46	250	panel					
+BRBV			BR	Brazil	2.8567	-60.7183	250	panel					
+BRCN			BR	Brazil	-31.3674	-52.6965	250	map	-57.0713	-34.9881	-48.3216	-27.7468	
+BRCO2			BR	Brazil	-23.5219	-46.6181	250	panel					
+BRCP			BR	Brazil	-27.0366	-52.6023	250	map	-55.0710	-29.2106	-50.1335	-24.8626	
+BRCZ	Cruzeiro do Sul		BR	Brazil	-7.6	-72.77	250	panel					
+BRGA			BR	Brazil	-15.9572	-48.0113	250	map	-51.8167	-19.5605	-44.2059	-12.3539	
+BRLN			BR	Brazil	-27.2198	-49.4617	250	map	-51.9327	-29.3957	-46.9908	-25.0438	
+BRMI			BR	Brazil	-28.11	-49.4667	250	map	-53.6805	-31.7580	-45.2529	-24.4620	
+BRMN			BR	Brazil	-3.1338	-59.9968	250	map	-62.1475	-6.7181	-57.8461	0.4506	
+BRMO			BR	Brazil	-9.5322	-35.7321	250	map	-39.3850	-13.1270	-32.0792	-5.9375	
+BRMQ			BR	Brazil	0.0635	-51.1149	250	panel					
+BRNI			BR	Brazil	-22.929	-43.085	250	map	-44.0614	-23.8283	-42.1085	-22.0297	
+BRNT	Natal		BR	Brazil	-5.91	-35.25	250	panel					
+BRPB			BR	Brazil	-22.3413	-50.8185	250	panel					
+BRPC			BR	Brazil	-22.4382	-43.2922	250	map	-47.2829	-26.0484	-39.3016	-18.8280	
+BRPOA2	Porto Alegre		BR	Brazil	-30.03	-51.2	250	panel					
+BRPV			BR	Brazil	-8.68	-63.9028	250	map	-67.4997	-12.2553	-60.3058	-5.1047	
+BRRB	Rio Branco		BR	Brazil	-9.97	-67.81	250	panel					
+BRSC3			BR	Brazil	-24.7723	-51.492	250	panel					
+BRSG			BR	Brazil	-29.1914	-55.0144	250	map	-59.1897	-32.8093	-50.8390	-25.5734	
+BRSL			BR	Brazil	-2.5917	-44.25	250	panel					
+BRSN			BR	Brazil	-2.4069	-54.8168	250	panel					
+BRSR			BR	Brazil	-23.5792	-47.0943	250	map	-51.1249	-27.1906	-43.0637	-19.9678	
+BRST	Santarem		BR	Brazil	-2.43	-54.71	250	panel					
+BRTF			BR	Brazil	-3.3525	-64.7111	250	panel					
+BRTT			BR	Brazil	-3.5842	-69.944	250	map	-73.5269	-7.8153	-66.3611	0.6469	
+CN9002B			CN	China	31.1077	120.9457	460	data					
+CN9010B			CN	China	39.807	116.4325	256	data					
+CN9020B			CN	China	45.5568	119.6036	220	data					
+CN9021B			CN	China	49.5882	117.2683	220	data					
+CN9023B	Arxan		CN	China	47.17	119.94	250	panel					
+CN9026B	Balin Left Banner		CN	China	43.98	119.38	250	panel					
+CN9030B	Xinyuan		CN	China	43.43	83.25	250	panel					
+CN9031B	Barkol		CN	China	43.6	93.01	250	panel					
+CN9060B			CN	China	31.6132	110.3045	256	data					
+CN9070B			CN	China	18.2275	109.5493	287	data					
+CN9071C	Sansha		CN	China	16.83	112.34	250	panel					
+CN9080B			CN	China	44.3878	84.0627	220	data					
+CN9081B			CN	China	44.1478	87.4986	220	data					
+CN9082B			CN	China	39.88	79.0506	220	data					
+CN9083B			CN	China	44.8277	82.3093	220	data					
+CN9084B			CN	China	48.8703	125.2585	220	data					
+CN9085B			CN	China	47.2502	132.5876	220	data					
+CN9086B	Alar		CN	China	40.55	81.28	250	panel					
+CN9090B			CN	China	30.8033	108.6388	256	data					
+CN9091B			CN	China	29.5978	108.6949	220	data					
+CN9092B			CN	China	29.2432	105.7947	256	data					
+CN9200B			CN	China	23.0404	113.3424	460	data					
+CN9220B			CN	China	39.0574	117.6727	460	data					
+CN9230B			CN	China	29.5283	106.4576	256	data					
+CN9240B			CN	China	41.9224	123.622	220	data					
+CN9250B			CN	China	32.2012	118.6592	256	data					
+CN9270B			CN	China	30.5262	114.3407	256	data					
+CN9280B	Chengdu		CN	China	30.67	104.07	250	panel					
+CN9290B			CN	China	34.4528	108.9382	220	data					
+CN9310B			CN	China	36.46	114.6299	256	data					
+CN9311B			CN	China	38.3519	114.6791	256	data					
+CN9313B			CN	China	41.4671	114.5092	256	data					
+CN9314B			CN	China	40.9782	117.8826	220	data					
+CN9317B			CN	China	38.2946	116.7676	460	data					
+CN9335B			CN	China	39.8877	118.8375	460	data					
+CN9351B			CN	China	37.8418	112.6476	220	data					
+CN9352B			CN	China	40.0702	113.3556	220	data					
+CN9355B			CN	China	36.2207	113.0224	220	data					
+CN9357B			CN	China	36.0607	111.4628	220	data					
+CN9358B			CN	China	37.5442	111.1241	220	data					
+CN9370B			CN	China	34.415	115.5978	256	data					
+CN9371B			CN	China	34.7064	113.6588	256	data					
+CN9377B			CN	China	33.0276	112.4532	256	data					
+CN9379B			CN	China	34.5593	112.4203	256	data					
+CN9393B			CN	China	35.7681	114.9035	256	data					
+CN9396B			CN	China	33.0113	113.9854	256	data					
+CN9398B			CN	China	34.6863	111.0935	256	data					
+CN9411B			CN	China	38.9232	121.6162	460	data					
+CN9417B			CN	China	40.6626	122.4753	460	data					
+CN9421B			CN	China	41.5332	120.4657	220	data					
+CN9431B			CN	China	43.9015	125.216	220	data					
+CN9433B			CN	China	42.8444	129.4516	220	data					
+CN9436B			CN	China	45.6177	122.7599	220	data					
+CN9437B			CN	China	42.9086	125.1303	220	data					
+CN9451B			CN	China	45.9828	127.2138	220	data					
+CN9452B			CN	China	47.3701	123.9015	220	data					
+CN9453B			CN	China	44.5935	129.3976	220	data					
+CN9454B			CN	China	46.79	130.2737	220	data					
+CN9456B			CN	China	50.1807	127.2803	220	data					
+CN9457B			CN	China	50.404	124.0839	220	data					
+CN9458B			CN	China	47.7021	128.8735	220	data					
+CN9470B			CN	China	49.1953	119.7118	220	data					
+CN9471B			CN	China	40.9852	111.6712	220	data					
+CN9474B	Jining (Ulanqab)		CN	China	41.03	113.12	250	panel					
+CN9475B			CN	China	43.6194	122.2237	220	data					
+CN9476B			CN	China	42.2382	118.9419	220	data					
+CN9477B			CN	China	39.8141	110.0053	220	data					
+CN9478B			CN	China	40.7382	107.3298	220	data					
+CN9513B			CN	China	32.1004	120.9377	460	data					
+CN9515B			CN	China	33.4557	120.1628	460	data					
+CN9516B			CN	China	34.2963	117.1149	256	data					
+CN9517B			CN	China	33.245	118.7932	256	data					
+CN9518B			CN	China	34.6674	119.2494	460	data					
+CN9519B			CN	China	31.9127	119.7384	256	data					
+CN9523B			CN	China	32.56	119.9605	256	data					
+CN9531B			CN	China	36.7144	116.6717	256	data					
+CN9532B			CN	China	35.9987	120.1964	460	data					
+CN9535B			CN	China	37.5078	121.3491	460	data					
+CN9536B			CN	China	36.6789	118.8807	460	data					
+CN9538B			CN	China	36.2607	117.0722	220	data					
+CN9539B			CN	China	35.248	118.3904	256	data					
+CN9543B			CN	China	37.3669	117.9342	460	data					
+CN9551B			CN	China	31.8726	117.1982	256	data					
+CN9552B			CN	China	32.9175	117.4082	256	data					
+CN9555B			CN	China	31.7045	118.4883	220	data					
+CN9556B			CN	China	30.6276	116.7571	256	data					
+CN9558B			CN	China	32.8863	115.7108	256	data					
+CN9559B			CN	China	30.1382	118.1405	256	data					
+CN9562C			CN	China	30.9537	118.013	150	data					
+CN9570B			CN	China	29.0926	118.6745	256	data					
+CN9571B			CN	China	30.2898	120.3047	460	data					
+CN9572B			CN	China	30.8412	120.1747	256	data					
+CN9574B			CN	China	30.1036	121.4889	460	data					
+CN9576B			CN	China	28.6507	121.4971	460	data					
+CN9577B			CN	China	27.9306	120.7217	460	data					
+CN9578B			CN	China	28.5514	119.9044	256	data					
+CN9579B			CN	China	29.2239	119.6155	256	data					
+CN9580B			CN	China	30.0861	122.0766	460	data					
+CN9591B			CN	China	26.0214	119.5036	460	data					
+CN9592B			CN	China	24.5527	117.9643	460	data					
+CN9593B			CN	China	26.9924	120.1814	460	data					
+CN9595B			CN	China	24.9281	118.4676	460	data					
+CN9596B			CN	China	23.6315	117.3672	460	data					
+CN9597B			CN	China	25.074	117.1615	256	data					
+CN9598B			CN	China	27.0146	117.0505	256	data					
+CN9599B			CN	China	27.3527	118.071	256	data					
+CN9631B			CN	China	37.1653	122.3384	460	data					
+CN9660B			CN	China	22.8692	115.3307	460	data					
+CN9662B			CN	China	21.8851	111.9477	460	data					
+CN9692B			CN	China	24.5013	98.3169	220	data					
+CN9710B			CN	China	32.2	112.1831	256	data					
+CN9713B			CN	China	31.3969	115.3638	256	data					
+CN9716B	Jingzhou		CN	China	30.33	112.24	250	panel					
+CN9717B			CN	China	30.7312	111.3301	256	data					
+CN9718B			CN	China	30.2913	109.2317	256	data					
+CN9722B			CN	China	31.7184	113.5459	256	data					
+CN9730B			CN	China	29.3046	113.0762	256	data					
+CN9731B	Changsha		CN	China	28.23	112.94	250	panel					
+CN9735B			CN	China	25.7395	112.9401	256	data					
+CN9736B			CN	China	29.1795	111.6713	256	data					
+CN9739B			CN	China	27.2096	111.4048	256	data					
+CN9744B			CN	China	29.0547	110.4444	256	data					
+CN9745B			CN	China	27.6376	109.975	256	data					
+CN9746B			CN	China	26.2395	111.5974	256	data					
+CN9751B			CN	China	24.7946	113.5377	256	data					
+CN9753B			CN	China	24.2596	115.9456	256	data					
+CN9754B			CN	China	23.3064	116.7213	460	data					
+CN9755B			CN	China	22.6777	113.8115	460	data					
+CN9758B			CN	China	22.9429	112.5307	256	data					
+CN9759B			CN	China	21.0453	110.4883	460	data					
+CN9762B			CN	China	23.7096	114.5621	256	data					
+CN9763B			CN	China	24.7375	112.3689	256	data					
+CN9770C			CN	China	21.5304	108.2216	460	data					
+CN9771B			CN	China	22.8115	108.3729	256	data					
+CN9772B			CN	China	24.3664	109.4321	256	data					
+CN9773B			CN	China	25.3365	110.2635	256	data					
+CN9774B			CN	China	23.4897	111.2678	256	data					
+CN9775B			CN	China	22.6616	110.1984	256	data					
+CN9776B			CN	China	23.9146	106.5716	256	data					
+CN9778B			CN	China	25.001	107.4753	256	data					
+CN9779B			CN	China	21.4952	109.0307	460	data					
+CN9791B			CN	China	28.5946	115.8696	256	data					
+CN9792B			CN	China	29.5426	115.9169	256	data					
+CN9793B			CN	China	28.4482	117.947	256	data					
+CN9794B	Fuzhou (Jiangxi)		CN	China	27.95	116.36	250	panel					
+CN9795B			CN	China	27.8046	114.2768	256	data					
+CN9796B			CN	China	27.0553	114.8791	220	data					
+CN9797B	Ganzhou		CN	China	25.83	114.93	250	panel					
+CN9798B			CN	China	29.3733	117.1741	256	data					
+CN9816B			CN	China	31.4628	104.7389	220	data					
+CN9817B			CN	China	30.8345	106.0541	220	data					
+CN9818B			CN	China	31.1695	107.5133	220	data					
+CN9831B			CN	China	28.8296	104.5455	220	data					
+CN9833B			CN	China	29.4149	103.801	220	data					
+CN9834B			CN	China	27.8944	102.3939	220	data					
+CN9835B	Ya'an		CN	China	29.98	103.0	250	panel					
+CN9836B	Kangding		CN	China	30.05	101.96	250	panel					
+CN9837B	Hongyuan		CN	China	32.79	102.55	250	panel					
+CN9839B			CN	China	32.4068	105.7939	220	data					
+CN9851B			CN	China	26.5996	106.6991	220	data					
+CN9852B			CN	China	27.6896	106.885	220	data					
+CN9854B			CN	China	26.3296	107.4846	220	data					
+CN9855B			CN	China	26.9745	108.6612	220	data					
+CN9856B			CN	China	27.8406	109.1907	220	data					
+CN9857B			CN	China	27.3145	105.2805	220	data					
+CN9858B			CN	China	26.5622	104.9094	220	data					
+CN9859B			CN	China	25.0845	104.8768	220	data					
+CN9870B			CN	China	27.393	103.83	220	data					
+CN9871B			CN	China	25.0645	102.5669	220	data					
+CN9872B			CN	China	25.6146	100.376	220	data					
+CN9876B			CN	China	23.4864	104.2309	220	data					
+CN9879B			CN	China	22.8404	100.9902	220	data					
+CN9888B			CN	China	26.7297	100.009	220	data					
+CN9891B			CN	China	29.6716	91.1087	220	data					
+CN9892B			CN	China	29.2696	88.8696	220	data					
+CN9894B			CN	China	29.6396	94.364	220	data					
+CN9896B			CN	China	31.4946	92.0328	220	data					
+CN9898B2			CN	China	20.0032	110.2105	281	data					
+CN9901B	Tacheng		CN	China	46.75	82.98	250	panel					
+CN9903B			CN	China	37.0301	79.7959	220	data					
+CN9904B	Hami		CN	China	42.83	93.51	250	panel					
+CN9906B	Altay		CN	China	47.85	88.14	250	panel					
+CN9909B	Jinghe		CN	China	44.6	82.89	250	panel					
+CN9911B			CN	China	36.6118	109.4577	220	data					
+CN9912B			CN	China	38.269	109.7513	220	data					
+CN9914B			CN	China	33.8871	109.9088	220	data					
+CN9915B			CN	China	32.6917	109.0029	220	data					
+CN9916B			CN	China	33.1317	107.0201	220	data					
+CN9917B			CN	China	34.5318	107.2099	220	data					
+CN9931B			CN	China	36.0168	103.8194	220	data					
+CN9934B			CN	China	35.9118	107.5812	220	data					
+CN9936B			CN	China	39.084	100.2423	220	data					
+CN9937B			CN	China	39.764	98.2701	220	data					
+CN9941B			CN	China	34.9091	102.8619	220	data					
+CN9951B			CN	China	38.404	106.3359	220	data					
+CN9953B			CN	China	37.4193	106.0172	220	data					
+CN9954B			CN	China	35.6718	106.1719	220	data					
+CN9970B			CN	China	36.9512	100.8727	220	data					
+CN9971B	Xining		CN	China	36.62	101.78	250	panel					
+CN9973B	Huangnan		CN	China	35.52	102.02	250	panel					
+CN9974B	Hainan (Qinghai)		CN	China	36.28	100.62	250	panel					
+CN9976B	Yushu		CN	China	33.0	97.01	250	panel					
+CN9990B			CN	China	45.4727	84.9255	220	data					
+CN9991B	Urumqi		CN	China	43.83	87.62	250	panel					
+CN9993B			CN	China	44.2877	85.9327	220	data					
+CN9994B	Qitai		CN	China	44.02	89.59	250	panel					
+CN9996B			CN	China	41.7624	86.1688	220	data					
+CN9997B			CN	China	41.133	80.3366	220	data					
+CN9998B			CN	China	39.459	75.9911	220	data					
+CN9999B			CN	China	43.9377	81.289	220	data					
+COBAR4			CO	Colombia	6.9273	-73.7571	250	panel					
+COBOG3			CO	Colombia	4.674	-74.1127	250	panel					
+COGUA4			CO	Colombia	2.5283	-72.6239	250	panel					
+COTAB3			CO	Colombia	4.9996	-74.1954	250	panel					
+CWHA			CW	Curacao	12.1701	-68.9495	250	panel					
+DOCOMP	Dominican Republic composite		DO	Dominican Republic	18.75	-70.2	250	panel					
+ESAM2	Nijar (Almeria)		ES	Spain	36.8286	-2.103	250	panel					
+ESAM3	Nijar (Almeria)		ES	Spain	36.8178	-2.0845	250	panel					ESAM2
+ESCO2	Cerceda ( La Coruna)		ES	Spain	43.1506	-8.5294	250	panel					
+ESCO3	Cerceda ( La Coruna)		ES	Spain	43.1506	-8.5294	250	panel					ESCO2
+ESMG	Cuntis (MeteoGalicia)		ES	Spain	42.63	-8.54	250	panel					
+ESMU2	Fortuna (Murcia)		ES	Spain	38.2499	-1.1801	250	panel					
+ESMU3	Fortuna (Murcia)		ES	Spain	38.249	-1.19	250	panel					ESMU2
+ESPM2	Llucmajor (Baleares)		ES	Spain	39.3459	2.8653	250	panel					
+ESPM3	Llucmajor (Baleares)		ES	Spain	39.3636	2.7825	250	panel					ESPM2
+ESSA2	Aguión (Asturias)		ES	Spain	43.4449	-6.3426	250	panel					
+ESSA3	Aguión (Asturias)		ES	Spain	43.4432	-6.2988	250	panel					ESSA2
+ESVA2	Cullera (Valencia)		ES	Spain	39.1557	-0.2479	250	panel					
+ESVA3	Cullera (Valencia)		ES	Spain	39.1599	-0.2541	250	panel					ESVA2
+FIMP			MU	Mauritius	-20.3224	57.5163	250	panel					
+FJND	Nadi		FJ	Fiji	-17.75	177.44	250	panel					
+FJNS	Nausori		FJ	Fiji	-18.04	178.56	250	panel					
+FRGF2			FR	France	5.6093	-53.4375	250	panel					
+GEPOT	Poti		GE	Georgia	42.15	41.67	250	panel					
+HKTC2			HK	Hong Kong	22.3702	114.1179	250	map	111.5855	20.0583	116.6503	24.6821	
+IDAC3			ID	Indonesia	5.5413	95.5002	250	map	93.2526	3.2938	97.7479	7.7889	
+IDAD3			ID	Indonesia	-0.7864	100.3049	250	map	98.0575	-3.0341	102.5524	1.4614	
+IDAG3			ID	Indonesia	-2.1615	106.1365	250	map	103.8889	-4.4091	108.3841	0.0861	
+IDAJ3			ID	Indonesia	-3.5505	118.9808	250	map	116.7329	-5.7979	121.2287	-1.3032	
+IDAM3			ID	Indonesia	-3.7119	128.0956	250	map	125.8481	-5.9597	130.3431	-1.4642	
+IDAR3			ID	Indonesia	3.3133	117.5813	250	map	115.3337	1.0656	119.8289	5.5609	
+IDAS3			ID	Indonesia	-2.5548	120.3237	250	map	118.0764	-4.8027	122.5711	-0.3069	
+IDBA3			ID	Indonesia	-3.4614	114.8412	250	map	112.5935	-5.7088	117.0890	-1.2139	
+IDBE3			ID	Indonesia	-3.8583	102.3413	250	map	100.0936	-6.1059	104.5890	-1.6108	
+IDBI3			ID	Indonesia	-8.5318	118.6996	250	map	116.4518	-10.7793	120.9474	-6.2843	
+IDBT3			ID	Indonesia	1.1248	104.1117	250	map	101.8641	-1.1229	106.3593	3.3724	
+IDCGK			ID	Indonesia	-6.1239	106.68	250	map	104.4322	-8.3714	108.9277	-3.8764	
+IDDE3			ID	Indonesia	-8.739	115.1791	250	map	112.9312	-10.9864	117.4270	-6.4915	
+IDGO3			ID	Indonesia	0.6358	123.0104	250	map	120.7630	-1.6120	125.2578	2.8836	
+IDIA3			ID	Indonesia	-1.163	136.088	250	map	133.8404	-3.4107	138.3356	1.0846	
+IDJA3			ID	Indonesia	-1.6307	103.6424	250	map	101.3946	-3.8781	105.8902	0.6167	
+IDJO3			ID	Indonesia	-7.7316	110.3544	250	map	108.1067	-9.9791	112.6022	-5.4840	
+IDJY3			ID	Indonesia	-2.5988	140.5276	250	map	138.2802	-4.8466	142.7750	-0.3510	
+IDKE3			ID	Indonesia	-4.0599	122.4598	250	map	120.2124	-6.3077	124.7072	-1.8121	
+IDKU3			ID	Indonesia	-10.218	123.6242	250	map	121.3764	-12.4655	125.8720	-7.9704	
+IDLA3			ID	Indonesia	-5.2084	105.1752	250	map	102.9276	-7.4560	107.4228	-2.9608	
+IDLI3			ID	Indonesia	-1.2597	116.897	250	map	114.6494	-3.5073	119.1446	0.9879	
+IDLO3			ID	Indonesia	-8.7528	116.2492	250	map	114.0018	-11.0002	118.4966	-6.5054	
+IDMA3			ID	Indonesia	-5.0628	119.5308	250	map	117.2834	-7.3107	121.7781	-2.8149	
+IDME3			ID	Indonesia	3.5399	98.6374	250	map	96.3896	1.2926	100.8853	5.7873	
+IDMR3			ID	Indonesia	-8.5185	140.4167	250	map	138.1689	-10.7660	142.6644	-6.2709	
+IDNA3			ID	Indonesia	1.5009	124.9186	250	map	122.6709	-0.7466	127.1664	3.7484	
+IDNI3			ID	Indonesia	1.1644	97.7037	250	map	95.4561	-1.0833	99.9513	3.4120	
+IDPA3			ID	Indonesia	-2.9173	104.7027	250	map	102.4549	-5.1649	106.9504	-0.6698	
+IDPE3			ID	Indonesia	0.4539	101.4639	250	map	99.2165	-1.7940	103.7113	2.7017	
+IDPO3			ID	Indonesia	-0.0901	109.393	250	map	107.1456	-2.3379	111.6404	2.1578	
+IDPU3			ID	Indonesia	-0.6687	119.8187	250	map	117.5713	-2.9165	122.0661	1.5791	
+IDPWK			ID	Indonesia	-6.6098	107.4241	250	map	105.1796	-8.8542	109.6686	-4.3655	
+IDSE3			ID	Indonesia	-6.9843	110.3674	250	map	108.1199	-9.2321	112.6149	-4.7365	
+IDSI3			ID	Indonesia	-0.043	111.4593	250	map	109.2119	-2.2908	113.7067	2.2049	
+IDSO3			ID	Indonesia	-0.8904	131.2857	250	map	129.0382	-3.1382	133.5331	1.3573	
+IDSU3			ID	Indonesia	-7.4105	112.7603	250	map	110.5128	-9.6583	115.0077	-5.1626	
+IDTA3			ID	Indonesia	-6.1711	106.6468	250	map	104.3990	-8.4185	108.8947	-3.9237	
+IDTE3			ID	Indonesia	0.8556	127.3472	250	map	125.0998	-1.3921	129.5947	3.1034	
+IDTI3			ID	Indonesia	-4.5291	136.8932	250	map	134.6457	-6.7768	139.1408	-2.2814	
+IDWA3			ID	Indonesia	-4.0886	138.9462	250	map	136.6987	-6.3364	141.1936	-1.8408	
+ILBG2C	Ben Gurion		IL	Israel	32.0	34.87	250	panel					
+ILBG2G	Ben Gurion		IL	Israel	32.0	34.87	250	panel					
+INAYA	Ayanagar		IN	India	28.48	77.13	250	panel					
+INBH3			IN	India	23.1386	69.6467	250	panel					
+INBNH	Banihal		IN	India	33.43	75.19	250	panel					
+INBR3			IN	India	27.4143	95.0142	250	panel					
+INCH2			IN	India	13.0428	80.3082	250	panel					
+INDLH	Delhi		IN	India	28.58	77.2	250	panel					
+INDP2			IN	India	20.2082	86.6772	250	panel					
+INGP3			IN	India	21.0738	79.0569	250	panel					
+INGT3			IN	India	23.836	91.2496	250	panel					
+INHP3			IN	India	23.2031	77.4045	250	panel					
+INJM			IN	India	32.7445	74.8283	250	panel					
+INJOT	Jot		IN	India	32.49	76.06	250	panel					
+INKC3			IN	India	9.8951	76.3418	250	panel					
+INKL3			IN	India	10.8965	79.8482	250	panel					
+INKU			IN	India	31.0626	77.2575	250	panel					
+INLD			IN	India	29.813	78.6793	250	panel					
+INLH4			IN	India	28.4409	77.2069	250	panel					
+INLK2			IN	India	26.6361	80.8837	250	panel					
+INMK			IN	India	29.4297	79.6621	250	panel					
+INMLR	Mangalore		IN	India	12.94	74.84	250	panel					
+INMM3			IN	India	18.8285	72.8173	250	panel					
+INMP			IN	India	16.1405	81.1794	250	panel					
+INMU			IN	India	31.4711	76.812	250	panel					
+INOA3			IN	India	15.4542	73.8293	250	panel					
+INPJ2			IN	India	25.2286	91.7544	250	panel					
+INPR5	Jaipur		IN	India	26.9	75.8	250	panel					
+INRN3			IN	India	34.0364	74.7819	250	panel					
+INRPR	Raipur		IN	India	21.25	81.63	250	panel					
+INSU			IN	India	30.3831	78.2853	250	panel					
+INTL3			IN	India	30.358	76.45	250	panel					
+INTN3			IN	India	25.5818	85.0888	250	panel					
+INTV2			IN	India	8.8231	76.3572	250	panel					
+INVS3			IN	India	17.7183	83.3993	250	panel					
+INVV4	Mumbai (Veravali)		IN	India	19.13	72.83	250	panel					
+INYD3	Hyderabad		IN	India	17.39	78.46	250	panel					
+ITBZ	Bolzano		IT	Italy	46.5	11.35	250	panel					
+JMKI	Kingston		JM	Jamaica	18.07	-76.85	250	panel					
+JMKI2	Kingston		JM	Jamaica	18.07	-76.85	250	panel					JMKI
+KHPP			KH	Cambodia	11.5086	104.9486	250	panel					
+KRBRI2			KR	South Korea	37.9523	124.6316	250	panel					
+KRGDK2			KR	South Korea	38.111	127.4327	250	panel					
+KRGSN2			KR	South Korea	33.2806	126.1705	250	panel					
+KRIIA2			KR	South Korea	37.4548	126.3534	250	panel					
+KRJNI2			KR	South Korea	34.4621	126.3332	250	panel					
+KRKSN2			KR	South Korea	35.9942	126.793	250	panel					
+KRKWK2			KR	South Korea	37.427	126.9585	250	panel					
+KRMYN2			KR	South Korea	36.1703	129.0006	250	panel					
+KRPSN2			KR	South Korea	35.1132	129.0043	250	panel					
+KRSSP2			KR	South Korea	33.3724	126.8823	250	panel					
+KWAJ			MH	Marshall Islands	8.7018	167.7318	250	panel					
+KY30	Grand Cayman		KY	Cayman Islands	19.29	-81.37	250	panel					
+MXWR2			MX	Mexico	19.3454	-99.0883	250	panel					
+MYCOMP71	Malaysia composite		MY	Malaysia	3.82	101.5993	250	panel					
+MYCOMP72	Malaysia composite		MY	Malaysia	3.8537	114.1329	250	panel					
+NINU			NI	Nicaragua	11.981	-86.2852	250	map	-90.3276	8.0301	-82.2427	15.9319	
+NZAU2	Auckland		NZ	New Zealand	-36.2775	174.698	250	panel					
+NZBA2	Bay of Plenty		NZ	New Zealand	-38.0546	176.0612	250	panel					
+NZCA2	Canterbury		NZ	New Zealand	-43.7679	172.0304	250	panel					
+NZGI2	Gisborne/Hawke's Bay		NZ	New Zealand	-39.16	177.85	300	panel					
+NZNO2	Northland		NZ	New Zealand	-35.0694	173.8082	250	panel					
+NZSO2			NZ	New Zealand	-46.3926	168.3272	250	panel					
+NZTA2			NZ	New Zealand	-38.9973	174.1725	250	panel					
+NZWE2	Wellington		NZ	New Zealand	-41.2933	174.6525	250	panel					
+NZWS2			NZ	New Zealand	-42.7226	171.0655	250	panel					
+OMCOMP	Oman composite		OM	Oman	21.5	56.5	250	panel					
+PANM6			PA	Panama	9.2684	-79.8945	250	panel					
+PKISB200	Islamabad		PK	Pakistan	33.67	73.13	250	panel					
+PKISB450	Islamabad		PK	Pakistan	33.67	73.13	250	panel					PKISB200
+PKKHI200	Karachi		PK	Pakistan	24.9	67.16	250	panel					
+PKKHI450	Karachi		PK	Pakistan	24.9	67.16	250	panel					PKKHI200
+PTCOMP	Cruz do Leão		PT	Portugal	38.9022	-8.4001	250	map	-12.4548	34.0115	-4.3455	43.7929	
+PTFAR	Loule/Cavalos do Caldeirão		PT	Portugal	37.3041	-7.953	250	panel					
+PTFLR	Flores		PT	Portugal	39.46	-31.13	250	panel					
+PTLIS	Coruche/Cruz do Leão		PT	Portugal	39.0714	-8.4001	250	panel					
+PTPRT	Arouca/Pico do Gralheiro		PT	Portugal	40.845	-8.2797	250	panel					
+PTPST	Porto Santo/Pico do Espigão		PT	Portugal	33.0377	-16.3838	250	panel					
+PTSMG	Sao Miguel		PT	Portugal	37.77	-25.5	250	panel					
+RSCOMP	Bukulja		RS	Serbia	44.2736	20.5611	250	panel					
+SACOMP10	Saudi Arabia composite		SA	Saudi Arabia	23.5	49.0	250	panel					
+SGCOMP	Singapore composite		SG	Singapore	1.35	103.965	250	map	101.7800	-0.8500	106.1500	3.5500	
+SVANA	Santa Ana		SV	El Salvador	13.99	-89.56	250	panel					
+SVANA60	Santa Ana		SV	El Salvador	13.99	-89.56	250	panel					SVANA
+SVCOMP60	El Salvador composite		SV	El Salvador	13.8	-88.9	250	panel					
+SVMIG	San Miguel		SV	El Salvador	13.48	-88.18	250	panel					
+SVMIG60	San Miguel		SV	El Salvador	13.48	-88.18	250	panel					SVMIG
+SVVIC	San Vicente		SV	El Salvador	13.64	-88.78	250	panel					
+SVVIC60	San Vicente		SV	El Salvador	13.64	-88.78	250	panel					SVVIC
+SVZAC	Zacatecoluca		SV	El Salvador	13.5	-88.87	250	panel					
+SVZAC60	Zacatecoluca		SV	El Salvador	13.5	-88.87	250	panel					SVZAC
+THCK4			TH	Thailand	13.8332	100.8475	250	panel					
+THCN3			TH	Thailand	15.1436	100.1908	250	panel					
+THCN5			TH	Thailand	15.1436	100.1908	250	panel					THCN3
+THCOMP	Thailand composite		TH	Thailand	13.2376	101.5093	250	panel					
+THHS3			TH	Thailand	16.7618	100.2177	250	panel					
+THHS5			TH	Thailand	16.7618	100.2177	250	panel					THHS3
+THHY			TH	Thailand	6.9317	100.3909	250	panel					
+THKM4			TH	Thailand	13.7412	100.3516	250	panel					
+THKN5			TH	Thailand	16.4527	102.7891	250	panel					
+THKT2			TH	Thailand	8.1289	98.3324	250	panel					
+THKT5			TH	Thailand	8.1289	98.3324	250	panel					THKT2
+THLP3			TH	Thailand	18.5527	99.0388	250	panel					
+THMH4			TH	Thailand	19.282	97.9736	250	panel					
+THMI2			TH	Thailand	15.171	102.5735	250	panel					
+THMP5			TH	Thailand	10.4899	99.1962	250	panel					
+THNG2			TH	Thailand	18.312	100.3021	250	panel					
+THOK2			TH	Thailand	17.792	98.433	250	panel					
+THPA3			TH	Thailand	10.7095	99.3634	250	panel					
+THRI3			TH	Thailand	19.9459	99.8812	250	panel					
+THRI5			TH	Thailand	19.9459	99.8812	250	panel					THRI3
+THRI7			TH	Thailand	19.9459	99.8812	250	panel					THRI3
+THSG			TH	Thailand	7.3263	100.4297	250	panel					
+THSI3			TH	Thailand	15.3068	104.1119	250	panel					
+THSK5			TH	Thailand	13.3986	100.0308	250	panel					
+THSK7			TH	Thailand	13.3986	100.0308	250	panel					THSK5
+THSN3			TH	Thailand	17.1473	104.1303	250	panel					
+THSN4			TH	Thailand	17.1473	104.1303	250	panel					THSN3
+THST5			TH	Thailand	9.1263	99.1568	250	panel					
+THST7			TH	Thailand	9.1263	99.1568	250	panel					THST5
+THTK3			TH	Thailand	16.7393	98.9235	250	panel					
+THTK4			TH	Thailand	16.7393	98.9235	250	panel					THTK3
+THTR3			TH	Thailand	7.5125	99.6179	250	panel					
+THTR4			TH	Thailand	7.5125	99.6179	250	panel					THTR3
+TONA			TO	Tonga	-21.2542	-175.0768	250	panel					
+TR03			TR	Turkey	38.3608	30.4078	250	panel					
+TR06			TR	Turkey	39.76	32.9654	250	panel					
+TR07			TR	Turkey	36.2301	30.4237	250	panel					
+TR10			TR	Turkey	39.6993	27.6228	250	panel					
+TR16			TR	Turkey	40.4846	29.8976	250	panel					
+TR25			TR	Turkey	40.1197	41.5439	250	panel					
+TR27			TR	Turkey	37.104	37.1309	250	panel					
+TR31			TR	Turkey	36.2815	35.7839	250	panel					
+TR34			TR	Turkey	41.2897	28.3587	250	panel					
+TR35			TR	Turkey	38.2705	26.9945	250	panel					
+TR48			TR	Turkey	36.8496	28.3302	250	panel					
+TR55			TR	Turkey	41.2694	36.0305	250	panel					
+TR58			TR	Turkey	39.7193	36.8393	250	panel					
+TR61			TR	Turkey	41.0294	39.4642	250	panel					
+TR63			TR	Turkey	37.6691	39.8178	250	panel					
+TR67	Zonguldak		TR	Turkey	41.45	31.79	250	panel					
+TR70			TR	Turkey	37.3513	33.1239	250	panel					
+VNDHA2			VN	Vietnam	16.8054	107.0923	250	map	104.3197	14.0338	109.8650	19.5770	
+VNNHB2			VN	Vietnam	10.6592	106.7277	250	map	103.9561	7.8866	109.4994	13.4319	
+VNNHT2			VN	Vietnam	12.2117	109.2802	250	map	106.5139	9.4452	112.0466	14.9782	
+VNPHA2			VN	Vietnam	21.5715	103.5167	250	panel					
+VNPLE2			VN	Vietnam	14.0352	107.9836	250	map	105.2119	11.2634	110.7553	16.8069	
+VNPLI2			VN	Vietnam	20.8092	106.6399	250	panel					
+VNQNH2			VN	Vietnam	13.7486	109.1923	250	map	106.4199	10.9764	111.9647	16.5208	
+VNTKY2			VN	Vietnam	15.5681	108.4623	250	map	105.6902	12.7964	111.2344	18.3398	
+VNVIN2			VN	Vietnam	18.6562	105.7108	250	map	103.8613	16.8068	107.5603	20.5056	
+VNVTR2			VN	Vietnam	21.2914	105.3621	250	panel					

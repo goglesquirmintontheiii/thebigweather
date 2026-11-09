@@ -43,6 +43,20 @@
   object-fit: contain;
 }
 
+.rv-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.rv-ranges-map {
+  position: fixed;
+  top: 76px;
+  right: 16px;
+  z-index: 30;
+  padding: 6px;
+  border-radius: 8px;
+}
+
 /* 0.8.3: RainViewer single-site radars (international, image-only) */
 .site-marker.intl-site.rv-site {
   border-color: rgba(45, 212, 191, 0.75);

@@ -4,18 +4,21 @@
 import { computed, effect } from "@preact/signals";
 import { settings, update } from "../store";
 import { sites, currentSite, type Site } from "../radar/controller";
-import { rvRadars, rvRegion } from "./rvcore";
+import { rvRadars, rvRegion, rvList } from "./rvcore";
+import { dsOff } from "../datasrc";
 
 /** Fields the server adds for non-NEXRAD sites. */
 export type AnySite = Site & { country?: string; region?: string; kind?: string };
 
-export type SiteRegion = "US" | "CA" | "EU" | "AS" | "OC" | "SA" | "CB" | "AF" | "OT";
-export const REGION_NAMES: Record<SiteRegion, string> = { US: "US", CA: "Canada", EU: "Europe", AS: "Asia", OC: "Oceania", SA: "S. America", CB: "C. America", AF: "Africa", OT: "Other" };
-const REGION_ORDER: SiteRegion[] = ["US", "CA", "EU", "AS", "OC", "SA", "CB", "AF", "OT"];
+export type SiteRegion = "US" | "CA" | "EU" | "AS" | "OC" | "SA" | "CB" | "AF" | "OT" | "PN";
+export const REGION_NAMES: Record<SiteRegion, string> = { US: "US", CA: "Canada", EU: "Europe", AS: "Asia", OC: "Oceania", SA: "S. America", CB: "C. America", AF: "Africa", OT: "Other", PN: "Unaligned" };
+const REGION_ORDER: SiteRegion[] = ["US", "CA", "EU", "AS", "OC", "SA", "CB", "AF", "OT", "PN"];
 
 export function siteRegion(s: AnySite | undefined): SiteRegion {
   if (!s) return "US";
   const c = (s.country ?? "").toUpperCase();
+  // 0.8.4: radars that come from RainViewer are filed by country, wherever they are
+  if ((s as any).source === "rainviewer" || (s as any).source === "mzzu") return rvRegion(c) as SiteRegion;
   if (s.region === "EU" || s.kind === "odim") return c === "CA" ? "CA" : "EU";
   if (c === "CA") return "CA";
   if (!c || c === "US" || s.type === "NEXRAD" || s.type === "TDWR") return "US";
@@ -31,7 +34,10 @@ export function noLevel3(s: AnySite | undefined): boolean {
 export const siteRegions = computed<SiteRegion[]>(() => {
   const set = new Set<SiteRegion>();
   for (const s of sites.value as AnySite[]) set.add(siteRegion(s));
-  for (const r of rvRadars.value) set.add(rvRegion(r.country) as SiteRegion); // 0.8.4
+  for (const r of rvList(rvRadars.value, dsOff.value)) {
+    set.add(rvRegion(r.country) as SiteRegion); // 0.8.4
+    if (r.display === "panel") set.add("PN");
+  }
   return REGION_ORDER.filter((r) => set.has(r));
 });
 

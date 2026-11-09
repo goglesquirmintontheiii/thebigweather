@@ -624,7 +624,20 @@ impl RadarService {
                 return Ok(v);
             }
             let k = key.to_string();
-            let vol = tokio::task::spawn_blocking(move || super::odim::decode_volume(&site, &raws).with_context(|| format!("decode {k}"))).await??;
+            let time_ms = files.first().map(|f| f.time_ms).unwrap_or(0);
+            let pos = self.odim.position(&site).unwrap_or((0.0, 0.0));
+            let vol = tokio::task::spawn_blocking(move || {
+                // 0.8.4: pictures from RainViewer that are read back into reflectivity
+                if raws.first().map(|b| super::rv_image::is_png(b)).unwrap_or(false) {
+                    return super::rv_image::decode(&site, &raws[0], time_ms, pos.0, pos.1).with_context(|| format!("decode {k}"));
+                }
+                // 0.8.4: US test radars RainViewer carries as Level II archives
+                if raws.first().map(|b| !super::odim::is_hdf5(b)).unwrap_or(false) {
+                    return decode_any(&raws[0], &site).with_context(|| format!("decode {k}"));
+                }
+                super::odim::decode_volume(&site, &raws).with_context(|| format!("decode {k}"))
+            })
+            .await??;
             let size = volume_bytes(&vol);
             let vol = Arc::new(vol);
             self.volumes.lock().put(id.to_string(), vol.clone(), size);

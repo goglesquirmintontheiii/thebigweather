@@ -17,10 +17,34 @@ export interface RvRadar {
   bounds?: [number, number, number, number];
   /** "map": drawn on the map; "panel": the agency's picture, shown in a floating panel */
   display?: "map" | "panel";
+  /** every range this site publishes (ids, main one first); empty when there's only one */
+  ranges?: string[];
 }
 
 /** Every RainViewer radar the server knows (filled by `loadRvRadars`). */
 export const rvRadars = signal<RvRadar[]>([]);
+
+/** The radars to offer: none while the data source is off. */
+export function rvList(list: RvRadar[], off: ReadonlySet<string>): RvRadar[] {
+  return off.has("rainviewer") ? [] : list;
+}
+
+/** Main source of the site a radar source belongs to ("rv_THSK5" → "rv_THSK"). */
+export function rvMain(list: RvRadar[], source: string): string {
+  if (!source.startsWith("rv_")) return source;
+  const id = source.slice(3);
+  return list.find((r) => r.id === id || r.ranges?.includes(id))?.source ?? source;
+}
+
+/** Short age of the newest image when it's too old to pass for current (null otherwise). */
+export function rvStale(newestMs: number, now: number, limitH = 3): string | null {
+  const h = (now - newestMs) / 3_600_000;
+  if (h < limitH) return null;
+  return h < 48 ? `${Math.round(h)} h old` : `${Math.round(h / 24)} days old`;
+}
+
+/** filter key: radars shown only as a picture, because they can't be placed on the map */
+export const RV_UNALIGNED = "PN";
 
 const EU = new Set("AT BE BG BY CH CY CZ DE DK EE ES FI FR GB GR HR HU IE IS IT LT LU LV MT NL NO PL PT RO RS SE SI SK UA".split(" "));
 const OC = new Set("AU NZ FJ TO MH PG NC VU WS".split(" "));
@@ -61,7 +85,7 @@ export function rvVisible(
   native: { lat: number; lon: number }[],
   hidden: Set<string>,
   selected = "",
-  max = 160,
+  max = Infinity,
   dupKm = 30,
 ): RvRadar[] {
   const padX = (view.e - view.w) * 0.1;
@@ -76,7 +100,7 @@ export function rvVisible(
   const cy = (view.s + view.n) / 2, cx = (view.w + view.e) / 2;
   const out = list.filter((r) => {
     if (r.source === selected) return true;
-    if (hidden.has(rvRegion(r.country))) return false;
+    if (hidden.has(rvRegion(r.country)) || (hidden.has(RV_UNALIGNED) && r.display === "panel")) return false;
     if (r.lat < s || r.lat > n || !lonIn(r.lon)) return false;
     return !native.some((x) => Math.abs(x.lat - r.lat) < 1 && km(x.lat, x.lon, r.lat, r.lon) < dupKm);
   });

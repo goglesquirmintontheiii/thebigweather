@@ -11,7 +11,7 @@ export function basemapSource(b: string, provider?: string): string | null {
 
 /** which toggle an international radar layer needs */
 export function intlDataSource(id: string): string | null {
-  if (id.startsWith("rainviewer")) return "rainviewer";
+  if (id.startsWith("rainviewer") || id.startsWith("rv_")) return "rainviewer";
   if (id.startsWith("geomet") || id === "eccc" || id.startsWith("eccc")) return "eccc";
   for (const p of ["jma", "dwd", "pagasa", "smn"]) if (id.startsWith(p)) return p;
   return null;
