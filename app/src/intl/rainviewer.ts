@@ -7,10 +7,10 @@ import { signal, effect } from "@preact/signals";
 import * as maplibregl from "maplibre-gl";
 import { api } from "../api";
 import { settings, toast } from "../store";
-import { sites } from "../radar/controller";
 import { intlMap, intlSource, loadIntlSource, selectIntl } from "./radar";
 import { hiddenRegions } from "./sites";
-import { rvRadars, rvVisible, type RvRadar } from "./rvcore";
+import { dsOff } from "../datasrc";
+import { rvList, rvMain, rvRadars, rvStale, rvVisible, type RvRadar } from "./rvcore";
 import "./rainviewer.css";
 
 export { rvRadars, type RvRadar } from "./rvcore";
@@ -45,8 +45,11 @@ export async function selectRv(r: RvRadar) {
   const id = r.source || `rv_${r.id}`;
   busy.value = id;
   try {
-    await loadIntlSource(id);
+    const s = await loadIntlSource(id);
     selectIntl(id);
+    const newest = s.frames[s.frames.length - 1]?.t;
+    const old = newest ? rvStale(newest, Date.now()) : null;
+    if (old) toast(`${r.name || r.id}: latest image is ${old}`, "warn");
   } catch (e: any) {
     toast(`${r.name || r.id}: ${e?.message ?? e}`, "warn");
   } finally {
@@ -75,10 +78,10 @@ let hooked = false;
 effect(() => {
   const m = intlMap.value;
   const on = settings.value.overlays.sites;
-  const list = rvRadars.value;
+  const list = rvList(rvRadars.value, dsOff.value);
   void viewTick.value;
   const w = settings.value.weather;
-  const sel = w.kind === "intl" ? w.id : "";
+  const sel = w.kind === "intl" ? rvMain(list, w.id) : "";
   const wait = busy.value;
   if (!m) return;
   if (!hooked) {
@@ -87,7 +90,8 @@ effect(() => {
   }
   if (on && !loadedAt) loadRvRadars();
   const b = m.getBounds();
-  const shown = on ? rvVisible(list, { w: b.getWest(), s: b.getSouth(), e: b.getEast(), n: b.getNorth() }, sites.peek(), hiddenRegions(), sel) : [];
+  // the list holds no radar Stormiq already has, and every radar in view gets its marker
+  const shown = on ? rvVisible(list, { w: b.getWest(), s: b.getSouth(), e: b.getEast(), n: b.getNorth() }, [], hiddenRegions(), sel, 1000) : [];
   const ids = new Set(shown.map((r) => r.source));
   for (const [id, mk] of markers) if (!ids.has(id)) (mk.remove(), markers.delete(id));
   for (const r of shown) {
@@ -115,6 +119,14 @@ effect(() => {
 
 api.on("connected", () => {
   if (settings.value.overlays.sites) loadRvRadars(true);
+});
+
+// the server lists nothing while the source is off: fetch again once it's back on
+let wasOff = false;
+effect(() => {
+  const off = dsOff.value.has("rainviewer");
+  if (wasOff && !off) loadRvRadars(true);
+  wasOff = off;
 });
 
 (window as any).__tbwRv = { rvRadars, loadRvRadars, selectRv };

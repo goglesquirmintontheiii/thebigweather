@@ -4,7 +4,8 @@
 import { computed, effect } from "@preact/signals";
 import { settings, update } from "../store";
 import { sites, currentSite, type Site } from "../radar/controller";
-import { rvRadars, rvRegion } from "./rvcore";
+import { rvRadars, rvRegion, rvList } from "./rvcore";
+import { dsOff } from "../datasrc";
 
 /** Fields the server adds for non-NEXRAD sites. */
 export type AnySite = Site & { country?: string; region?: string; kind?: string };
@@ -31,7 +32,7 @@ export function noLevel3(s: AnySite | undefined): boolean {
 export const siteRegions = computed<SiteRegion[]>(() => {
   const set = new Set<SiteRegion>();
   for (const s of sites.value as AnySite[]) set.add(siteRegion(s));
-  for (const r of rvRadars.value) set.add(rvRegion(r.country) as SiteRegion); // 0.8.4
+  for (const r of rvList(rvRadars.value, dsOff.value)) set.add(rvRegion(r.country) as SiteRegion); // 0.8.4
   return REGION_ORDER.filter((r) => set.has(r));
 });
 

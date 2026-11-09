@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "preact/hooks";
-import { rvRadars, rvRegion, type RvRadar } from "../../intl/rvcore"; // 0.8.4
+import { rvList, rvMain, rvRadars, rvRegion, type RvRadar } from "../../intl/rvcore"; // 0.8.4
+import { dsOff } from "../../datasrc";
 import { loadRvRadars, selectRv } from "../../intl/rainviewer"; // 0.8.4
 import { settings, update, toast } from "../../store";
 import { sites, tilts, l3Products, L2_MOMENTS, selectSite, currentSite, tableKeyFor, backToLatest, pinned, openLocalFile } from "../../radar/controller";
@@ -49,7 +50,7 @@ function SitePicker() {
   const [q, setQ] = useState("");
   const list = sites.value;
   const center = mapRef.value?.getCenter();
-  const rv = rvRadars.value; // 0.8.4: RainViewer radars list and filter like any other site
+  const rv = rvList(rvRadars.value, dsOff.value); // 0.8.4: RainViewer radars list and filter like any other site
   useEffect(() => void loadRvRadars(), []);
   const shown = useMemo(() => {
     const qq = q.trim().toUpperCase();
@@ -88,7 +89,7 @@ function SitePicker() {
         {shown.map((x) => { const { s, d, rv: rvr } = x; return (
           <button
             key={s.id}
-            class={`site-row ${(rvr ? w.kind === "intl" && w.id === rvr.source : s.id === settings.value.radar.site) ? "on" : ""} ${settings.value.extraSites.includes(s.id) ? "extra" : ""}`}
+            class={`site-row ${(rvr ? w.kind === "intl" && rvMain(rv, w.id) === rvr.source : s.id === settings.value.radar.site) ? "on" : ""} ${settings.value.extraSites.includes(s.id) ? "extra" : ""}`}
             title={rvr ? "Click to view (RainViewer image)" : "Click to view · Ctrl+click to add alongside the current radar"}
             onClick={(e) => (pick(x, e.ctrlKey || e.metaKey), setQ(""))}
           >

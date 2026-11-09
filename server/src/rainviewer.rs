@@ -54,6 +54,9 @@ pub struct Radar {
     /// image extent [w, s, e, n] when known; otherwise a box of `range_km`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<[f64; 4]>,
+    /// 0.8.4: another range of this physical site: the id of its main entry
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub of: String,
 }
 
 /// The bundled site list.
@@ -62,7 +65,7 @@ pub fn seed() -> Vec<Radar> {
         .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
         .filter_map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            if f.len() < 13 {
+            if f.len() < 14 {
                 return None;
             }
             let (lat, lon) = (f[5].parse::<f64>().ok()?, f[6].parse::<f64>().ok()?);
@@ -78,6 +81,7 @@ pub fn seed() -> Vec<Radar> {
                 range_km: f[7].parse().unwrap_or(250.0),
                 display: f[8].to_string(),
                 bounds: (b.len() == 4).then(|| [b[0], b[1], b[2], b[3]]),
+                of: f[13].trim().to_string(),
             })
         })
         .collect()
@@ -154,7 +158,7 @@ pub fn radar_bounds(r: &Radar) -> ([f64; 4], bool) {
 }
 
 /// An `IntlRadar` source (kind "image") for one radar and its frames.
-pub fn source_json(r: &Radar, frames: &[(i64, String)]) -> Value {
+pub fn source_json(r: &Radar, frames: &[(i64, String)], ranges: &[String]) -> Value {
     let (b, approx) = radar_bounds(r);
     let dir = format!("{DATA_BASE}{}/", r.id);
     let fr: Vec<Value> = frames.iter().map(|(t, f)| json!({"t": t, "url": crate::intlradar::proxied(&format!("{dir}{f}"))})).collect();
@@ -167,7 +171,7 @@ pub fn source_json(r: &Radar, frames: &[(i64, String)]) -> Value {
         "site": {"id": r.id, "name": if r.name.is_empty() { &r.id } else { &r.name }, "province": r.state, "lat": r.lat, "lon": r.lon, "range_km": r.range_km},
         "attribution": ATTRIBUTION, "license_note": LICENSE,
         "minzoom": 3, "maxzoom": 11, "bounds": b, "approx_bounds": approx, "step_min": step,
-        "frames": fr, "provider": "rainviewer", "display": r.display,
+        "frames": fr, "provider": "rainviewer", "display": r.display, "ranges": ranges,
     })
 }
 
@@ -291,14 +295,28 @@ impl RainViewer {
         Ok(String::from_utf8_lossy(&b).into_owned())
     }
 
-    /// `GET /api/rainviewer/radars`: the bundled site list (nothing is fetched).
+    /// Every range of a physical site, main entry first (empty when it has only one).
+    fn ranges_of(&self, r: &Radar) -> Vec<String> {
+        let main = if r.of.is_empty() { &r.id } else { &r.of };
+        let mut v: Vec<String> = std::iter::once(main.clone()).chain(self.seed.iter().filter(|x| x.of == *main).map(|x| x.id.clone())).collect();
+        if v.len() < 2 {
+            v.clear();
+        }
+        v
+    }
+
+    /// `GET /api/rainviewer/radars`: one entry per physical site, from the bundled list (nothing is
+    /// fetched; empty when the data source is off).
     pub fn radars(&self) -> Value {
+        let on = crate::datasources::enabled("rainviewer");
         let out: Vec<Value> = self
             .seed
             .iter()
+            .filter(|r| on && r.of.is_empty())
             .map(|r| {
                 let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
                 v["source"] = json!(format!("{PREFIX}{}", r.id));
+                v["ranges"] = json!(self.ranges_of(r));
                 v
             })
             .collect();
@@ -314,9 +332,9 @@ impl RainViewer {
         let r = self.seed.iter().find(|r| r.id.eq_ignore_ascii_case(id)).ok_or_else(|| anyhow!("{id}: unknown radar (not found)"))?;
         let frames = frames_of(&index_entries(&self.text(&format!("{DATA_BASE}{}/", r.id)).await?));
         if frames.is_empty() {
-            bail!("{id}: no radar images right now");
+            bail!("no images published right now");
         }
-        Ok(source_json(r, &frames))
+        Ok(source_json(r, &frames, &self.ranges_of(r)))
     }
 
     /// Composite + satellite sources from weather-maps.json (cached by the caller ≥ 3 min).
@@ -340,8 +358,8 @@ mod tests {
         let s = seed();
         assert!(s.len() > 400, "{}", s.len());
         let mel = s.iter().find(|r| r.id == "AU022").unwrap();
-        assert_eq!((mel.name.as_str(), mel.country.as_str(), mel.range_km, mel.display.as_str()), ("Melbourne", "AU", 256.0, "map"));
-        assert!((mel.lat + 37.852).abs() < 1e-3 && mel.bounds.is_none());
+        assert_eq!((mel.name.as_str(), mel.country.as_str(), mel.range_km, mel.display.as_str()), ("Melbourne (Laverton)", "AU", 256.0, "map"));
+        assert!((mel.lat + 37.85).abs() < 0.02 && mel.bounds.is_none());
         let id = s.iter().find(|r| r.id == "IDAC3").unwrap();
         assert_eq!(id.display, "map");
         assert!(id.bounds.unwrap()[0] < id.lon && id.lon < id.bounds.unwrap()[2], "bbox is [w, s, e, n]");
@@ -349,8 +367,65 @@ mod tests {
         assert_eq!(s.iter().find(|r| r.id == "CN9002B").unwrap().display, "panel");
         // Canada has Stormiq's own ECCC radars; dead directories of the old database are gone
         assert!(!s.iter().any(|r| r.country == "CA" || r.id == "AU02"));
+        // a variant always points at a main entry that exists and is at the same place
+        for v in s.iter().filter(|r| !r.of.is_empty()) {
+            let m = s.iter().find(|r| r.id == v.of).unwrap_or_else(|| panic!("{} -> {}", v.id, v.of));
+            assert!(m.of.is_empty() && km(m.lat, m.lon, v.lat, v.lon) < 26.0, "{}", v.id);
+        }
         assert!(s.iter().all(|r| r.display == "map" || r.display == "panel"));
         assert_eq!(s.iter().map(|r| &r.id).collect::<std::collections::HashSet<_>>().len(), s.len());
+    }
+
+    fn km(a: f64, b: f64, c: f64, d: f64) -> f64 {
+        let x = (d - b).to_radians() * ((a + c) / 2.0).to_radians().cos();
+        (x * x + (c - a).to_radians().powi(2)).sqrt() * 6371.0
+    }
+
+    /// Shipped sites near a radar Stormiq already serves are mistakes unless explained here.
+    /// The OPERA rows named below are in OPERA's site list but not in its open bucket.
+    const NOT_DUPLICATES: &[(&str, &str)] = &[
+        ("ESAM2", "esalm: not in the OPERA bucket"), ("ESAM3", "esalm: not in the OPERA bucket"),
+        ("ESCO2", "escor: not in the OPERA bucket"), ("ESCO3", "escor: not in the OPERA bucket"),
+        ("ESMU2", "esmur: not in the OPERA bucket"), ("ESMU3", "esmur: not in the OPERA bucket"),
+        ("ESPM2", "espma: not in the OPERA bucket"), ("ESPM3", "espma: not in the OPERA bucket"),
+        ("ESSA2", "essan: not in the OPERA bucket"), ("ESSA3", "essan: not in the OPERA bucket"),
+        ("ESVA2", "esval: not in the OPERA bucket"), ("ESVA3", "esval: not in the OPERA bucket"),
+        ("PTFAR", "ptfar: not in the OPERA bucket"), ("PTLIS", "ptlis: not in the OPERA bucket"), ("PTPRT", "ptprt: not in the OPERA bucket"), ("PTPST", "ptpst: not in the OPERA bucket"),
+        ("RSCOMP", "national composite, sited on a Serbian radar OPERA doesn't carry"),
+        ("ILBG2C", "iltlv: not in the OPERA bucket"), ("ILBG2G", "iltlv: not in the OPERA bucket"),
+        ("KRKSN2", "KMA's own Gunsan radar, 17 km from the US radar at Kunsan AB"),
+    ];
+
+    #[test]
+    fn no_duplicates_of_stormiq_radars() {
+        let mut existing: Vec<(String, f64, f64)> = vec![];
+        for s in crate::sites::embedded() {
+            existing.push((s.id, s.lat, s.lon));
+        }
+        for e in crate::intlradar::ECCC_SITES {
+            existing.push((e.0.to_string(), e.3, e.4));
+        }
+        let t: Value = serde_json::from_str(include_str!("radar/odim_sites.json")).unwrap();
+        for o in t["sites"].as_array().unwrap() {
+            if o["status"] == 1 && o.get("rv").is_none() {
+                existing.push((o["id"].as_str().unwrap().to_string(), o["lat"].as_f64().unwrap(), o["lon"].as_f64().unwrap()));
+            }
+        }
+        assert!(existing.len() > 400);
+        let mut bad = vec![];
+        for r in seed() {
+            if NOT_DUPLICATES.iter().any(|(id, _)| *id == r.id) {
+                continue;
+            }
+            if let Some((id, _, _)) = existing.iter().find(|(_, la, lo)| km(r.lat, r.lon, *la, *lo) < 8.0) {
+                bad.push(format!("{} near {id}", r.id));
+            }
+        }
+        assert!(bad.is_empty(), "{bad:?}");
+        // national layers / SMN radars that RainViewer also republishes stay out
+        for id in ["JPCOMP", "TWCOMP3", "PHCOMP7", "MXCA6", "MXCC3", "MXLC6", "MXSA2", "SKKH", "ESBA2"] {
+            assert!(!seed().iter().any(|r| r.id == id), "{id}");
+        }
     }
 
     #[test]
@@ -384,7 +459,7 @@ mod tests {
     #[test]
     fn source_and_composite() {
         let r = seed().into_iter().find(|r| r.id == "AU022").unwrap();
-        let v = source_json(&r, &[(1_794_111_600_000, "a_20261108_120000_0_source.png".into()), (1_794_112_200_000, "a_20261108_121000_0_source.png".into())]);
+        let v = source_json(&r, &[(1_794_111_600_000, "a_20261108_120000_0_source.png".into()), (1_794_112_200_000, "a_20261108_121000_0_source.png".into())], &[]);
         assert_eq!(v["id"], "rv_AU022");
         assert_eq!(v["display"], "map");
         assert_eq!(v["region"], "Oceania");
@@ -395,7 +470,7 @@ mod tests {
         assert!(HOSTS.iter().all(|h| crate::intlradar::allowed(&format!("https://{h}/x"))));
         // a radar without a name still gets one
         let cn = seed().into_iter().find(|r| r.id == "CN9002B").unwrap();
-        assert_eq!(source_json(&cn, &[])["name"], "China radar CN9002B (CN9002B)");
+        assert_eq!(source_json(&cn, &[], &[])["name"], "China radar CN9002B (CN9002B)");
         let maps: Value = serde_json::from_str(MAPS).unwrap();
         let c = composite_sources(&maps).unwrap();
         assert_eq!(c.len(), 2);

@@ -35,6 +35,9 @@ use std::time::{Duration, Instant};
 
 pub const OPERA_BASE: &str = "https://s3.waw3-1.cloudferro.com/openradar-24h";
 pub const FMI_BASE: &str = "https://fmi-opendata-radar-volume-hdf5.s3.amazonaws.com";
+/// 0.8.4: a few radars exist only here (`rv` in the site table: their directory). Read on demand.
+pub const RV_BASE: &str = "https://data.rainviewer.com/images";
+const RV_LIST_TTL: Duration = Duration::from_secs(180);
 /// Countries present in the OPERA bucket when this was written; used until the first listing.
 const OPERA_COUNTRIES: &[&str] = &["BE", "CH", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "HR", "IE", "IS", "LT", "MT", "NL", "NO", "PL", "RO", "SE", "SK"];
 const LIST_TTL: Duration = Duration::from_secs(60);
@@ -45,6 +48,8 @@ const MIN: i64 = 60_000;
 pub enum Src {
     Opera,
     Fmi,
+    /// 0.8.4: radars published only in RainViewer's image tree
+    Rv,
 }
 
 /// 0.8.4: toggle of an ODIM archive.
@@ -52,6 +57,7 @@ fn src_ds(s: Src) -> &'static str {
     match s {
         Src::Opera => "opera",
         Src::Fmi => "fmi",
+        Src::Rv => "rainviewer",
     }
 }
 
@@ -60,12 +66,14 @@ impl Src {
         match self {
             Src::Opera => "opera",
             Src::Fmi => "fmi",
+            Src::Rv => "rv",
         }
     }
     fn parse(s: &str) -> Option<Src> {
         match s {
             "opera" => Some(Src::Opera),
             "fmi" => Some(Src::Fmi),
+            "rv" => Some(Src::Rv),
             _ => None,
         }
     }
@@ -73,12 +81,14 @@ impl Src {
         match self {
             Src::Opera => ("odim-opera", "EUMETNET OPERA radar volumes"),
             Src::Fmi => ("odim-fmi", "FMI Finland radar volumes"),
+            Src::Rv => ("odim-rv", "RainViewer radar volumes"),
         }
     }
     fn base(self) -> &'static str {
         match self {
             Src::Opera => OPERA_BASE,
             Src::Fmi => FMI_BASE,
+            Src::Rv => RV_BASE,
         }
     }
 }
@@ -93,6 +103,9 @@ struct Row {
     elev_m: f64,
     #[serde(default)]
     status: i32,
+    /// 0.8.4: RainViewer directory, for radars OPERA doesn't carry
+    #[serde(default)]
+    rv: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -135,6 +148,15 @@ pub fn parse_opera(key: &str, size: u64) -> Option<FileRef> {
         return None;
     }
     Some(FileRef { key: key.to_string(), size, time_ms: parse_slot(p[1])?, elevs: p[2].to_string(), qtys: p[3].split('_').map(|s| s.to_string()).collect() })
+}
+
+/// 0.8.4: `{DIR}/{DIR}_{YYYYMMDD}_{HHMMSS}_0_source.h5` (one file per volume)
+pub fn parse_rv(key: &str, size: u64) -> Option<FileRef> {
+    let name = key.rsplit('/').next()?;
+    if !name.ends_with("_0_source.h5") {
+        return None;
+    }
+    Some(FileRef { key: key.to_string(), size, time_ms: crate::rainviewer::name_time(name)?, elevs: String::new(), qtys: vec!["PVOL".into()] })
 }
 
 /// `.../{YYYYMMDDHHMM}_{site}_PVOL.h5`
@@ -233,6 +255,8 @@ pub struct OdimService {
     sites: RwLock<Vec<Site>>,
     subdirs: Mutex<HashMap<String, (Instant, Vec<String>)>>,
     lists: Mutex<HashMap<String, DayList>>,
+    /// 0.8.4: RainViewer directory listings (site -> when, files)
+    rv_lists: Mutex<HashMap<String, (Instant, Vec<FileRef>)>>,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
@@ -243,11 +267,11 @@ fn safe_name(key: &str) -> String {
 impl OdimService {
     pub fn new(http: reqwest::Client, health: Arc<Health>, cache_dir: PathBuf) -> Arc<Self> {
         let table: Vec<Row> = serde_json::from_str::<Table>(include_str!("odim_sites.json")).map(|t| t.sites).unwrap_or_default();
-        for s in [Src::Opera, Src::Fmi] {
+        for s in [Src::Opera, Src::Fmi, Src::Rv] {
             let (id, name) = s.health();
             health.register(id, name, s.base());
         }
-        let me = Arc::new(Self { http, health, cache_dir, table, sites: RwLock::new(vec![]), subdirs: Mutex::new(HashMap::new()), lists: Mutex::new(HashMap::new()), locks: Mutex::new(HashMap::new()) });
+        let me = Arc::new(Self { http, health, cache_dir, table, sites: RwLock::new(vec![]), subdirs: Mutex::new(HashMap::new()), lists: Mutex::new(HashMap::new()), rv_lists: Mutex::new(HashMap::new()), locks: Mutex::new(HashMap::new()) });
         let initial: Vec<String> = me.table.iter().filter(|r| r.status == 1 && OPERA_COUNTRIES.contains(&r.country.as_str())).map(|r| r.id.clone()).collect();
         *me.sites.write() = me.build_sites(&initial, &[]);
         me
@@ -257,9 +281,10 @@ impl OdimService {
         let mut out: Vec<Site> = self
             .table
             .iter()
-            .filter(|r| opera.contains(&r.id) || fmi.contains(&r.id))
+            .filter(|r| opera.contains(&r.id) || fmi.contains(&r.id) || r.rv.is_some())
             .map(|r| {
                 let src = match (opera.contains(&r.id), fmi.contains(&r.id) || r.country == "FI") {
+                    _ if r.rv.is_some() => "rainviewer",
                     (true, true) => "opera+fmi",
                     (true, false) => "opera",
                     _ => "fmi",
@@ -285,7 +310,8 @@ impl OdimService {
 
     /// Published ODIM sites.
     pub fn sites(&self) -> Vec<Site> {
-        self.sites.read().clone()
+        let rv_on = crate::datasources::enabled("rainviewer"); // 0.8.4
+        self.sites.read().iter().filter(|s| rv_on || s.source.as_deref() != Some("rainviewer")).cloned().collect()
     }
 
     /// Canonical (lowercase) id if `id` names a European ODIM site.
@@ -377,7 +403,7 @@ impl OdimService {
         let now = Utc::now().timestamp_millis();
         let need_from = from_ms.clamp(day_start, day_end);
         let lk = format!("{}/{site}/{day}", src.id());
-        let ttl = if now > day_end + 2 * 3_600_000 { PAST_LIST_TTL } else { LIST_TTL };
+        let ttl = if src == Src::Rv { RV_LIST_TTL } else if now > day_end + 2 * 3_600_000 { PAST_LIST_TTL } else { LIST_TTL };
         let _g = self.lock(&lk).lock_owned().await;
         let (fresh, cov_from, latest) = {
             let l = self.lists.lock();
@@ -422,7 +448,27 @@ impl OdimService {
         match src {
             Src::Opera => parse_opera(key, size),
             Src::Fmi => parse_fmi(key, size),
+            Src::Rv => parse_rv(key, size),
         }
+    }
+
+    /// 0.8.4: every volume in a RainViewer directory (read on demand, cached 3 min).
+    async fn rv_dir_files(&self, site: &str) -> Result<Vec<FileRef>> {
+        if let Some((t, v)) = self.rv_lists.lock().get(site) {
+            if t.elapsed() < RV_LIST_TTL {
+                return Ok(v.clone());
+            }
+        }
+        let dir = self.row(site).and_then(|r| r.rv.clone()).ok_or_else(|| anyhow!("{site} has no RainViewer directory"))?;
+        crate::datasources::check(RV_BASE)?;
+        let r = self.http.get(format!("{RV_BASE}/{dir}/")).send().await?;
+        if !r.status().is_success() {
+            bail!("rainviewer {dir}: HTTP {}", r.status());
+        }
+        let body = r.text().await?;
+        let files: Vec<FileRef> = crate::rainviewer::index_entries(&body).iter().filter_map(|e| parse_rv(&format!("{dir}/{}", e.name), 0)).collect();
+        self.rv_lists.lock().insert(site.to_string(), (Instant::now(), files.clone()));
+        Ok(files)
     }
 
     async fn list_from(&self, src: Src, site: &str, day: NaiveDate, start_ms: i64, day_start: i64) -> Result<Vec<(String, u64)>> {
@@ -442,6 +488,11 @@ impl OdimService {
                 let sa = start.map(|t| format!("{prefix}{}", t.format("%Y%m%d%H%M")));
                 let v = s3::list_after(&self.http, FMI_BASE, &prefix, sa.as_deref(), 3).await?;
                 out.extend(v.into_iter().map(|o| (o.key, o.size)));
+            }
+            Src::Rv => {
+                let start_day = day.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis();
+                let files = self.rv_dir_files(site).await?;
+                out.extend(files.into_iter().filter(|f| f.time_ms >= start_day && f.time_ms < start_day + 86_400_000).map(|f| (f.key, f.size)));
             }
         }
         Ok(out)
@@ -482,6 +533,14 @@ impl OdimService {
 
     /// Newest `n` volumes.
     pub async fn latest(&self, site: &str, n: usize) -> Result<Vec<VolEntry>> {
+        // 0.8.4: a RainViewer directory holds only its last few volumes, however old they are
+        if self.row(site).map(|r| r.rv.is_some()).unwrap_or(false) {
+            let files = self.rv_dir_files(site).await?;
+            let g = group_files(files, Utc::now().timestamp_millis(), false);
+            let mut out = Self::entries(Src::Rv, site, &g);
+            let k = out.len().saturating_sub(n);
+            return Ok(out.split_off(k));
+        }
         let now = Utc::now().timestamp_millis();
         let span = ((n.max(2) as i64) * 15 * MIN + 20 * MIN).min(2 * 86_400_000);
         let mut out = vec![];
@@ -525,6 +584,9 @@ impl OdimService {
 
     /// Sources to try, in order, for a site (and day start for history requests).
     fn sources_for(&self, site: &str, day_start: Option<i64>) -> Vec<Src> {
+        if self.row(site).map(|r| r.rv.is_some()).unwrap_or(false) {
+            return vec![Src::Rv];
+        }
         let fi = self.row(site).map(|r| r.country == "FI").unwrap_or(false);
         let recent = day_start.map(|t| Utc::now().timestamp_millis() - t < 2 * 86_400_000).unwrap_or(true);
         match (fi, recent) {
@@ -610,6 +672,20 @@ mod tests {
     }
 
     #[test]
+    fn rainviewer_volume_files() {
+        let f = parse_rv("SEORN/SEORN_20261105_082400_0_source.h5", 7).unwrap();
+        assert_eq!((f.key.as_str(), f.size, f.qtys[0].as_str()), ("SEORN/SEORN_20261105_082400_0_source.h5", 7, "PVOL"));
+        assert_eq!(fmt_slot(f.time_ms), "20261105T0824");
+        assert!(parse_rv("SEORN/0_products.json", 1).is_none());
+        // a key built from a listing resolves back to the right source and directory
+        let (src, site, _) = parse_key("odim:rv:seoer:20261105T0820").unwrap();
+        assert_eq!((src, site.as_str()), (Src::Rv, "seoer"));
+        let t: Table = serde_json::from_str(include_str!("odim_sites.json")).unwrap();
+        let rv: Vec<&str> = t.sites.iter().filter_map(|r| r.rv.as_deref()).collect();
+        assert_eq!(rv, vec!["SEORN", "ISX2"]);
+    }
+
+    #[test]
     fn site_table_parses() {
         let t: Table = serde_json::from_str(include_str!("odim_sites.json")).unwrap();
         assert!(t.sites.len() > 150);
@@ -617,6 +693,7 @@ mod tests {
         assert_eq!(d.country, "DE");
         assert!((d.lat - 51.4).abs() < 0.1 && d.elev_m > 0.0 && d.status == 1 && !d.name.is_empty());
         assert!(t.sites.iter().all(|r| r.id.len() == 5));
+        assert!(t.sites.iter().any(|r| r.id == "esgld" && r.status == 1), "renamed Spanish radars are in the table");
     }
 
     #[test]

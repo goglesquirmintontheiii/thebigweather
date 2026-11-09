@@ -1,6 +1,7 @@
 // 0.8.3 / 0.8.4: RainViewer radar markers: view culling, native-site dedupe, region filter, cap (src/intl/rvcore.ts).
 import assert from "node:assert/strict";
-import { rvVisible, rvRegion, type RvRadar } from "../src/intl/rvcore";
+import { rvList, rvMain, rvStale, rvVisible, rvRegion, type RvRadar } from "../src/intl/rvcore";
+import { intlDataSource } from "../src/datasrcCore";
 
 const R = (id: string, lat: number, lon: number, country: string, extra: Partial<RvRadar> = {}): RvRadar => ({ id, source: `rv_${id}`, name: id, country, lat, lon, range_km: 250, ...extra });
 
@@ -36,6 +37,29 @@ export function testNativeDedupeAndHiddenRegions() {
   // one chip hides one region only
   const world = { w: -179, s: -80, e: 179, n: 80 };
   assert.deepEqual(rvVisible(list, world, [], new Set(["OC"])).map((r) => r.id), ["ESMA2"]);
+}
+
+export function testDataSourceToggleAndRegionChips() {
+  // every radar in a region gets a marker with the source on, and none with it off
+  const world = { w: -179, s: -80, e: 179, n: 80 };
+  assert.equal(rvVisible(rvList(list, new Set()), world, [], new Set(), "", 1000).length, list.length);
+  assert.equal(rvVisible(rvList(list, new Set(["rainviewer"])), world, [], new Set(), "", 1000).length, 0);
+  // another source being off changes nothing
+  assert.equal(rvVisible(rvList(list, new Set(["opera"])), world, [], new Set(), "", 1000).length, list.length);
+  assert.deepEqual(rvVisible(list, world, [], new Set(["OC"]), "", 1000).map((r) => r.id), ["ESMA2"]);
+  // single radars and the composite answer to the same toggle
+  assert.equal(intlDataSource("rv_AU022"), "rainviewer");
+  assert.equal(intlDataSource("rainviewer"), "rainviewer");
+}
+
+export function testRangesAndStaleness() {
+  const sites = [R("THSK", 13, 100, "TH", { ranges: ["THSK", "THSK5", "THSK7"] })];
+  assert.equal(rvMain(sites, "rv_THSK5"), "rv_THSK", "a range keeps its site's marker selected");
+  assert.equal(rvMain(sites, "rv_OTHER"), "rv_OTHER");
+  const h = 3_600_000;
+  assert.equal(rvStale(1000 * h, 1001 * h), null);
+  assert.equal(rvStale(1000 * h, 1005 * h), "5 h old");
+  assert.equal(rvStale(1000 * h, 1096 * h), "4 days old");
 }
 
 export function testCapNearestFirst() {

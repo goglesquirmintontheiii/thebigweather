@@ -16,7 +16,8 @@ import { alerts } from "../alerts";
 import { sites, currentSite, selectSite } from "../radar/controller";
 import { siteShown, hiddenRegions, type AnySite } from "../intl/sites";
 import { intlSource, intlSources, groupOf, selectIntl } from "../intl/radar";
-import { rvRadars, rvRegion } from "../intl/rvcore"; // 0.8.4
+import { rvList, rvRadars, rvRegion } from "../intl/rvcore"; // 0.8.4
+import { dsOff } from "../datasrc";
 import { selectRv } from "../intl/rainviewer"; // 0.8.4
 import { radarFamily } from "../alertlist";
 import { openAlertLayerOptions } from "./AlertConfig";
@@ -120,7 +121,7 @@ function nearestRadar(lat: number, lon: number, pane?: number): NearPick[] {
     // 0.8.4: RainViewer radars: every one in the shown regions, not just those already opened
     if (w.id.startsWith("rv_")) {
       const hidden = hiddenRegions();
-      const fam = rvRadars.value.filter((x) => !hidden.has(rvRegion(x.country)));
+      const fam = rvList(rvRadars.value, dsOff.value).filter((x) => !hidden.has(rvRegion(x.country)));
       return nearestN(fam, lat, lon, 3).map((n) => ({ id: n.item.id, label: n.item.name || n.item.id, km: n.km, go: () => void selectRv(n.item) }));
     }
     const src = intlSource(w.id);

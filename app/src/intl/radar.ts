@@ -38,6 +38,8 @@ export interface IntlSource {
   frames_snow?: IntlFrame[];
   /** 0.8.4: RainViewer: "panel" pictures have their own basemap and stay off the map */
   display?: "map" | "panel";
+  /** 0.8.4: every range this site publishes (ids, main one first) */
+  ranges?: string[];
 }
 export interface IntlSite {
   id: string;

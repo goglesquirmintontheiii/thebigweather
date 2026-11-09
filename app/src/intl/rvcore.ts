@@ -17,10 +17,31 @@ export interface RvRadar {
   bounds?: [number, number, number, number];
   /** "map": drawn on the map; "panel": the agency's picture, shown in a floating panel */
   display?: "map" | "panel";
+  /** every range this site publishes (ids, main one first); empty when there's only one */
+  ranges?: string[];
 }
 
 /** Every RainViewer radar the server knows (filled by `loadRvRadars`). */
 export const rvRadars = signal<RvRadar[]>([]);
+
+/** The radars to offer: none while the data source is off. */
+export function rvList(list: RvRadar[], off: ReadonlySet<string>): RvRadar[] {
+  return off.has("rainviewer") ? [] : list;
+}
+
+/** Main source of the site a radar source belongs to ("rv_THSK5" → "rv_THSK"). */
+export function rvMain(list: RvRadar[], source: string): string {
+  if (!source.startsWith("rv_")) return source;
+  const id = source.slice(3);
+  return list.find((r) => r.id === id || r.ranges?.includes(id))?.source ?? source;
+}
+
+/** Short age of the newest image when it's too old to pass for current (null otherwise). */
+export function rvStale(newestMs: number, now: number, limitH = 3): string | null {
+  const h = (now - newestMs) / 3_600_000;
+  if (h < limitH) return null;
+  return h < 48 ? `${Math.round(h)} h old` : `${Math.round(h / 24)} days old`;
+}
 
 const EU = new Set("AT BE BG BY CH CY CZ DE DK EE ES FI FR GB GR HR HU IE IS IT LT LU LV MT NL NO PL PT RO RS SE SI SK UA".split(" "));
 const OC = new Set("AU NZ FJ TO MH PG NC VU WS".split(" "));
