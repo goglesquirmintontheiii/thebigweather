@@ -6,7 +6,21 @@
 // or an external GitHub repo                         { "repo": "owner/name", "ref": "main", "path": "." }
 // Either way the folder holds a plugin.json manifest (see Manifest).
 
-export const DEFAULT_REGISTRY = "https://raw.githubusercontent.com/goglesquirmintontheiii/thebigweather/main/plugins/registry.json";
+/** 0.8.4: the sidebar buttons to draw: all but those of plugins the user hid */
+export function visibleRail<T extends { pid: string }>(rail: T[], plugins: { id: string; railHidden?: boolean }[]): T[] {
+  return rail.filter((b) => !plugins.some((p) => p.id === b.pid && p.railHidden));
+}
+
+/** 0.8.4: what the card menu's "Open" does: every panel the plugin added, or else its first sidebar
+ *  button that isn't a panel's. Nothing: the plugin has no UI to open (or isn't running). */
+export function openTargets<P extends { pid: string }, B extends { pid: string; panel?: string }>(pid: string, panels: P[], rail: B[]): { panels: P[]; button?: B } | null {
+  const own = panels.filter((p) => p.pid === pid);
+  if (own.length) return { panels: own };
+  const button = rail.find((b) => b.pid === pid && !b.panel);
+  return button ? { panels: [], button } : null;
+}
+
+export const DEFAULT_REGISTRY ="https://raw.githubusercontent.com/goglesquirmintontheiii/thebigweather/main/plugins/registry.json";
 
 export interface RegistryEntry {
   /** folder next to the registry (default: id) */

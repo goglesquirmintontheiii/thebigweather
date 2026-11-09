@@ -5,12 +5,13 @@ import { signal } from "@preact/signals";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { createPortal } from "preact/compat";
 import { Puzzle, Search, RefreshCw, Download, Trash2, ChevronLeft, ChevronRight, AlertTriangle, Upload, ClipboardPaste, Link, FolderOpen, Settings2, ExternalLink, Check, CircleArrowUp, Plus, X, GitFork } from "lucide-preact";
-import { ToggleLeft, ToggleRight, Info } from "lucide-preact"; // 0.8.3
+import { ToggleLeft, ToggleRight, Info, Eye, EyeOff } from "lucide-preact"; // 0.8.3
 import { settings, toast, type PluginCfg } from "../store";
 import { CenterModal } from "../ui/CenterModal";
-import { pluginStatus, addPlugin, reloadPlugin, pluginFolder } from "./host";
-import { market, installedMeta, busy, refreshMarket, loadInstalledMeta, install, uninstall, setEnabled, updates, description, registries, setRegistries, type MarketItem, type InstalledMeta } from "./market";
-import { assetUrl, matches, PERMISSIONS, DEFAULT_REGISTRY, cmpVersion, cardBgUrl, type Manifest } from "./marketcore";
+import { winAware } from "../ui/winframe";
+import { pluginStatus, addPlugin, reloadPlugin, pluginFolder, pluginPanels, pluginRail, showPluginPanel } from "./host";
+import { market, installedMeta, busy, refreshMarket, loadInstalledMeta, install, uninstall, setEnabled, setRailHidden, updates, description, registries, setRegistries, type MarketItem, type InstalledMeta } from "./market";
+import { assetUrl, matches, PERMISSIONS, DEFAULT_REGISTRY, cmpVersion, cardBgUrl, openTargets, type Manifest } from "./marketcore";
 import { Markdown } from "./MdView";
 import { firstText, type Resolver } from "./mdparse";
 import "./plugins.css";
@@ -133,13 +134,25 @@ function CardMenu() {
       .then(fn)
       .catch((e) => toast(`${v.name}: ${e?.message ?? e}`, "error", 7000));
   };
-  const n = 2 + (cfg ? 2 : 0) + (v.update || (!cfg && v.item?.manifest) ? 1 : 0);
+  // 0.8.4: Open (the plugin's panels / button) and Show / Hide in panel, for plugins with something to show
+  const target = cfg ? openTargets(cfg.id, pluginPanels.value, pluginRail.value) : null;
+  const hasRail = !!cfg && pluginRail.value.some((b) => b.pid === cfg.id);
+  const open = () => {
+    if (target?.button) return target.button.click();
+    for (const p of target?.panels ?? []) winAware(`f:plg:${p.id}`, () => showPluginPanel(p.id))();
+  };
+  const n = 2 + (cfg ? 2 : 0) + (v.update || (!cfg && v.item?.manifest) ? 1 : 0) + (target ? 1 : 0) + (hasRail ? 1 : 0);
   return createPortal(
     <div class="ctx glass plgm-menu" role="menu" style={{ left: `${Math.min(m.x + 4, window.innerWidth - 210)}px`, top: `${Math.min(m.y + 4, window.innerHeight - 34 * n - 40)}px` }}>
       <div class="ctx-title">
         <b>{v.name}</b>
         {v.m?.version ? ` · v${v.m.version}` : ""}
       </div>
+      {target && (
+        <button role="menuitem" onClick={act(open)}>
+          <ExternalLink size={13} /> Open
+        </button>
+      )}
       {cfg && (
         <button role="menuitem" onClick={act(() => (setEnabled(cfg.id, !cfg.on), toast(`${v.name} ${cfg.on ? "disabled" : "enabled"}`, "info", 1500)))}>
           {cfg.on ? <ToggleRight size={13} /> : <ToggleLeft size={13} />} {cfg.on ? "Disable" : "Enable"}
@@ -158,6 +171,11 @@ function CardMenu() {
       <button role="menuitem" onClick={act(() => openDetail(v))}>
         <Info size={13} /> Details
       </button>
+      {cfg && hasRail && (
+        <button role="menuitem" onClick={act(() => setRailHidden(cfg.id, !cfg.railHidden))}>
+          {cfg.railHidden ? <Eye size={13} /> : <EyeOff size={13} />} {cfg.railHidden ? "Show in panel" : "Hide in panel"}
+        </button>
+      )}
       {cfg && <div class="ctx-sep" />}
       {cfg &&
         (sure ? (

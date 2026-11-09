@@ -1,6 +1,63 @@
 // 0.8.2: MIDI message parsing and mapping maths.
 import assert from "node:assert/strict";
-import { parseMidi, ctlKey, ctlName, relDelta, isPress, contInput, setMapping, removeMapping, searchActions, isRangeCtl, MIDI_DEFAULTS } from "../src/midi/midicore";
+import { parseMidi, ctlKey, ctlName, relDelta, isPress, contInput, setMapping, removeMapping, searchActions, isRangeCtl, midiRole, ContQueue, CC_REPRESS_MS, MIDI_DEFAULTS } from "../src/midi/midicore";
+
+// 0.8.4 (SIQ-437): an action that threw stayed queued, so every later flush threw again before reaching the others
+export function testKnobQueueSurvivesThrowingAction() {
+  const q = new ContQueue();
+  const ran: string[] = [];
+  const errs: string[] = [];
+  let broken = true;
+  const apply = (a: string) => {
+    if (a === "cont:zoom" && broken) throw new Error("map gone");
+    ran.push(a);
+  };
+  q.add("cont:zoom", { abs: 0.5 });
+  q.add("cont:opacity", { abs: 0.5 });
+  q.flush(apply, (a) => errs.push(a));
+  assert.deepEqual(ran, ["cont:opacity"], "the other knob still runs");
+  assert.deepEqual(errs, ["cont:zoom"]);
+  assert.equal(q.size, 0, "nothing stays queued after a failure");
+  // the next messages work again
+  broken = false;
+  ran.length = 0;
+  q.add("cont:zoom", { abs: 0.7 });
+  q.add("cont:opacity", { delta: 1 });
+  q.flush(apply, (a) => errs.push(a));
+  assert.deepEqual(ran, ["cont:zoom", "cont:opacity"]);
+  assert.deepEqual(errs, ["cont:zoom"], "no new error");
+}
+
+export function testKnobQueueCoalesces() {
+  const q = new ContQueue();
+  const seen: any[] = [];
+  q.add("cont:zoom", { delta: 1 });
+  q.add("cont:zoom", { delta: 2 });
+  q.flush((a, p) => seen.push([a, p.delta]), () => {});
+  q.add("cont:frame", { abs: 0.1 });
+  q.add("cont:frame", { abs: 0.9 });
+  q.flush((a, p) => seen.push([a, p.abs]), () => {});
+  assert.deepEqual(seen, [["cont:zoom", 3], ["cont:frame", 0.9]]);
+}
+
+// 0.8.4 (SIQ-437): buttons that send only 127, no release, worked once per control and then went silent
+export function testCcButtonWithoutRelease() {
+  const cc = parseMidi([0xb0, 20, 127])!;
+  assert.ok(isPress(cc, undefined), "first press");
+  assert.ok(!isPress(cc, 127, 5), "repeats while held");
+  assert.ok(isPress(cc, 127, CC_REPRESS_MS), "next press, no release in between");
+  assert.ok(!isPress(parseMidi([0xb0, 20, 100])!, 127, 5000), "a knob moving in the top half isn't a press");
+}
+
+// 0.8.4 (SIQ-437): pop-out windows load the same code; only the main window runs commands
+export function testMidiRole() {
+  assert.equal(midiRole(undefined), "main");
+  assert.equal(midiRole(null), "main");
+  assert.equal(midiRole("win", "p:midi"), "view");
+  assert.equal(midiRole("win", "p:settings"), "none");
+  assert.equal(midiRole("pane"), "none");
+  assert.equal(midiRole("camera"), "none");
+}
 
 export function testParse() {
   assert.deepEqual(parseMidi([0x90, 60, 100]), { kind: "note", ch: 1, num: 60, val: 100, on: true });

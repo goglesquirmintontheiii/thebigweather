@@ -191,7 +191,7 @@ export async function install(it: MarketItem): Promise<void> {
     await idbSet(metaKey(id), meta);
     installedMeta.value = { ...installedMeta.value, [id]: meta };
     const prev = settings.peek().wf6.plugins.find((p) => p.id === id);
-    const cfg: PluginCfg = { id, name: m.name, src: `market:${m.id}`, on: prev ? prev.on : true, market: { pid: m.id, reg: it.reg, version: m.version, base: it.base } };
+    const cfg: PluginCfg = { id, name: m.name, src: `market:${m.id}`, on: prev ? prev.on : true, market: { pid: m.id, reg: it.reg, version: m.version, base: it.base }, ...(prev?.railHidden ? { railHidden: true } : {}) };
     update((s) => {
       const i = s.wf6.plugins.findIndex((p) => p.id === id);
       if (i >= 0) s.wf6.plugins[i] = cfg;
@@ -217,6 +217,15 @@ export const setEnabled = (id: string, on: boolean) =>
   update((s) => {
     const p = s.wf6.plugins.find((x) => x.id === id);
     if (p) p.on = on;
+  });
+
+/** 0.8.4: show / hide a plugin's sidebar button(s) */
+export const setRailHidden = (id: string, hidden: boolean) =>
+  update((s) => {
+    const p = s.wf6.plugins.find((x) => x.id === id);
+    if (!p) return;
+    if (hidden) p.railHidden = true;
+    else delete p.railHidden;
   });
 
 /** marketplace items that are newer than what's installed */

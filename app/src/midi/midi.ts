@@ -7,7 +7,9 @@ import { settings, update, toast } from "../store";
 import { frameIndex, frameCount, playing, stepFrame, FPS_STEPS } from "../anim";
 import { mapRef } from "../map/mapview";
 import { buildItems } from "../ui/CommandPalette";
-import { parseMidi, ctlKey, isCont, isPress, contInput, lerp, MIDI_DEFAULTS, CONT_ACTIONS, EXTRA_ACTIONS, type MidiMsg, type MidiMap, type MidiSettings } from "./midicore";
+import { popoutSpec } from "../popout";
+import { POP_WIN } from "../ui/winframe";
+import { parseMidi, ctlKey, isCont, isPress, contInput, lerp, midiRole, ContQueue, MIDI_DEFAULTS, CONT_ACTIONS, EXTRA_ACTIONS, type MidiMsg, type MidiMap, type MidiSettings } from "./midicore";
 
 export type MidiState = "off" | "asking" | "on" | "unsupported" | "denied";
 export const midiState = signal<MidiState>("off");
@@ -23,6 +25,8 @@ export const midiActivity = signal<Record<string, number>>({});
 /** Learn: waiting for a control (the next one pressed / moved is captured into `learned`) */
 export const learning = signal(false);
 export const learned = signal<{ dev: string; ctl: string; msg: MidiMsg } | null>(null);
+/** 0.8.4: the last control pressed / moved and what it's mapped to (null label = not mapped), shown in the MIDI tab */
+export const midiLast = signal<{ ctl: string; label: string | null } | null>(null);
 
 export const midiCfg = (): MidiSettings => ({ ...MIDI_DEFAULTS, ...(settings.value.midi ?? {}) });
 export function setMidi(fn: (m: MidiSettings) => MidiSettings) {
@@ -32,6 +36,9 @@ export function setMidi(fn: (m: MidiSettings) => MidiSettings) {
 let access: MIDIAccess | null = null;
 const devKey = (i: MIDIInput) => [i.manufacturer, i.name].filter(Boolean).join(" ").trim() || i.id;
 const prevVal = new Map<string, number>();
+const prevAt = new Map<string, number>();
+const role = midiRole(popoutSpec?.kind, POP_WIN);
+let starting = false;
 
 function refresh() {
   if (!access) return (midiInputs.value = []);
@@ -44,10 +51,11 @@ function refresh() {
 }
 
 async function start() {
-  if (access) return;
+  if (access || starting) return; // settings change often: only one request at a time, or every press would run twice
   const nav = navigator as any;
   if (typeof nav.requestMIDIAccess !== "function") return void (midiState.value = "unsupported");
   midiState.value = "asking";
+  starting = true;
   try {
     access = await nav.requestMIDIAccess({ sysex: false });
     if (!midiCfg().on) return stop(); // turned off while asking
@@ -59,6 +67,8 @@ async function start() {
     access = null;
     midiState.value = "denied";
     midiError.value = e?.message ?? String(e);
+  } finally {
+    starting = false;
   }
 }
 function stop() {
@@ -74,7 +84,7 @@ function stop() {
 
 effect(() => {
   const on = !!settings.value.midi?.on;
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined" || role === "none") return;
   if (on) void start();
   else stop();
 });
@@ -87,6 +97,9 @@ function onMessage(dev: string, data: Uint8Array | null) {
   const pk = `${dev}|${key}`;
   const prev = prevVal.get(pk);
   prevVal.set(pk, m.val);
+  const now = Date.now();
+  const gap = now - (prevAt.get(pk) ?? now);
+  prevAt.set(pk, now);
   if (learning.peek()) {
     if (m.kind === "note" && !m.on) return; // wait for a press, not the release
     learning.value = false;
@@ -95,9 +108,10 @@ function onMessage(dev: string, data: Uint8Array | null) {
   }
   const maps = settings.peek().midi?.devices?.[dev];
   const map = maps?.find((x) => x.ctl === key);
-  if (!map) return;
+  if (m.on) midiLast.value = { ctl: key, label: map?.label ?? null };
+  if (!map || role !== "main") return;
   if (isCont(map.action)) return queueCont(map, m);
-  if (isPress(m, prev)) runAction(map);
+  if (isPress(m, prev, gap)) runAction(map);
 }
 
 // ---------- button actions ----------
@@ -121,21 +135,23 @@ export function runAction(map: Pick<MidiMap, "action" | "label">) {
 }
 
 // ---------- knob / fader actions (coalesced: one update per ~16 ms) ----------
-const pending = new Map<string, { abs?: number; delta: number }>();
+const queue = new ContQueue();
 let raf = 0;
+let lastErr = 0;
 function queueCont(map: MidiMap, m: MidiMsg) {
   const v = contInput(m, map);
   if (v.abs === undefined && !v.delta) return;
-  const p = pending.get(map.action) ?? { delta: 0 };
-  if (v.abs !== undefined) (p.abs = v.abs), (p.delta = 0);
-  else p.delta += v.delta ?? 0;
-  pending.set(map.action, p);
+  queue.add(map.action, v);
   raf ||= window.setTimeout(flush, 16); // not rAF: it stalls while the map renders slowly / is hidden
 }
 function flush() {
   raf = 0;
-  for (const [a, p] of pending) applyCont(a, p);
-  pending.clear();
+  queue.flush(applyCont, (a, e: any) => {
+    console.warn(`MIDI: ${a} failed`, e);
+    if (Date.now() - lastErr < 3000) return; // a knob sends many messages: one toast
+    lastErr = Date.now();
+    toast(`MIDI: ${e?.message ?? e}`, "error");
+  });
 }
 export function applyCont(a: string, p: { abs?: number; delta: number }) {
   const map = mapRef.value;

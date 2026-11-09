@@ -714,13 +714,17 @@ async fn radar_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<
 // the reason on the recording ("Retrying (n/5): …"); a recording that ends with nothing recorded
 // becomes an error instead of an empty "done" recording, and empty pieces are deleted.
 
-/// yt-dlp format choice: a single (audio+video) stream, HLS first (live streams), ≤ 1080p.
-pub const YT_FORMAT: &str = "best[protocol^=m3u8][height<=1080]/best[protocol^=m3u8]/best[height<=1080]/best";
+/// yt-dlp format choice, ≤ 1080p: a single (audio+video) HLS stream, then separate HLS video + audio
+/// (0.8.4: YouTube live now often lists only those, and `best` alone failed with "Requested format
+/// is not available"), then the same for ordinary videos, and video alone as the last resort.
+pub const YT_FORMAT: &str = "best[protocol^=m3u8][height<=1080]/bv*[protocol^=m3u8][height<=1080]+ba[protocol^=m3u8]/bv*[protocol^=m3u8]+ba/best[protocol^=m3u8]/bv*[height<=1080]+ba/best[height<=1080]/best/bv*[height<=1080]";
 
 /// A YouTube stream resolved by yt-dlp.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct YtStream {
     pub url: String,
+    /// separate audio stream (split formats); `url` is then the video
+    pub audio: Option<String>,
     pub headers: Vec<(String, String)>,
     pub is_live: bool,
     pub live_status: String,
@@ -804,17 +808,25 @@ pub fn ytdlp_pipe_args(url: &str, ffmpeg_loc: &[String]) -> Vec<String> {
 pub fn parse_resolve(out: &str) -> Result<YtStream> {
     let line = out.lines().rev().map(str::trim).find(|l| l.starts_with('{')).ok_or_else(|| anyhow!("yt-dlp printed no stream info"))?;
     let v: Value = serde_json::from_str(line).map_err(|e| anyhow!("yt-dlp output: {e}"))?;
-    let url = v["url"].as_str().unwrap_or("").to_string();
+    // split formats ("311+234"): no top-level url, one entry per stream in requested_formats
+    let req = v["requested_formats"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    // (a live audio stream's acodec is often null, so only vcodec tells them apart)
+    let has_video = |f: &Value| !matches!(f["vcodec"].as_str(), None | Some("none"));
+    let video = req.iter().find(|f| has_video(f)).or(req.first());
+    let audio = req.iter().find(|f| !has_video(f) && !video.is_some_and(|x| std::ptr::eq(x, *f))).and_then(|f| f["url"].as_str()).filter(|u| u.starts_with("http")).map(str::to_string);
+    let url = v["url"].as_str().or_else(|| video.and_then(|f| f["url"].as_str())).unwrap_or("").to_string();
     if !url.starts_with("http") {
-        bail!("yt-dlp found no single stream (format {})", v["format_id"].as_str().unwrap_or("?"));
+        bail!("yt-dlp found no stream (format {})", v["format_id"].as_str().unwrap_or("?"));
     }
-    let headers = v["http_headers"]
+    let header_src = if v["http_headers"].is_object() { &v["http_headers"] } else { video.map(|f| &f["http_headers"]).unwrap_or(&Value::Null) };
+    let headers = header_src
         .as_object()
         .map(|m| m.iter().filter_map(|(k, x)| Some((k.clone(), x.as_str()?.to_string()))).filter(|(k, x)| !k.contains(['\r', '\n', ':']) && !x.contains(['\r', '\n'])).collect())
         .unwrap_or_default();
     let live_status = v["live_status"].as_str().unwrap_or("").to_string();
-    let format = format!("{} {}", v["format_id"].as_str().unwrap_or("?"), v["height"].as_i64().map(|h| format!("{h}p")).unwrap_or_default()).trim().to_string();
-    Ok(YtStream { url, headers, is_live: v["is_live"].as_bool().unwrap_or(false) || live_status == "is_live", live_status, protocol: v["protocol"].as_str().unwrap_or("").to_string(), format })
+    let height = v["height"].as_i64().or_else(|| video.and_then(|f| f["height"].as_i64()));
+    let format = format!("{} {}", v["format_id"].as_str().unwrap_or("?"), height.map(|h| format!("{h}p")).unwrap_or_default()).trim().to_string();
+    Ok(YtStream { url, audio, headers, is_live: v["is_live"].as_bool().unwrap_or(false) || live_status == "is_live", live_status, protocol: v["protocol"].as_str().unwrap_or("").to_string(), format })
 }
 
 /// ffmpeg input options for HTTP headers (User-Agent separately, the rest as `-headers`).
@@ -832,7 +844,7 @@ pub fn ffmpeg_header_args(headers: &[(String, String)]) -> Vec<String> {
 
 /// Where ffmpeg reads a piece from.
 pub enum PieceInput<'a> {
-    Url { url: &'a str, headers: &'a [(String, String)], hls: bool },
+    Url { url: &'a str, audio: Option<&'a str>, headers: &'a [(String, String)], hls: bool },
     Pipe,
 }
 
@@ -842,13 +854,19 @@ pub enum PieceInput<'a> {
 pub fn ffmpeg_piece_args(input: &PieceInput, secs: Option<i64>, out: &str, lenient_hls: bool) -> Vec<String> {
     let mut a = strs(["-hide_banner", "-nostats", "-loglevel", "warning", "-y"]);
     match input {
-        PieceInput::Url { url, headers, hls } => {
-            a.extend(strs(["-rw_timeout", "15000000"]));
-            a.extend(ffmpeg_header_args(headers));
-            if *hls && lenient_hls {
-                a.extend(strs(["-extension_picky", "0"]));
+        PieceInput::Url { url, audio, headers, hls } => {
+            // input options apply to the next -i only, so a separate audio stream repeats them
+            for u in std::iter::once(*url).chain(*audio) {
+                a.extend(strs(["-rw_timeout", "15000000"]));
+                a.extend(ffmpeg_header_args(headers));
+                if *hls && lenient_hls {
+                    a.extend(strs(["-extension_picky", "0"]));
+                }
+                a.extend(["-i".to_string(), u.to_string()]);
             }
-            a.extend(["-i".to_string(), url.to_string()]);
+            if audio.is_some() {
+                a.extend(strs(["-map", "0:v:0", "-map", "1:a:0"]));
+            }
         }
         PieceInput::Pipe => a.extend(strs(["-i", "pipe:0"])),
     }
@@ -1134,9 +1152,9 @@ async fn video_worker(st: &Arc<AppState>, r: &Rec, stop: &AtomicBool) -> Result<
         let part = dir.join(format!("{name}.part"));
         let part_s = part.to_string_lossy().to_string();
         let input = match (&stream, yt) {
-            (Some(s), _) => PieceInput::Url { url: &s.url, headers: &s.headers, hls: s.protocol.starts_with("m3u8") },
+            (Some(s), _) => PieceInput::Url { url: &s.url, audio: s.audio.as_deref(), headers: &s.headers, hls: s.protocol.split('+').all(|p| p.starts_with("m3u8")) },
             (None, true) => PieceInput::Pipe,
-            (None, false) => PieceInput::Url { url: &c.url, headers: &[], hls: true },
+            (None, false) => PieceInput::Url { url: &c.url, audio: None, headers: &[], hls: true },
         };
         let piped = matches!(input, PieceInput::Pipe);
         let args = ffmpeg_piece_args(&input, secs, &part_s, lenient);
@@ -1547,7 +1565,12 @@ mod tests {
 
         // ffmpeg: copy into fragmented MP4 (playable when cut short), never +faststart
         let h = vec![("User-Agent".to_string(), "UA/1".to_string()), ("Accept".to_string(), "*/*".to_string())];
-        let f = ffmpeg_piece_args(&PieceInput::Url { url: "https://m/x.m3u8", headers: &h, hls: true }, Some(600), "/r/1.mp4.part", true);
+        // 0.8.4: separate HLS video + audio: both inputs get their options, one track of each is kept
+        let f = ffmpeg_piece_args(&PieceInput::Url { url: "https://m/v.m3u8", audio: Some("https://m/a.m3u8"), headers: &h, hls: true }, Some(60), "o", true);
+        let fj = f.join(" ");
+        assert!(fj.contains("-extension_picky 0 -i https://m/v.m3u8 -rw_timeout 15000000 -user_agent UA/1"), "{fj}");
+        assert!(fj.contains("-extension_picky 0 -i https://m/a.m3u8 -map 0:v:0 -map 1:a:0 -c copy -t 60"), "{fj}");
+        let f = ffmpeg_piece_args(&PieceInput::Url { url: "https://m/x.m3u8", audio: None, headers: &h, hls: true }, Some(600), "/r/1.mp4.part", true);
         let fj = f.join(" ");
         assert!(fj.contains("-user_agent UA/1"));
         assert!(fj.contains("-headers Accept: */*\r\n"));
@@ -1556,7 +1579,8 @@ mod tests {
         assert!(!fj.contains("faststart") && !fj.contains("empty_moov"));
         // -headers / -user_agent are input options: before -i
         assert!(f.iter().position(|x| x == "-headers").unwrap() < f.iter().position(|x| x == "-i").unwrap());
-        let f = ffmpeg_piece_args(&PieceInput::Url { url: "https://m/x.m3u8", headers: &[], hls: true }, None, "o", false);
+        assert!(!f.contains(&"-map".to_string()), "a single stream keeps ffmpeg's default mapping");
+        let f = ffmpeg_piece_args(&PieceInput::Url { url: "https://m/x.m3u8", audio: None, headers: &[], hls: true }, None, "o", false);
         assert!(!f.contains(&"-extension_picky".to_string()) && !f.contains(&"-t".to_string()) && !f.contains(&"-headers".to_string()));
         let f = ffmpeg_piece_args(&PieceInput::Pipe, Some(90), "o", true);
         assert!(f.join(" ").contains("-i pipe:0 -c copy -t 90"));
@@ -1575,6 +1599,17 @@ mod tests {
         assert!(!vod.is_live);
         assert_eq!(vod.live_status, "was_live");
         assert!(parse_resolve(r#"{"format_id":"137+140","requested_formats":[]}"#).is_err());
+        // 0.8.4: YouTube live with only separate video / audio HLS (real yt-dlp 2026.10 output shape)
+        let split = r#"{"format_id":"311+234","protocol":"m3u8_native+m3u8_native","is_live":true,"live_status":"is_live","requested_formats":[{"format_id":"311","url":"https://m/v.m3u8","vcodec":"avc1.4D4020","acodec":"none","height":720,"http_headers":{"User-Agent":"UA/1"}},{"format_id":"234","url":"https://m/a.m3u8","vcodec":"none","acodec":null,"http_headers":{"User-Agent":"UA/1"}}]}"#;
+        let s = parse_resolve(split).unwrap();
+        assert_eq!(s.url, "https://m/v.m3u8");
+        assert_eq!(s.audio.as_deref(), Some("https://m/a.m3u8"), "acodec is null in real output");
+        assert_eq!(s.format, "311+234 720p");
+        assert_eq!(s.headers, vec![("User-Agent".to_string(), "UA/1".to_string())]);
+        assert!(s.is_live);
+        // a single stream has no separate audio
+        assert_eq!(parse_resolve(r#"{"url":"https://m/x.m3u8","format_id":"95"}"#).unwrap().audio, None);
+        assert!(YT_FORMAT.contains("+ba[protocol^=m3u8]/"), "live streams with separate video / audio");
         assert!(parse_resolve("").is_err());
         assert!(parse_resolve("not json {").is_err());
     }
