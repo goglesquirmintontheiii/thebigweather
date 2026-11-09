@@ -14,6 +14,7 @@ import { popoutSpec } from "./popout";
 import { mapRef } from "./map/mapview";
 import { frameIndex, playing, historyStart, historyEnd, setHistory } from "./anim";
 import { activeFrames } from "./active";
+import { siteLinkOn } from "./radar/insp083"; // 0.8.4
 
 export type WinKind = "main" | "map" | "pane";
 export const myKind: WinKind = popoutSpec?.kind === "pane" ? "pane" : popoutSpec?.kind === "map" ? "map" : "main";
@@ -37,6 +38,8 @@ export const peers = computed(() => peerList.value.length);
 export const linkedTime = signal(0);
 /** the map this window links (pane windows set their pane's map) */
 export const linkMap = signal<MLMap | null>(null);
+/** 0.8.4: pane windows: the main pane shows a single-site radar */
+export const mainIsRadar = signal(true);
 const theMap = () => linkMap.peek() ?? mapRef.peek();
 
 /* legacy API (one link switch for everything) */
@@ -58,16 +61,27 @@ type Msg =
   | { t: "play"; on: boolean }
   | { t: "hist"; start: number | null; end: number | null }
   | { t: "site"; site: string; extra: string[] }
+  | { t: "mw"; radar: boolean }
   | { t: "layers"; ovl: any; overlays: any };
 type Env = Msg & { from: string; kind: WinKind; title: string; lk: PaneLink };
 
 /** does this window send category c? */
-function wants(c: keyof PaneLink): boolean {
+function wants(c: "pos" | "time" | "layers"): boolean {
   if (myKind === "main") return peerList.peek().some((p) => p.lk[c]);
   return myLink.peek()[c];
 }
+/** 0.8.4: does this window send its radar site? */
+function wantsSite(): boolean {
+  if (myKind === "main") return peerList.peek().some((p) => siteLinkOn(p.kind, p.lk));
+  return siteLinkOn(myKind, myLink.peek());
+}
+/** 0.8.4: should this window apply a radar site from that sender? */
+function acceptsSite(m: Env): boolean {
+  if (myKind === "main") return siteLinkOn(m.kind, m.lk);
+  return siteLinkOn(myKind, myLink.peek()) && (m.kind === "main" || siteLinkOn(m.kind, m.lk));
+}
 /** should this window apply category c from that sender? */
-function accepts(c: keyof PaneLink, m: Env): boolean {
+function accepts(c: "pos" | "time" | "layers", m: Env): boolean {
   if (myKind === "main") return !!m.lk?.[c];
   return myLink.peek()[c] && (m.kind === "main" || !!m.lk?.[c]);
 }
@@ -112,8 +126,13 @@ function sendLayers() {
 function sendHist() {
   if (myKind !== "pane") send({ t: "hist", start: historyStart.peek(), end: historyEnd.peek() });
 }
+function sendMainRadar() {
+  if (myKind === "main") send({ t: "mw", radar: settings.peek().weather.kind === "radar" });
+}
 function sendAll() {
-  if (wants("pos")) (sendView(), sendSite());
+  sendMainRadar();
+  if (wants("pos")) sendView();
+  if (wantsSite()) sendSite();
   if (wants("time")) (sendHist(), sendTime());
   if (wants("layers")) sendLayers();
 }
@@ -121,8 +140,8 @@ function sendAll() {
 /** Secondary window: set what it follows. Main window: set it for every other window. */
 export function setLink(on: boolean, layers = linkLayers.peek()) {
   const lk = { pos: on, time: on, layers: on && layers };
-  if (myKind === "main") for (const p of peerList.peek()) setPeerLink(p.id, lk);
-  else setMyLink(lk);
+  if (myKind === "main") for (const p of peerList.peek()) setPeerLink(p.id, { ...p.lk, ...lk });
+  else setMyLink({ ...myLink.peek(), ...lk });
 }
 export function setMyLink(lk: PaneLink) {
   myLink.value = { ...lk };
@@ -189,8 +208,11 @@ function onMsg(m: Env) {
         if (lastHist !== histSig()) setHistory(m.start, m.end);
         break;
       }
+      case "mw":
+        if (m.kind === "main") mainIsRadar.value = m.radar;
+        break;
       case "site": {
-        if (!accepts("pos", m)) break;
+        if (!acceptsSite(m)) break;
         lastSite = JSON.stringify([m.site, m.extra]);
         if (lastSite !== siteSig())
           update((s) => {
@@ -268,7 +290,15 @@ if (ch) {
     const sig = siteSig();
     if (sig === lastSite) return;
     lastSite = sig;
-    if (wants("pos") && !applying) sendSite();
+    if (wantsSite() && !applying) sendSite();
+  });
+  // 0.8.4: pane windows grey out their radar link when the main pane isn't showing a radar
+  let lastRadar: boolean | null = null;
+  effect(() => {
+    const on = settings.value.weather.kind === "radar";
+    if (on === lastRadar) return;
+    lastRadar = on;
+    sendMainRadar();
   });
   // overlay layers
   effect(() => {

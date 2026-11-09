@@ -51,6 +51,7 @@ import { pluginPanels, pluginLayers, pluginCommands, pluginSettings, pluginStatu
 import { market, installedMeta, loadInstalledMeta, refreshMarket, setEnabled } from "../plugins/market";
 import { pluginDetail, pluginsTab } from "../plugins/PluginsPanel";
 import { PanelsTopLeft } from "lucide-preact"; // 0.8.3: Workspaces icon
+import { popoutSpec } from "../popout"; // 0.8.4
 
 export const paletteOpen = signal(false);
 const paletteQuery = signal("");
@@ -442,7 +443,9 @@ function Palette() {
     close();
     setTimeout(() => {
       try {
-        it.run();
+        // 0.8.4: a pane window shows the palette but its commands act on the main window (winkeys.ts); the shortcuts list stays here
+        if (popoutSpec?.kind === "pane" && it.id !== "keys") window.dispatchEvent(new CustomEvent("tbw-palette-run", { detail: it.id }));
+        else it.run();
       } catch (e: any) {
         toast(e.message ?? String(e), "error");
       }

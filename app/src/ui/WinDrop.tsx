@@ -19,7 +19,11 @@ import { myLink } from "../linkwin";
 
 type DockMsg =
   | { t: "drop"; from: string; id: string; arg: any; x: number; y: number; cw: number; any?: boolean }
-  | { t: "docked"; to: string };
+  | { t: "docked"; to: string }
+  /* 0.8.4: an HTML drag-and-drop started in a pop-out (Linux grip) */
+  | { t: "dragstart"; from: string; id: string }
+  | { t: "dragend"; from: string }
+  | { t: "dropat"; to: string; x: number; y: number };
 
 const tbw = () => (window as any).tbw as any;
 const isMain = !popoutSpec;
@@ -161,7 +165,44 @@ function Overlay() {
 const box = (r: Rect) => ({ left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
 
 if (isMain && ch) {
-  ch.onmessage = (e) => e.data?.t === "drop" && onDrop(e.data);
+  // 0.8.4: the pop-out's grip started a real drag-and-drop, so the OS delivers it to this window with
+  // its position even where window positions are unknown (Wayland)
+  let dragFrom: { from: string; id: string } | null = null;
+  ch.onmessage = (e) => {
+    if (e.data?.t === "drop") onDrop(e.data);
+    else if (e.data?.t === "dragstart") dragFrom = { from: e.data.from, id: e.data.id };
+    else if (e.data?.t === "dragend" && e.data.from === dragFrom?.from) (dragFrom = null), (over.value = null);
+  };
+  window.addEventListener(
+    "dragover",
+    (e) => {
+      if (!dragFrom) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+      over.value = { id: dragFrom.id, x: e.clientX, y: e.clientY };
+    },
+    true,
+  );
+  window.addEventListener(
+    "dragleave",
+    (e) => {
+      if (dragFrom && !e.relatedTarget) over.value = null;
+    },
+    true,
+  );
+  window.addEventListener(
+    "drop",
+    (e) => {
+      if (!dragFrom) return;
+      e.preventDefault();
+      e.stopPropagation();
+      over.value = null;
+      post({ t: "dropat", to: dragFrom.from, x: e.clientX, y: e.clientY });
+      dragFrom = null;
+    },
+    true,
+  );
   try {
     tbw()?.win?.onDrag?.((v: { phase: string; id: string; x: number; y: number; cw: number }) => {
       if (v?.phase !== "over") return void (over.value = null);
@@ -208,7 +249,15 @@ if (!isMain && ch) {
   if (isPaneWin) window.addEventListener("tbw-dock-pane", dockPaneWindow); // the pane's Dock back button (Panes.tsx)
   ch.onmessage = (e) => {
     if (e.data?.t === "docked" && e.data.to === me) osCtl("close");
+    else if (e.data?.t === "dropat" && e.data.to === me) sendDrop({ x: e.data.x, y: e.data.y, cw: 0 }); // 0.8.4: in main-window px already
   };
+  // 0.8.4: the grip (winframe.tsx)
+  const dragId = () => (isPaneWin ? "pane" : POP_WIN);
+  window.addEventListener("tbw-dock-drag-start", () => {
+    const id = dragId();
+    if (id) post({ t: "dragstart", from: me, id });
+  });
+  window.addEventListener("tbw-dock-drag-end", () => post({ t: "dragend", from: me }));
   try {
     tbw()?.win?.onDrop?.((v: { x: number; y: number; cw: number }) => sendDrop(v));
   } catch {

@@ -8,7 +8,9 @@
 import { popoutSpec } from "../popout";
 import { IN_OS_WIN, POP_WIN } from "./winframe";
 import { paneKey } from "./hotkeys";
-import { shouldForward, raisesMain, paneWinOwnKey, type KeyMsg } from "./wincore";
+import { shouldForward, raisesMain, paneWinOwnKey, paneWinMenuKey, type KeyMsg } from "./wincore";
+import { shortcutsOpen } from "../keybinds";
+import { paletteOpen, openPalette, buildItems } from "./CommandPalette";
 import { tool } from "../store";
 import { togglePane3D } from "./View3D";
 
@@ -19,6 +21,15 @@ const ch = typeof BroadcastChannel !== "undefined" && (isMain || IN_OS_WIN || is
 if (ch && isMain) {
   // replay the key here as if it was pressed in the main window
   ch.onmessage = (e) => {
+    // 0.8.4: a command chosen in a pane window's palette
+    if (e.data?.t === "cmd") {
+      try {
+        buildItems().find((i) => i.id === e.data.id)?.run();
+      } catch (err) {
+        console.warn("palette command", err);
+      }
+      return;
+    }
     const m = e.data as KeyMsg;
     if (m?.t !== "key" || typeof m.key !== "string") return;
     const ev = new KeyboardEvent("keydown", { key: m.key, code: m.code, ctrlKey: m.ctrlKey, shiftKey: m.shiftKey, altKey: m.altKey, metaKey: m.metaKey, repeat: m.repeat, bubbles: true, cancelable: true });
@@ -33,6 +44,20 @@ if (ch && isMain) {
     const button = !!t?.closest?.("button, a, [role=button], [role=menuitem], [role=option], [role=tab], [role=radio], [role=checkbox], [role=switch]");
     if (!shouldForward(e, { field, button })) return;
     if (isPaneWin && !field && paneKey(e, 1)) return;
+    // 0.8.4: the palette and the shortcuts list open here, in this window
+    if (isPaneWin) {
+      const menu = paneWinMenuKey(e);
+      if (menu === "palette") {
+        e.preventDefault();
+        if (!paletteOpen.peek()) openPalette();
+        return;
+      }
+      if (menu === "keys") {
+        e.preventDefault();
+        shortcutsOpen.value = !shortcutsOpen.peek();
+        return;
+      }
+    }
     // integration 0.8.3: the popped info panel steps its own items with [ ] (AlertDetail.tsx; details are synced,
     // so passing them on as well stepped twice)
     if (POP_WIN === "a:detail" && (e.key === "[" || e.key === "]")) return;
@@ -56,5 +81,14 @@ if (ch && isMain) {
       } catch {
         /* browser */
       }
+  });
+  // 0.8.4: run what was picked in this window's palette in the main window
+  window.addEventListener("tbw-palette-run", (e) => {
+    ch.postMessage({ t: "cmd", id: (e as CustomEvent<string>).detail });
+    try {
+      (window as any).tbw?.win?.focusMain?.();
+    } catch {
+      /* browser */
+    }
   });
 }

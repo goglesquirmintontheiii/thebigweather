@@ -11,9 +11,10 @@ import { signal } from "@preact/signals";
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 import { popoutSpec, popout, canPopout, type PopoutSpec } from "../popout";
+import { GripHorizontal } from "lucide-preact"; // 0.8.4
 import { settings } from "../store";
 import { perf } from "../perf";
-import { raise, topOf, fitScale } from "./wincore";
+import { raise, topOf, fitScale, statsTier, STATS_NAT_W } from "./wincore";
 
 /* ---------- pop-out OS windows ---------- */
 
@@ -62,7 +63,7 @@ if (IN_OS_WIN && POP_WIN === "s:stats" && typeof ResizeObserver !== "undefined")
     st.classList.remove("wf-measure");
     const availH = window.innerHeight - (head?.offsetHeight ?? 0) - 8;
     // the panels are laid out for ~280 px; wider windows scale them up, height permitting
-    const f = String(fitScale(window.innerWidth, availH, 280, natH));
+    const f = String(fitScale(window.innerWidth, availH, STATS_NAT_W[statsTier(window.innerWidth, window.innerHeight)], natH));
     if (f !== last) document.documentElement.style.setProperty("--wf-fit", (last = f));
   };
   const soon = () => raf || (raf = requestAnimationFrame(fit));
@@ -284,6 +285,31 @@ export interface WinButtonsProps {
 }
 const stop = (e: Event) => e.stopPropagation();
 
+/** 0.8.4: on Linux the compositor doesn't tell a window where it is being dragged (Wayland), so a
+ * grip starts a real drag-and-drop instead: the main window sees it arrive and shows the dock spot
+ * (WinDrop.tsx). */
+const DOCK_GRIP = typeof navigator !== "undefined" && /Linux/.test(navigator.userAgent) && !!popoutSpec;
+export function DockGrip({ cls }: { cls: string }) {
+  if (!DOCK_GRIP) return null;
+  return (
+    <span
+      class={`wd-grip ${cls}`}
+      draggable
+      role="button"
+      title="Drag onto the main window to dock"
+      aria-label="Drag onto the main window to dock"
+      onDragStart={(e) => {
+        e.dataTransfer?.setData("text/plain", "stormiq-dock");
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+        window.dispatchEvent(new Event("tbw-dock-drag-start"));
+      }}
+      onDragEnd={() => window.dispatchEvent(new Event("tbw-dock-drag-end"))}
+    >
+      <GripHorizontal size={12} />
+    </span>
+  );
+}
+
 export function WinButtons({ onClose, onMin, onZoom, zoomed, onPop, os, closeTitle }: WinButtonsProps) {
   const zoomedNow = os ? osMax.value : !!zoomed;
   const min = os ? () => osCtl("min") : onMin;
@@ -326,6 +352,7 @@ export function WinButtons({ onClose, onMin, onZoom, zoomed, onPop, os, closeTit
             {os ? G_DOCK : G_POP}
           </button>
         )}
+        {os && POP_WIN && <DockGrip cls="wf-l wf-dockgrip" /* 0.8.4 */ />}
       </span>
     </div>
   );

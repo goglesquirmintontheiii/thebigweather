@@ -4,6 +4,7 @@
 // 0.8.3 3d: one Mode3D per map, so any pane can be in 3D too (R40); volumes load with progress, a
 // timeout and Retry (R43); while a volume loads the 2D product is shown as a surface right away.
 
+import { flatten2D } from "../map/pitchpick"; // 0.8.4
 import { signal, effect, computed, untracked, type ReadonlySignal, type Signal } from "@preact/signals";
 import type { Map as MLMap, MapMouseEvent } from "maplibre-gl";
 import { RotateCcw, Loader2, ChevronUp, ChevronDown, RotateCw, Plus, Minus, Move3D, RefreshCw, X } from "lucide-preact";
@@ -397,6 +398,8 @@ export class Mode3D {
   private inflight: { url: string; ctl: AbortController; prefetch: boolean } | null = null;
   private queued: string | null = null;
   private saved: { pitch: number; bearing: number; maxPitch: number; rotate: boolean } | null = null;
+  /** 0.8.4: what `saved` was while the camera eases back to 2D (3D switched on again meanwhile) */
+  private leaving: { pitch: number; bearing: number; maxPitch: number; rotate: boolean } | null = null;
   private token = 0;
   private aimPending = false;
   private overlay: HTMLDivElement | null = null;
@@ -644,7 +647,8 @@ export class Mode3D {
 
   private enter(map: MLMap) {
     const token = ++this.token;
-    this.saved ??= { pitch: map.getPitch(), bearing: map.getBearing(), maxPitch: map.getMaxPitch(), rotate: map.dragRotate.isEnabled() };
+    this.saved ??= this.leaving ?? { pitch: map.getPitch(), bearing: map.getBearing(), maxPitch: map.getMaxPitch(), rotate: map.dragRotate.isEnabled() };
+    this.leaving = null;
     this.active.value = map;
     map.setMaxPitch(MAXP);
     map.dragRotate.enable();
@@ -729,15 +733,22 @@ export class Mode3D {
         tilt = (s?.maxPitch ?? 0) > 0;
         maxP = s?.maxPitch ?? 0;
       }
+      this.leaving = s;
       map.easeTo({ pitch: tilt ? s?.pitch ?? 0 : 0, bearing: tilt ? s?.bearing ?? 0 : 0, duration: 600, padding: { top: 0, bottom: 0, left: 0, right: 0 } });
-      map.once("moveend", () => {
+      // 0.8.4: an interrupted ease (a wheel or drag during it) ends early too; before this it left
+      // the map part-way rotated with rotation already switched off
+      const done = () => {
         if (token !== this.token || this.active.peek()) return;
+        this.leaving = null;
+        if (!tilt) flatten2D(map);
         map.setMaxPitch(maxP);
         if (!tilt && !(s?.rotate && !this.o.main)) {
           map.dragRotate.disable();
           map.touchZoomRotate.disableRotation();
         }
-      });
+      };
+      if (map.isMoving()) map.once("moveend", done);
+      else done(); // no animation (reduced motion): moveend has already fired
     } catch {
       /* removed meanwhile */
     }

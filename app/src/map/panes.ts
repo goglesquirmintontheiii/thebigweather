@@ -13,6 +13,7 @@ import { signal, effect, untracked } from "@preact/signals";
 import { api, lastHello } from "../api";
 import { settings, update, type PaneCfg, type PaneLink } from "../store"; // 0.8.3 inspector: update
 import { buildStyle } from "./basemaps";
+import { fixHighPitchPicking } from "./pitchpick"; // 0.8.4
 import { RadarLayer } from "../radar/RadarLayer";
 import { GridLayer } from "../grid/GridLayer";
 import { fetchSweep, tableById, tableKeyFor, sites, l3For, listL2Range } from "../radar/controller";
@@ -53,6 +54,7 @@ import { xsPick, xsLine, xsFirst, xsPane } from "../ui/XSection";
 import { paneLayerOn, nearestFrame, nearestReady, preloadOrder } from "./panesync";
 /* 0.8.3 inspector: radar inspector, bearing tool and radar-site clicks in every pane */
 import { selectSite } from "../radar/controller";
+import { radarLinked } from "../radar/insp083"; // 0.8.4
 import { wantPaneInsp, dropPaneInsp } from "../radar/inspector";
 import { bearing, distance } from "../util";
 import { siteClickTarget, inspLayers } from "../radar/insp083";
@@ -241,6 +243,7 @@ class PaneView {
       keyboard: false,
     } as any);
     this.grid.id = "pane-grid";
+    fixHighPitchPicking(this.map); // 0.8.4: clicks at steep 3D camera angles
     applyPerfToMap(this.map); // 0.8.1 perf: render resolution, frame-rate cap
     registerPatterns(this.map); // 0.8.2: striped / checkered alert fills
     this.map.on("style.load", () => this.addLayers());
@@ -1251,8 +1254,19 @@ let lastSite = "";
 effect(() => {
   const site = settings.value.radar.site;
   if (site === lastSite) return;
+  const prev = lastSite;
   lastSite = site;
-  settings.value.panes.list.forEach((c, i) => c && c.weather.kind === "radar" && !c.site && panes.get(i + 1)?.configure(c));
+  untracked(() => {
+    // 0.8.4: an unlinked pane keeps the radar it was showing
+    const unlinked = (c: PaneCfg | undefined, i: number) => c?.weather.kind === "radar" && !c.site && !radarLinked(paneLink(i + 1));
+    if (prev && myKind !== "pane" && settings.peek().panes.list.some(unlinked))
+      update((s) => {
+        s.panes.list.forEach((c, i) => {
+          if (unlinked(c, i)) s.panes.list[i] = { ...c, site: prev };
+        });
+      });
+    settings.peek().panes.list.forEach((c, i) => c?.weather.kind === "radar" && !c.site && panes.get(i + 1)?.configure(c));
+  });
 });
 // site markers follow the radar list, the selected radar and the Sites toggle
 effect(() => {
