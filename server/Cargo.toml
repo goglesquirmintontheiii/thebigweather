@@ -14,10 +14,12 @@ chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.7", features = ["derive"] }
 csv = "1.4.0"
 flate2 = "1.1.10"
+gif = "0.14"
 futures = "0.3.34"
 hdf5-reader = "0.9.1"
 grib = { version = "0.19", default-features = false, features = ["png-unpack-with-png-crate", "ccsds-unpack-with-rust-aec", "jpeg2000-unpack-with-openjpeg", "time-calculation"] }
 hex = "0.4.3"
+jpeg-decoder = { version = "0.3", default-features = false }
 lettre = { version = "0.11.23", default-features = false, features = ["builder", "smtp-transport", "hostname", "tokio1", "tokio1-rustls", "webpki-roots", "aws-lc-rs"] }
 lru = "0.18.5"
 mimalloc = "0.1.52"

@@ -3,6 +3,7 @@ import { signal } from "@preact/signals";
 import { crosshair, settings } from "../store";
 import { activeLegend } from "../active";
 import { fmtValue, fmtGrid, fmtDist, compass } from "../util";
+import { approxMark } from "../intl/sites"; // 0.8.4
 
 function heightStr(m: number) {
   const ft = m * 3.28084;
@@ -12,7 +13,7 @@ function heightStr(m: number) {
 function fmt(v: number) {
   const L = activeLegend.value;
   if (!L) return "—";
-  return L.grid ? fmtGrid(v, L.units, L.table.labels) : fmtValue(v, L.table.units, L.table.labels);
+  return L.grid ? fmtGrid(v, L.units, L.table.labels) : approxMark.value + fmtValue(v, L.table.units, L.table.labels);
 }
 
 export function StatusBar() {

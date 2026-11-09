@@ -18,12 +18,16 @@ export function siteRegion(s: AnySite | undefined): SiteRegion {
   if (!s) return "US";
   const c = (s.country ?? "").toUpperCase();
   // 0.8.4: radars that come from RainViewer are filed by country, wherever they are
-  if ((s as any).source === "rainviewer" || (s as any).source === "mzzu") return rvRegion(c) as SiteRegion;
+  const src = String((s as any).source ?? "");
+  if (src.startsWith("rainviewer") || src === "mzzu") return rvRegion(c) as SiteRegion;
   if (s.region === "EU" || s.kind === "odim") return c === "CA" ? "CA" : "EU";
   if (c === "CA") return "CA";
   if (!c || c === "US" || s.type === "NEXRAD" || s.type === "TDWR") return "US";
   return "OT";
 }
+
+/** 0.8.4: "~" on readings from a colour scale with no stated values. */
+export const approxMark = computed(() => (String((currentSite.value as any)?.source ?? "") === "rainviewer-approx" ? "~" : ""));
 
 /** Sites without Level III products (ODIM volumes). */
 export function noLevel3(s: AnySite | undefined): boolean {
