@@ -11,7 +11,8 @@
   .\install-latest.ps1 -Source release     only the GitHub release (-Source repo: only the builds branch)
   Double-click install-latest.cmd to run it without changing the execution policy.
 
-  Source: the newer of the latest GitHub release and the repository's "builds" branch. Builds-branch
+  Source: the newer of the newest versioned GitHub release and the repository's "builds" branch. A
+  release missing SHA256SUMS or a file this install needs yields to the builds branch. Builds-branch
   files come in parts that are checked and joined while downloading; an interrupted download
   resumes from the parts already there. Every download is SHA-256 checked. Re-running updates in
   place and keeps server\data (config, token, recordings). The installed app updates itself
@@ -86,11 +87,28 @@ function Get-Text($url, $headers = @{}) {
 }
 
 # ---------- what is available ----------
+function Asset($name) { $rel.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1 }
+function Is-Ver($t) { return ([string]$t) -match '^[vV]?\d+\.\d+\.\d+([-+].*)?$' }
+function Get-Api($path) { return Invoke-RestMethod -Uri "$Api/repos/$Repo/$path" -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "Stormiq-installer" } -TimeoutSec 30 }
 $rel = $null; $relV = ""
 if ($Source -ne "repo") {
-  $api = if ($Version) { "$Api/repos/$Repo/releases/tags/v$($Version.TrimStart('v'))" } else { "$Api/repos/$Repo/releases/latest" }
   Say "looking up the latest release ($Repo)"
-  try { $rel = Invoke-RestMethod -Uri $api -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "Stormiq-installer" } -TimeoutSec 30; $relV = $rel.tag_name -replace '^[vV]', '' } catch { $rel = $null }
+  try {
+    if ($Version) { $rel = Get-Api "releases/tags/v$($Version.TrimStart('v'))" }
+    else {
+      $rel = Get-Api "releases/latest"
+      # GitHub's "latest" can be a data release such as "nil": use the newest stable X.Y.Z one
+      if (-not (Is-Ver $rel.tag_name)) {
+        $all = Get-Api "releases?per_page=100"
+        $rel = $null
+        foreach ($r in $all) {
+          if ($r.draft -or $r.prerelease -or -not (Is-Ver $r.tag_name)) { continue }
+          if (-not $rel -or (Compare-Ver ($r.tag_name -replace '^[vV]', '') ($rel.tag_name -replace '^[vV]', '')) -gt 0) { $rel = $r }
+        }
+      }
+    }
+  } catch { $rel = $null }
+  if ($rel -and (Is-Ver $rel.tag_name)) { $relV = $rel.tag_name -replace '^[vV]', '' } else { $rel = $null }
   if ($relV) { Write-Host "    release: $relV" } else { Write-Host "    no release found" }
 }
 $man = $null; $manV = ""; $ref = $Branch
@@ -105,8 +123,27 @@ if ($Source -ne "release") {
   if ($man -and $man.version) { $manV = [string]$man.version; Write-Host "    $Branch branch: $manV" } else { Write-Host "    no builds on the $Branch branch" }
   if ($Version -and $manV -and (Compare-Ver $manV $Version) -ne 0) { $manV = "" }
 }
-if ($relV -and (-not $manV -or (Compare-Ver $relV $manV) -ge 0)) { $From = "release"; $V = $relV }
-elseif ($manV) { $From = "repo"; $V = $manV }
+# what this install needs that the release doesn't have
+function Rel-Missing {
+  if (-not (Asset "SHA256SUMS")) { "SHA256SUMS" }
+  if (-not $AppOnly -and -not (Asset "tbw-server-$relV-windows-x86_64.zip")) { "tbw-server-$relV-windows-x86_64.zip" }
+  if (-not $ServerOnly) {
+    $s = if ($Portable) { "portable.exe" } else { "setup.exe" }
+    if (-not (Asset "Stormiq-$relV-$s") -and -not (Asset "TheBigWeather-$relV-$s")) { "Stormiq-$relV-$s" }
+  }
+}
+$missing = @(); if ($relV) { $missing = @(Rel-Missing) }
+$wanted = [int](-not $AppOnly) + [int](-not $ServerOnly)
+if ($relV -and $missing.Count -eq 0 -and (-not $manV -or (Compare-Ver $relV $manV) -ge 0)) { $From = "release"; $V = $relV }
+elseif ($manV) {
+  if ($missing.Count) { Write-Host "    release $relV is missing: $($missing -join ', ') (using the $Branch branch)" }
+  $From = "repo"; $V = $manV
+}
+elseif ($relV -and $missing -notcontains "SHA256SUMS" -and $missing.Count -lt $wanted) {
+  Write-Host "    release $relV is missing: $($missing -join ', ') (installing the rest)"
+  $From = "release"; $V = $relV
+}
+elseif ($relV) { Die "release v$relV can't be installed, it is missing: $($missing -join ', ')" }
 else { $vv = if ($Version) { " v$Version" } else { "" }; Die "nothing to install: no release$vv and no builds found (offline? rate-limited?)" }
 $fromText = if ($From -eq "release") { "the GitHub release" } else { "the repository's $Branch branch" }
 Say "Stormiq $V (from $fromText)"
@@ -116,7 +153,6 @@ $cache = Join-Path $Dir ".download"  # builds-branch downloads (kept until insta
 New-Item -ItemType Directory -Force -Path $tmp, $Dir | Out-Null
 
 # ---------- downloads ----------
-function Asset($name) { $rel.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1 }
 function Entry($name) { if ($man -and $man.files) { $p = $man.files.PSObject.Properties[$name]; if ($p) { return $p.Value } }; return $null }
 function Has-Asset($name) { if ($From -eq "release") { return [bool](Asset $name) } else { return [bool](Entry $name) } }
 function Hash-File($path) { return (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLower() }
@@ -256,7 +292,10 @@ try {
       Write-Host "    start it with: $Dir\start.cmd   (or start.ps1 -InstallService to run it at boot)"
     } else { Write-Host "    (version $V has no Windows server bundle)" }
   }
-  if (-not $ServerOnly) {
+  $appFile = if ($Portable) { "portable.exe" } else { "setup.exe" }
+  if (-not $ServerOnly -and -not (Has-Asset "Stormiq-$V-$appFile") -and -not (Has-Asset "TheBigWeather-$V-$appFile")) {
+    Write-Host "    (version $V has no Windows $appFile)"
+  } elseif (-not $ServerOnly) {
     if ($Portable) {
       $p = Fetch (App-Asset "portable.exe")
       $dst = Join-Path $Dir "Stormiq-portable.exe"

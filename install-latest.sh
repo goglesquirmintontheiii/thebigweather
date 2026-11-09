@@ -5,8 +5,9 @@
 #   bash install-latest.sh [--dir ~/Stormiq] [--app-only | --server-only] [--no-desktop-entry]
 #                          [--version 0.8.0] [--source auto|release|repo]
 #
-# Source: the newer of the latest GitHub release and the `builds` branch of the repository
-# (--source release / repo forces one). Builds-branch files come in parts that are checked and
+# Source: the newer of the newest versioned GitHub release and the `builds` branch of the repository
+# (--source release / repo forces one). A release missing SHA256SUMS or a file this install needs
+# yields to the builds branch. Builds-branch files come in parts that are checked and
 # joined while downloading; an interrupted download resumes from the parts already there.
 # Installs into DIR (default ~/Stormiq, or ~/TheBigWeather when an install from before the rename is there):
 #   DIR/Stormiq.AppImage            the desktop app (it updates itself afterwards)
@@ -80,13 +81,39 @@ case "$(uname -m)" in
 esac
 
 # ---------- what is available ----------
+# asset URL by exact file name ("x.exe" must not match "x.exe.blockmap")
+url_of() { printf '%s' "$REL" | grep -o '"browser_download_url": *"[^"]*"' | sed -E 's/.*"(https?:[^"]*)"$/\1/' | awk -v n="/$1" 'substr($0, length($0) - length(n) + 1) == n' | head -1; }
+api_get() { curl -fsSL --max-time 30 -H 'Accept: application/vnd.github+json' "$API/repos/$REPO/$1" 2>/dev/null; }
+tags_in() { { grep -o '"tag_name": *"[^"]*"' || true; } | sed -E 's/.*"([^"]*)"$/\1/'; }
+is_ver() { [[ "$1" =~ ^[vV]?[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$ ]]; }
+# The newest stable release with an X.Y.Z tag (GitHub's "latest" can be a data release such as `nil`)
+newest_versioned() {
+  local tags t best try j
+  tags="$(api_get 'releases?per_page=100' | tags_in || true)"
+  for try in 1 2 3 4 5; do
+    best=""
+    for t in $tags; do
+      is_ver "$t" || continue
+      if [[ -z "$best" || "$(ver_cmp "$t" "$best")" == 1 ]]; then best="$t"; fi
+    done
+    [[ -n "$best" ]] || return 1
+    j="$(api_get "releases/tags/$best")" || return 1
+    if ! printf '%s' "$j" | grep -q '"prerelease": *true'; then printf '%s' "$j"; return 0; fi
+    tags="$(printf '%s\n' $tags | grep -vxF "$best" || true)"
+  done
+  return 1
+}
 REL=""; REL_V=""
 if [[ "$SOURCE" != repo ]]; then
-  if [[ -n "$VERSION" ]]; then api="$API/repos/$REPO/releases/tags/v$VERSION"; else api="$API/repos/$REPO/releases/latest"; fi
   say "looking up the latest release ($REPO)"
-  if REL="$(curl -fsSL --max-time 30 -H 'Accept: application/vnd.github+json' "$api" 2>/dev/null)"; then
-    REL_V="$(printf '%s' "$REL" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed -E 's/.*"v?([^"]*)"$/\1/')"
+  if [[ -n "$VERSION" ]]; then
+    REL="$(api_get "releases/tags/v$VERSION" || true)"
+  else
+    REL="$(api_get releases/latest || true)"
+    if [[ -n "$REL" ]] && ! is_ver "$(printf '%s' "$REL" | tags_in | head -1)"; then REL="$(newest_versioned || true)"; fi
   fi
+  REL_TAG="$(printf '%s' "$REL" | tags_in | head -1)"
+  if is_ver "$REL_TAG"; then REL_V="${REL_TAG#[vV]}"; else REL=""; fi
   [[ -n "$REL_V" ]] && echo "    release: $REL_V" || echo "    no release found"
 fi
 MAN=""; MAN_V=""; REF=""
@@ -98,14 +125,28 @@ if [[ "$SOURCE" != release ]]; then
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && REF="$sha" || REF="$BRANCH"
   MAN="$(curl -fsSL --max-time 30 "$RAW/$REF/manifest.json" 2>/dev/null || true)"
   if [[ -z "$MAN" && "$REF" != "$BRANCH" ]]; then REF="$BRANCH"; MAN="$(curl -fsSL --max-time 30 "$RAW/$REF/manifest.json" 2>/dev/null || true)"; fi
-  MAN_V="$(printf '%s' "$MAN" | grep -o '"version": *"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  MAN_V="$(printf '%s' "$MAN" | { grep -o '"version": *"[^"]*"' || true; } | head -1 | sed -E 's/.*"([^"]*)"$/\1/')"
   [[ -n "$MAN_V" ]] && echo "    $BRANCH branch: $MAN_V" || echo "    no builds on the $BRANCH branch"
   [[ -n "$VERSION" && -n "$MAN_V" && "$(ver_cmp "$MAN_V" "$VERSION")" != 0 ]] && MAN_V=""
 fi
-if [[ -n "$REL_V" && ( -z "$MAN_V" || "$(ver_cmp "$REL_V" "$MAN_V")" != -1 ) ]]; then
+# what this install needs that the release doesn't have
+rel_missing() {
+  [[ -n "$(url_of SHA256SUMS)" ]] || echo SHA256SUMS
+  if (( SERVER )) && [[ -z "$(url_of "tbw-server-$REL_V-linux-$ARCH.tar.gz")" ]]; then echo "tbw-server-$REL_V-linux-$ARCH.tar.gz"; fi
+  if (( APP )) && [[ -z "$(url_of "Stormiq-$REL_V-x86_64.AppImage")$(url_of "TheBigWeather-$REL_V-x86_64.AppImage")" ]]; then echo "Stormiq-$REL_V-x86_64.AppImage"; fi
+  return 0
+}
+MISSING=""; [[ -z "$REL_V" ]] || MISSING="$(rel_missing | tr '\n' ' ')"
+if [[ -n "$REL_V" && -z "$MISSING" && ( -z "$MAN_V" || "$(ver_cmp "$REL_V" "$MAN_V")" != -1 ) ]]; then
   FROM=release; V="$REL_V"
 elif [[ -n "$MAN_V" ]]; then
+  [[ -z "$MISSING" ]] || echo "    release $REL_V is missing: $MISSING(using the $BRANCH branch)"
   FROM=repo; V="$MAN_V"
+elif [[ -n "$REL_V" && "$MISSING" != *SHA256SUMS* && $(wc -w <<<"$MISSING") -lt $((SERVER + APP)) ]]; then
+  echo "    release $REL_V is missing: $MISSING(installing the rest)"
+  FROM=release; V="$REL_V"
+elif [[ -n "$REL_V" ]]; then
+  die "release v$REL_V can't be installed, it is missing: $MISSING"
 else
   die "nothing to install: no release${VERSION:+ v$VERSION} and no builds found (offline? rate-limited?)"
 fi
@@ -116,7 +157,6 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 CACHE="$DIR/.download"  # builds-branch downloads (kept until installed, so a re-run resumes)
 
 # ---------- downloads ----------
-url_of() { printf '%s' "$REL" | grep -o '"browser_download_url": *"[^"]*"' | sed -E 's/.*"(https?:[^"]*)"$/\1/' | grep -F "/$1" | head -1; }
 has_asset() { if [[ $FROM == release ]]; then [[ -n "$(url_of "$1")" ]]; else printf '%s' "$MAN" | grep -qF "\"$1\": {"; fi; }
 
 # builds branch: download every part, check it, append it; check the whole file at the end
@@ -209,7 +249,7 @@ if (( SERVER )); then
   fi
 fi
 
-if (( APP )); then
+if (( APP )) && { has_asset "Stormiq-$V-x86_64.AppImage" || has_asset "TheBigWeather-$V-x86_64.AppImage"; }; then
   # 0.8.2: Stormiq-<v>-…; versions before the rename are TheBigWeather-<v>-…
   a="Stormiq-$V-x86_64.AppImage"; has_asset "$a" || a="TheBigWeather-$V-x86_64.AppImage"
   f="$(fetch "$a")"
@@ -244,6 +284,8 @@ EOF
   fi
   echo "    run it: $DIR/Stormiq.AppImage   (it updates itself: Settings → Updates)"
   command -v fusermount >/dev/null || command -v fusermount3 >/dev/null || echo "    note: AppImages need FUSE (e.g. sudo apt install libfuse2)"
+elif (( APP )); then
+  echo "    (version $V has no desktop app)"
 fi
 rmdir "$CACHE" 2>/dev/null || true
 say "done"
