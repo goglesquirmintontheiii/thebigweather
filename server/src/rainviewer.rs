@@ -312,7 +312,7 @@ impl RainViewer {
         let out: Vec<Value> = self
             .seed
             .iter()
-            .filter(|r| on && r.of.is_empty() && r.display != "data")
+            .filter(|r| on && r.of.is_empty() && r.display != "data" && r.display != "approx")
             .map(|r| {
                 let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
                 v["source"] = json!(format!("{PREFIX}{}", r.id));
@@ -373,7 +373,7 @@ mod tests {
             let m = s.iter().find(|r| r.id == v.of).unwrap_or_else(|| panic!("{} -> {}", v.id, v.of));
             assert!(m.of.is_empty() && km(m.lat, m.lon, v.lat, v.lon) < 26.0, "{}", v.id);
         }
-        assert!(s.iter().all(|r| ["map", "panel", "data"].contains(&r.display.as_str())));
+        assert!(s.iter().all(|r| ["map", "panel", "data", "approx"].contains(&r.display.as_str())));
         assert!(!s.iter().any(|r| r.id == "GRCOMP3"), "Greece's entry is a composite: not listed");
         assert_eq!(s.iter().map(|r| &r.id).collect::<std::collections::HashSet<_>>().len(), s.len());
     }

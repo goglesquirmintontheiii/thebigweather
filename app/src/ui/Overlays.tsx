@@ -14,7 +14,7 @@ import { settings } from "../store";
 import { mapRef, ALERT_HIT_LAYERS } from "../map/mapview";
 import { alerts } from "../alerts";
 import { sites, currentSite, selectSite } from "../radar/controller";
-import { siteShown, hiddenRegions, type AnySite } from "../intl/sites";
+import { approxMark, siteShown, hiddenRegions, type AnySite } from "../intl/sites";
 import { intlSource, intlSources, groupOf, selectIntl } from "../intl/radar";
 import { rvList, rvRadars, rvRegion } from "../intl/rvcore"; // 0.8.4
 import { dsOff } from "../datasrc";
@@ -220,7 +220,7 @@ function MapMenu() {
     <div class="ctx glass" style={{ left: `${m.x + 8}px`, top: `${m.y + 8}px` }} onMouseLeave={close}>
       <div class="ctx-title">
         {m.lat.toFixed(4)}, {m.lon.toFixed(4)}
-        {r && !Number.isNaN(r.value) && <b> · {fmtValue(r.value, activeTable.value.units, activeTable.value.labels)}</b>}
+        {r && !Number.isNaN(r.value) && <b> · {approxMark.value}{fmtValue(r.value, activeTable.value.units, activeTable.value.labels)}</b>}
       </div>
       {types.map((t) => (
         <button

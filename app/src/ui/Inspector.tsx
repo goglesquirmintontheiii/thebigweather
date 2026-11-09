@@ -28,6 +28,7 @@ import { distance, fmtDist, speedFactor, fmtTime, fmtValue } from "../util";
 import { activeLegend } from "../active";
 import { fmtGrid } from "../util";
 import { myKind } from "../linkwin";
+import { approxMark } from "../intl/sites"; // 0.8.4
 import { Zap } from "lucide-preact";
 
 export function toggleInspector() {
@@ -223,7 +224,7 @@ export function Inspector() {
   if (!l2) {
     const L = activeLegend.value;
     const ok = L && Number.isFinite(h.value) && h.value > -9000;
-    value = ok ? { v: L!.grid ? fmtGrid(h.value, L!.units, L!.table.labels) : fmtValue(h.value, activeTable.value.units, activeTable.value.labels) } : null;
+    value = ok ? { v: L!.grid ? fmtGrid(h.value, L!.units, L!.table.labels) : approxMark.value + fmtValue(h.value, activeTable.value.units, activeTable.value.labels) } : null;
   }
   const disp = displaySweep.value;
   return (

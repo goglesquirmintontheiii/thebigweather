@@ -165,7 +165,7 @@ pub fn parse_opera(key: &str, size: u64) -> Option<FileRef> {
 /// 0.8.4: `{DIR}/{DIR}_{YYYYMMDD}_{HHMMSS}_0_source.h5` (one file per volume)
 pub fn parse_rv(key: &str, size: u64) -> Option<FileRef> {
     let name = key.rsplit('/').next()?;
-    if !["_0_source.h5", "_0_source.png", "_0_source.n2a"].iter().any(|e| name.ends_with(e)) {
+    if !["_0_source.h5", "_0_source.png", "_0_source.n2a", "_0_source.gif", "_0_source.jpeg", "_0_source.jpg"].iter().any(|e| name.ends_with(e)) {
         return None;
     }
     Some(FileRef { key: key.to_string(), size, time_ms: crate::rainviewer::name_time(name)?, elevs: String::new(), qtys: vec!["PVOL".into()] })
@@ -288,7 +288,7 @@ impl OdimService {
     pub fn new(http: reqwest::Client, health: Arc<Health>, cache_dir: PathBuf) -> Arc<Self> {
         let mut table: Vec<Row> = serde_json::from_str::<Table>(include_str!("odim_sites.json")).map(|t| t.sites).unwrap_or_default();
         // 0.8.4: RainViewer pictures read back into reflectivity are radars like any other
-        table.extend(crate::rainviewer::seed().into_iter().filter(|r| r.display == "data").map(|r| Row { id: r.id.to_ascii_lowercase(), name: if r.name.is_empty() { r.id.clone() } else { r.name.clone() }, country: r.country.clone(), lat: r.lat, lon: r.lon, elev_m: 0.0, status: 1, rv: Some(r.id), host: None }));
+        table.extend(crate::rainviewer::seed().into_iter().filter(|r| r.display == "data" || r.display == "approx").map(|r| Row { id: r.id.to_ascii_lowercase(), name: if r.name.is_empty() { r.id.clone() } else { r.name.clone() }, country: r.country.clone(), lat: r.lat, lon: r.lon, elev_m: 0.0, status: 1, rv: Some(r.id), host: (r.display == "approx").then(|| "approx".to_string()) }));
         for s in [Src::Opera, Src::Fmi, Src::Rv, Src::Mzzu] {
             let (id, name) = s.health();
             health.register(id, name, s.base());
@@ -307,6 +307,7 @@ impl OdimService {
             .map(|r| {
                 let src = match (opera.contains(&r.id), fmi.contains(&r.id) || r.country == "FI") {
                     _ if r.host.as_deref() == Some("mzzu") => "mzzu",
+                    _ if r.host.as_deref() == Some("approx") => "rainviewer-approx",
                     _ if r.rv.is_some() => "rainviewer",
                     (true, true) => "opera+fmi",
                     (true, false) => "opera",
@@ -336,6 +337,7 @@ impl OdimService {
         // 0.8.4: sources with a toggle of their own
         let on = |s: &Site| match s.source.as_deref() {
             Some(x @ ("rainviewer" | "mzzu")) => crate::datasources::enabled(x),
+            Some("rainviewer-approx") => crate::datasources::enabled("rainviewer"),
             _ => true,
         };
         self.sites.read().iter().filter(|s| on(s)).cloned().collect()

@@ -97,6 +97,14 @@ import { matchVolumes, nearestWithin, utcDays, type TimedVol } from "../timematc
 export { frameIndex, playing };
 export const loading = signal(false);
 export const radarError = signal<string | null>(null);
+
+/** 0.8.4: a RainViewer picture this app can't read (its layout changed): show the plain picture instead. */
+function rvPictureFallback(site: string, err: string) {
+  const s = sites.value.find((x) => x.id === site) as any;
+  if (!String(s?.source ?? "").startsWith("rainviewer") || !/layout changed/.test(err)) return;
+  const id = site.toUpperCase();
+  void import("../intl/rainviewer").then((m) => m.selectRv({ id, source: `rv_${id}`, name: s.name ?? id } as any));
+}
 export const tilts = signal<TiltMeta[]>([]);
 export const liveSweep = signal<Sweep | null>(null);
 export const liveState = signal<{ key: string; radials: number; elev: number; time: number; az?: number; lat?: number; lon?: number; complete?: boolean } | null>(null);
@@ -439,7 +447,10 @@ export async function reload(opts: { keepIndex?: boolean } = {}) {
     await Promise.all([worker(), worker(), worker()]);
     if (gen !== generation) return;
     const last = frames.value[frames.value.length - 1];
-    if (last && !last.sweep && last.error) radarError.value = friendlyError(last.error, r.site, r.product);
+    if (last && !last.sweep && last.error) {
+      radarError.value = friendlyError(last.error, r.site, r.product);
+      rvPictureFallback(r.site, last.error);
+    }
     layer?.preload(frames.value.filter((f) => f.sweep).map((f) => f.sweep!));
     if (liveKey) refreshLive(true);
   } catch (e: any) {

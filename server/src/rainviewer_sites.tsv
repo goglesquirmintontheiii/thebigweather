@@ -4,7 +4,7 @@ AECOMP2	UAE composite		AE	United Arab Emirates	24.0	54.0	250	panel
 AU012	Melbourne (Broadmeadows)	VIC	AU	Australia	-37.6899	144.9472	256	map					
 AU022	Melbourne (Laverton)	VIC	AU	Australia	-37.8552	144.7554	256	map					
 AU032	Wollongong (Appin)	NSW	AU	Australia	-34.2624	150.8751	256	map					
-AU042	Newcastle	NSW	AU	Australia	-32.7298	152.0254	256	map					
+AU042	Newcastle	NSW	AU	Australia	-32.7298	152.0254	256	map	149.2697	-35.0227	154.7371	-30.4184	
 AU062	Geraldton	WA	AU	Australia	-28.8047	114.6974	256	map					
 AU072	Wyndham	WA	AU	Australia	-15.4517	128.1209	256	map					
 AU082	Gympie (Mount Kanigan)	QLD	AU	Australia	-25.9573	152.5769	256	map					
@@ -21,25 +21,25 @@ AU162	Port Hedland	WA	AU	Australia	-20.3718	118.6317	256	map
 AU172	Broome	WA	AU	Australia	-17.9483	122.2353	256	map					
 AU192	Cairns	QLD	AU	Australia	-16.8182	145.663	256	map					
 AU222	Mackay	QLD	AU	Australia	-21.1172	149.2173	256	map					
-AU232	Gladstone	QLD	AU	Australia	-23.8551	151.2625	256	map					
+AU232	Gladstone	QLD	AU	Australia	-23.8551	151.2625	256	map	148.7480	-26.1271	153.7770	-21.5228	
 AU242	Bowen	QLD	AU	Australia	-19.8858	148.0757	256	map					
 AU252	Alice Springs	NT	AU	Australia	-23.795	133.8889	256	map					
 AU262	Perth Airport	WA	AU	Australia	-31.9273	115.9756	256	map					
-AU272	Woomera	SA	AU	Australia	-31.1558	136.8044	256	map					
+AU272	Woomera	SA	AU	Australia	-31.1558	136.8044	256	map	134.0182	-33.4109	139.3928	-28.8066	
 AU282	Grafton	NSW	AU	Australia	-29.6207	152.9633	256	map					
-AU292	Learmonth	WA	AU	Australia	-22.1032	113.9997	256	map					
+AU292	Learmonth	WA	AU	Australia	-22.1032	113.9997	256	map	111.4187	-24.3646	116.3829	-19.7603	
 AU312	Albany	WA	AU	Australia	-34.9418	117.8163	256	map					
 AU322	Esperance	WA	AU	Australia	-33.8302	121.8917	256	map					
 AU332	Ceduna	SA	AU	Australia	-32.1298	133.6964	256	map					
-AU362	Mornington Island (Gulf of Carpentaria)	QLD	AU	Australia	-16.6641	139.1812	256	map					
+AU362	Mornington Island (Gulf of Carpentaria)	QLD	AU	Australia	-16.6641	139.1812	256	map	136.7587	-18.9557	141.5597	-14.3514	
 AU372	Hobart Airport	TAS	AU	Australia	-42.8374	147.5009	256	map					
 AU382	Newdegate	WA	AU	Australia	-33.0969	119.0088	256	map					
-AU392	Halls Creek	WA	AU	Australia	-18.2289	127.6628	256	map					
+AU392	Halls Creek	WA	AU	Australia	-18.2289	127.6628	256	map	125.2196	-20.5102	130.0620	-15.9059	
 AU402	Canberra (Captains Flat)	NSW	AU	Australia	-35.6614	149.5122	256	map					
 AU412	Willis Island	QLD	AU	Australia	-16.2874	149.9646	256	map					
 AU422	Katherine (Tindal)	NT	AU	Australia	-14.5109	132.447	256	map					
 AU442	Giles	WA	AU	Australia	-25.0332	128.3017	256	map					
-AU462	Adelaide (Sellicks Hill)	SA	AU	Australia	-35.3295	138.5025	256	map					
+AU462	Adelaide (Sellicks Hill)	SA	AU	Australia	-35.3295	138.5025	256	map	135.5189	-37.5689	141.1565	-32.9646	
 AU482	Kalgoorlie	WA	AU	Australia	-30.7842	121.4548	256	map					
 AU492	Yarrawonga	VIC	AU	Australia	-36.0296	146.0228	256	map					
 AU502	Brisbane (Marburg)	QLD	AU	Australia	-27.6063	152.54	256	map					
@@ -50,7 +50,7 @@ AU562	Longreach	QLD	AU	Australia	-23.4398	144.2823	256	map
 AU582	South Doodlakine	WA	AU	Australia	-31.7778	117.9528	256	map					
 AU622	Norfolk Island	NSW	AU	Australia	-29.0383	167.9414	256	map					
 AU632	Darwin (Berrimah)	NT	AU	Australia	-12.4559	130.9266	256	map					
-AU642	Adelaide (Buckland Park)	SA	AU	Australia	-34.617	138.4688	256	map					
+AU642	Adelaide (Buckland Park)	SA	AU	Australia	-34.617	138.4688	256	map	135.5206	-36.8468	141.1094	-32.2425	
 AU662	Brisbane (Mt Stapylton)	QLD	AU	Australia	-27.7177	153.24	256	map					
 AU672	Warrego	QLD	AU	Australia	-26.4402	147.3491	256	map					
 AU682	Bairnsdale	VIC	AU	Australia	-37.8875	147.5755	256	map					
@@ -59,7 +59,7 @@ AU702	Perth (Serpentine)	WA	AU	Australia	-32.3918	115.867	256	map
 AU712	Sydney (Terrey Hills)	NSW	AU	Australia	-33.7008	151.2095	256	map					
 AU722	Emerald	QLD	AU	Australia	-23.5496	148.2392	256	map					
 AU742	Greenvale	QLD	AU	Australia	-18.9977	144.9959	256	map					
-AU752	Mount Isa	QLD	AU	Australia	-20.7112	139.5553	256	map					
+AU752	Mount Isa	QLD	AU	Australia	-20.7112	139.5553	256	map	137.0967	-22.9723	142.0139	-18.3679	
 AU762	Hobart (Mt Koonya)	TAS	AU	Australia	-43.1126	147.8052	256	map					
 AU772	Warruwi	NT	AU	Australia	-11.6485	133.38	256	map					
 AU782	Weipa	QLD	AU	Australia	-12.6664	141.9246	256	map					
@@ -85,12 +85,12 @@ BRCP			BR	Brazil	-27.0366	-52.6023	250	map	-55.0710	-29.2106	-50.1335	-24.8626
 BRCZ	Cruzeiro do Sul		BR	Brazil	-7.6	-72.77	250	panel					
 BRGA			BR	Brazil	-15.9572	-48.0113	250	map	-51.8167	-19.5605	-44.2059	-12.3539	
 BRLN			BR	Brazil	-27.2198	-49.4617	250	map	-51.9327	-29.3957	-46.9908	-25.0438	
-BRMI			BR	Brazil	-28.11	-49.4667	250	map	-53.6805	-31.7580	-45.2529	-24.4620	
-BRMN			BR	Brazil	-3.1338	-59.9968	250	map	-62.1475	-6.7181	-57.8461	0.4506	
-BRMO			BR	Brazil	-9.5322	-35.7321	250	map	-39.3850	-13.1270	-32.0792	-5.9375	
+BRMI			BR	Brazil	-28.11	-49.4667	250	panel					
+BRMN			BR	Brazil	-3.1338	-59.9968	250	panel					
+BRMO			BR	Brazil	-9.5322	-35.7321	250	panel					
 BRMQ			BR	Brazil	0.0635	-51.1149	250	panel					
-BRNI			BR	Brazil	-22.929	-43.085	250	map	-44.0614	-23.8283	-42.1085	-22.0297	
-BRNT	Natal		BR	Brazil	-5.91	-35.25	250	panel					
+BRNI			BR	Brazil	-22.929	-43.085	250	panel					
+BRNT	Natal		BR	Brazil	-5.9044	-35.254	250	panel					
 BRPB			BR	Brazil	-22.3413	-50.8185	250	panel					
 BRPC			BR	Brazil	-22.4382	-43.2922	250	map	-47.2829	-26.0484	-39.3016	-18.8280	
 BRPOA2	Porto Alegre		BR	Brazil	-30.03	-51.2	250	panel					
@@ -101,9 +101,9 @@ BRSG			BR	Brazil	-29.1914	-55.0144	250	map	-59.1897	-32.8093	-50.8390	-25.5734
 BRSL			BR	Brazil	-2.5917	-44.25	250	panel					
 BRSN			BR	Brazil	-2.4069	-54.8168	250	panel					
 BRSR			BR	Brazil	-23.5792	-47.0943	250	map	-51.1249	-27.1906	-43.0637	-19.9678	
-BRST	Santarem		BR	Brazil	-2.43	-54.71	250	panel					
+BRST	Santa Teresa		BR	Brazil	-19.9888	-40.5794	250	panel					
 BRTF			BR	Brazil	-3.3525	-64.7111	250	panel					
-BRTT			BR	Brazil	-3.5842	-69.944	250	map	-73.5269	-7.8153	-66.3611	0.6469	
+BRTT			BR	Brazil	-3.5842	-69.944	250	panel					
 CN9002B			CN	China	31.1077	120.9457	460	data					
 CN9010B			CN	China	39.807	116.4325	256	data					
 CN9020B			CN	China	45.5568	119.6036	220	data					
@@ -333,12 +333,12 @@ ESSA2	Aguión (Asturias)		ES	Spain	43.4449	-6.3426	250	panel
 ESSA3	Aguión (Asturias)		ES	Spain	43.4432	-6.2988	250	panel					ESSA2
 ESVA2	Cullera (Valencia)		ES	Spain	39.1557	-0.2479	250	panel					
 ESVA3	Cullera (Valencia)		ES	Spain	39.1599	-0.2541	250	panel					ESVA2
-FIMP			MU	Mauritius	-20.3224	57.5163	250	panel					
+FIMP			MU	Mauritius	-20.3224	57.5163	450	approx					
 FJND	Nadi		FJ	Fiji	-17.75	177.44	250	panel					
 FJNS	Nausori		FJ	Fiji	-18.04	178.56	250	panel					
 FRGF2			FR	France	5.6093	-53.4375	250	panel					
 GEPOT	Poti		GE	Georgia	42.15	41.67	250	panel					
-HKTC2			HK	Hong Kong	22.3702	114.1179	250	map	111.5855	20.0583	116.6503	24.6821	
+HKTC2			HK	Hong Kong	22.3702	114.1179	250	panel					
 IDAC3			ID	Indonesia	5.5413	95.5002	250	map	93.2526	3.2938	97.7479	7.7889	
 IDAD3			ID	Indonesia	-0.7864	100.3049	250	map	98.0575	-3.0341	102.5524	1.4614	
 IDAG3			ID	Indonesia	-2.1615	106.1365	250	map	103.8889	-4.4091	108.3841	0.0861	
@@ -385,17 +385,17 @@ ILBG2G	Ben Gurion		IL	Israel	32.0	34.87	250	panel
 INAYA	Ayanagar		IN	India	28.48	77.13	250	panel					
 INBH3			IN	India	23.1386	69.6467	250	panel					
 INBNH	Banihal		IN	India	33.43	75.19	250	panel					
-INBR3			IN	India	27.4143	95.0142	250	panel					
+INBR3			IN	India	27.4768	95.0142	500	data					
 INCH2			IN	India	13.0428	80.3082	250	panel					
 INDLH	Delhi		IN	India	28.58	77.2	250	panel					
 INDP2			IN	India	20.2082	86.6772	250	panel					
-INGP3			IN	India	21.0738	79.0569	250	panel					
-INGT3			IN	India	23.836	91.2496	250	panel					
-INHP3			IN	India	23.2031	77.4045	250	panel					
+INGP3			IN	India	21.1363	79.0569	500	data					
+INGT3			IN	India	23.8985	91.2496	500	data					
+INHP3			IN	India	23.2655	77.4045	500	data					
 INJM			IN	India	32.7445	74.8283	250	panel					
 INJOT	Jot		IN	India	32.49	76.06	250	panel					
 INKC3			IN	India	9.8951	76.3418	250	panel					
-INKL3			IN	India	10.8965	79.8482	250	panel					
+INKL3			IN	India	10.959	79.8482	500	data					
 INKU			IN	India	31.0626	77.2575	250	panel					
 INLD			IN	India	29.813	78.6793	250	panel					
 INLH4			IN	India	28.4409	77.2069	250	panel					
@@ -405,14 +405,14 @@ INMLR	Mangalore		IN	India	12.94	74.84	250	panel
 INMM3			IN	India	18.8285	72.8173	250	panel					
 INMP			IN	India	16.1405	81.1794	250	panel					
 INMU			IN	India	31.4711	76.812	250	panel					
-INOA3			IN	India	15.4542	73.8293	250	panel					
+INOA3			IN	India	15.5166	73.8293	500	data					
 INPJ2			IN	India	25.2286	91.7544	250	panel					
 INPR5	Jaipur		IN	India	26.9	75.8	250	panel					
 INRN3			IN	India	34.0364	74.7819	250	panel					
 INRPR	Raipur		IN	India	21.25	81.63	250	panel					
 INSU			IN	India	30.3831	78.2853	250	panel					
-INTL3			IN	India	30.358	76.45	250	panel					
-INTN3			IN	India	25.5818	85.0888	250	panel					
+INTL3			IN	India	30.4204	76.45	500	data					
+INTN3			IN	India	25.6443	85.0888	500	data					
 INTV2			IN	India	8.8231	76.3572	250	panel					
 INVS3			IN	India	17.7183	83.3993	250	panel					
 INVV4	Mumbai (Veravali)		IN	India	19.13	72.83	250	panel					
@@ -452,7 +452,7 @@ PKISB200	Islamabad		PK	Pakistan	33.67	73.13	250	panel
 PKISB450	Islamabad		PK	Pakistan	33.67	73.13	250	panel					PKISB200
 PKKHI200	Karachi		PK	Pakistan	24.9	67.16	250	panel					
 PKKHI450	Karachi		PK	Pakistan	24.9	67.16	250	panel					PKKHI200
-PTCOMP	Cruz do Leão		PT	Portugal	38.9022	-8.4001	250	map	-12.4548	34.0115	-4.3455	43.7929	
+PTCOMP	Cruz do Leão		PT	Portugal	38.7911	-8.5209	250	map	-12.5756	33.9004	-4.4663	43.6818	
 PTFAR	Loule/Cavalos do Caldeirão		PT	Portugal	37.3041	-7.953	250	panel					
 PTFLR	Flores		PT	Portugal	39.46	-31.13	250	panel					
 PTLIS	Coruche/Cruz do Leão		PT	Portugal	39.0714	-8.4001	250	panel					
@@ -505,30 +505,34 @@ THTK4			TH	Thailand	16.7393	98.9235	250	panel					THTK3
 THTR3			TH	Thailand	7.5125	99.6179	250	panel					
 THTR4			TH	Thailand	7.5125	99.6179	250	panel					THTR3
 TONA			TO	Tonga	-21.2542	-175.0768	250	panel					
-TR03			TR	Turkey	38.3608	30.4078	250	panel					
-TR06			TR	Turkey	39.76	32.9654	250	panel					
-TR07			TR	Turkey	36.2301	30.4237	250	panel					
-TR10			TR	Turkey	39.6993	27.6228	250	panel					
-TR16			TR	Turkey	40.4846	29.8976	250	panel					
-TR25			TR	Turkey	40.1197	41.5439	250	panel					
-TR27			TR	Turkey	37.104	37.1309	250	panel					
-TR31			TR	Turkey	36.2815	35.7839	250	panel					
-TR34			TR	Turkey	41.2897	28.3587	250	panel					
-TR35			TR	Turkey	38.2705	26.9945	250	panel					
-TR48			TR	Turkey	36.8496	28.3302	250	panel					
-TR55			TR	Turkey	41.2694	36.0305	250	panel					
-TR58			TR	Turkey	39.7193	36.8393	250	panel					
-TR61			TR	Turkey	41.0294	39.4642	250	panel					
-TR63			TR	Turkey	37.6691	39.8178	250	panel					
+TR03			TR	Turkey	38.407	30.4078	370	data					
+TR06			TR	Turkey	39.8037	32.9654	350	data					
+TR07			TR	Turkey	36.2763	30.4237	370	data					
+TR10			TR	Turkey	39.7455	27.5988	370	data					
+TR16			TR	Turkey	40.5493	29.8976	370	data					
+TR25			TR	Turkey	40.1659	41.5439	370	data					
+TR27			TR	Turkey	37.1502	37.1077	370	data					
+TR31			TR	Turkey	36.3277	35.7609	370	data					
+TR34			TR	Turkey	41.3544	28.3341	370	data					
+TR35			TR	Turkey	38.3168	26.9945	370	data					
+TR48			TR	Turkey	36.8959	28.3302	370	data					
+TR55			TR	Turkey	41.3156	36.0059	370	data					
+TR58			TR	Turkey	39.784	36.8393	370	data					
+TR61			TR	Turkey	41.0756	39.4519	370	data					
+TR63			TR	Turkey	37.7153	39.8061	370	data					
 TR67	Zonguldak		TR	Turkey	41.45	31.79	250	panel					
-TR70			TR	Turkey	37.3513	33.1239	250	panel					
-VNDHA2			VN	Vietnam	16.8054	107.0923	250	map	104.3197	14.0338	109.8650	19.5770	
-VNNHB2			VN	Vietnam	10.6592	106.7277	250	map	103.9561	7.8866	109.4994	13.4319	
-VNNHT2			VN	Vietnam	12.2117	109.2802	250	map	106.5139	9.4452	112.0466	14.9782	
+TR70			TR	Turkey	37.3975	33.1239	370	data					
+VNDHA2			VN	Vietnam	16.8054	107.1692	250	map	104.3966	14.0338	109.9419	19.5770	
+VNNHB2			VN	Vietnam	10.6592	106.7277	250	panel					
+VNNHT2			VN	Vietnam	12.2117	109.3461	250	map	106.5798	9.4452	112.1125	14.9782	
 VNPHA2			VN	Vietnam	21.5715	103.5167	250	panel					
 VNPLE2			VN	Vietnam	14.0352	107.9836	250	map	105.2119	11.2634	110.7553	16.8069	
 VNPLI2			VN	Vietnam	20.8092	106.6399	250	panel					
-VNQNH2			VN	Vietnam	13.7486	109.1923	250	map	106.4199	10.9764	111.9647	16.5208	
+VNQNH2			VN	Vietnam	13.7806	109.2472	250	map	106.4748	11.0084	112.0196	16.5528	
 VNTKY2			VN	Vietnam	15.5681	108.4623	250	map	105.6902	12.7964	111.2344	18.3398	
-VNVIN2			VN	Vietnam	18.6562	105.7108	250	map	103.8613	16.8068	107.5603	20.5056	
+VNVIN2			VN	Vietnam	18.6562	105.7108	250	panel					
 VNVTR2			VN	Vietnam	21.2914	105.3621	250	panel					
+BRPL	Petrolina		BR	Brazil	-9.3672	-40.5728	250	panel					
+BRSV	Salvador		BR	Brazil	-12.9025	-38.3267	250	panel					
+BRJR	Jaraguari		BR	Brazil	-20.2915	-54.4658	250	panel					
+BRAL2	Almenara		BR	Brazil	-16.2019	-40.6742	250	panel					
