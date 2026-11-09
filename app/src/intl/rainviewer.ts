@@ -10,12 +10,11 @@ import { settings, toast } from "../store";
 import { sites } from "../radar/controller";
 import { intlMap, intlSource, loadIntlSource, selectIntl } from "./radar";
 import { hiddenRegions } from "./sites";
-import { rvVisible, type RvRadar } from "./rvcore";
+import { rvRadars, rvVisible, type RvRadar } from "./rvcore";
 import "./rainviewer.css";
 
-export type { RvRadar } from "./rvcore";
+export { rvRadars, type RvRadar } from "./rvcore";
 
-export const rvRadars = signal<RvRadar[]>([]);
 export const rvError = signal<string | null>(null);
 const busy = signal<string | null>(null);
 
@@ -64,7 +63,7 @@ function el(r: RvRadar): HTMLElement {
   const b = document.createElement("button");
   b.className = "site-marker intl-site rv-site";
   b.textContent = r.id;
-  b.title = `${r.name}${r.state ? `, ${r.state}` : ""}${r.country_name ? ` · ${r.country_name}` : ""} (${r.id}) — RainViewer images, click to show`;
+  b.title = `${r.name || r.id}${r.state ? `, ${r.state}` : ""}${r.country_name ? ` · ${r.country_name}` : ""} (${r.id}) · RainViewer`;
   b.addEventListener("click", (e) => {
     e.stopPropagation();
     selectRv(r);

@@ -14,8 +14,10 @@ import { settings } from "../store";
 import { mapRef, ALERT_HIT_LAYERS } from "../map/mapview";
 import { alerts } from "../alerts";
 import { sites, currentSite, selectSite } from "../radar/controller";
-import { siteShown, type AnySite } from "../intl/sites";
+import { siteShown, hiddenRegions, type AnySite } from "../intl/sites";
 import { intlSource, intlSources, groupOf, selectIntl } from "../intl/radar";
+import { rvRadars, rvRegion } from "../intl/rvcore"; // 0.8.4
+import { selectRv } from "../intl/rainviewer"; // 0.8.4
 import { radarFamily } from "../alertlist";
 import { openAlertLayerOptions } from "./AlertConfig";
 import { AlertTypeMenu, alertTypeMenu } from "./panels/AlertsPanel";
@@ -112,6 +114,12 @@ function nearestRadar(lat: number, lon: number, pane?: number): NearPick[] {
     return nearestN(fam, lat, lon, 3).map((n) => ({ id: n.item.id, label: n.item.id, km: n.km, go: () => selectSite(n.item.id) }));
   }
   if (w.kind === "intl") {
+    // 0.8.4: RainViewer radars: every one in the shown regions, not just those already opened
+    if (w.id.startsWith("rv_")) {
+      const hidden = hiddenRegions();
+      const fam = rvRadars.value.filter((x) => !hidden.has(rvRegion(x.country)));
+      return nearestN(fam, lat, lon, 3).map((n) => ({ id: n.item.id, label: n.item.name || n.item.id, km: n.km, go: () => void selectRv(n.item) }));
+    }
     const src = intlSource(w.id);
     if (!src?.site) return []; // mosaics and groups aren't single-site
     const g = groupOf(src);
@@ -141,10 +149,10 @@ export function ContextMenu() {
   );
 }
 
-/** 0.8.3 inspector (R8): "Nearest radar" plus a dropdown with the next two closest radars */
+/** 0.8.3 inspector (R8): "Nearest radar" plus a dropdown of the closest radars (0.8.4: the nearest too) */
 function NearestRadarItem({ list, close }: { list: NearPick[]; close: () => void }) {
   const [open, setOpen] = useState(false);
-  const [first, ...more] = list;
+  const first = list[0];
   const pick = (n: NearPick) => {
     n.go();
     close();
@@ -155,14 +163,14 @@ function NearestRadarItem({ list, close }: { list: NearPick[]; close: () => void
         <button class="i83-near-main" title={`Switch to the radar nearest this point (${first.label}, ${fmtDist(first.km * 1000)})`} onClick={() => pick(first)}>
           Nearest radar <small class="muted">{first.label}</small>
         </button>
-        {more.length > 0 && (
-          <button class={`i83-near-more ${open ? "on" : ""}`} title="Next closest radars" aria-label="Next closest radars" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {list.length > 1 && (
+          <button class={`i83-near-more ${open ? "on" : ""}`} title="Closest radars" aria-label="Closest radars" aria-expanded={open} onClick={() => setOpen(!open)}>
             <ChevronDown size={13} />
           </button>
         )}
       </div>
       {open &&
-        more.map((n) => (
+        list.map((n) => (
           <button key={n.id} class="i83-near-alt" title={`Switch to ${n.label}`} onClick={() => pick(n)}>
             {n.label} <small class="muted">{fmtDist(n.km * 1000)}</small>
           </button>

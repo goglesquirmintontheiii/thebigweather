@@ -36,6 +36,8 @@ export interface IntlSource {
   site?: IntlSite;
   /** snow-rate frames (same times/bounds as `frames`, which are rain) */
   frames_snow?: IntlFrame[];
+  /** 0.8.4: RainViewer: "panel" pictures have their own basemap and stay off the map */
+  display?: "map" | "panel";
 }
 export interface IntlSite {
   id: string;
@@ -119,7 +121,7 @@ export const intlBad = signal<Set<number>>(new Set());
 export const intlError = signal<string | null>(null);
 
 /** Regions shown in the layer picker, in order. */
-export const INTL_REGIONS = ["Canada", "Mexico", "Europe", "Asia", "Japan", "Oceania", "World"] as const; // 0.8.3: RainViewer
+export const INTL_REGIONS = ["Canada", "Mexico", "Central America", "South America", "Europe", "Africa", "Asia", "Japan", "Oceania", "World"] as const; // 0.8.3/0.8.4: RainViewer
 
 /** Region of a raster source or international grid layer id. */
 export function intlRegion(id: string, fallback = ""): string {
@@ -409,6 +411,7 @@ function ensureFrame(i: number) {
   created.add(i);
   f.parts.forEach((p, j) => {
     const s = p.src;
+    if (s.display === "panel") return; // 0.8.4: shown by RvPanel, not on the map
     const url = intlUrl(p.url);
     try {
       if (s.kind === "image") {
@@ -470,6 +473,13 @@ function build() {
   frameIndex.value = Math.max(0, built.length - 1);
   shownSig = "";
   show();
+  if (built.some((f) => f.parts.some((p) => p.src.display === "panel"))) scheduleReady(); // 0.8.4: the map won't report these
+}
+
+/** 0.8.4: picture URLs of the active "panel" radar, oldest first (empty for anything else). */
+export function intlPanelFrames(): string[] {
+  void intlTimes.value;
+  return built.filter((f) => f.parts[0]?.src.display === "panel").map((f) => intlUrl(f.parts[0].url));
 }
 
 function inView(b?: [number, number, number, number]) {
@@ -481,6 +491,7 @@ function inView(b?: [number, number, number, number]) {
 function loadedFrame(i: number): boolean {
   const m = map;
   if (!m || !built[i]) return false;
+  if (built[i].parts.every((p) => p.src.display === "panel")) return true; // 0.8.4: no map layers to wait for
   if (!gotTiles.has(i) && built[i].parts.some((p) => p.src.kind !== "image" && inView(p.src.bounds) && m.getZoom() >= (p.src.minzoom ?? 0) - 1)) return false;
   try {
     return built[i].parts.every((_, j) => failedParts.has(sid(i, j)) || (!!m.getSource(sid(i, j)) && m.isSourceLoaded(sid(i, j))));
@@ -671,8 +682,11 @@ export function selectIntl(id: string, precip?: Precip) {
   if (isGroupAll(id)) fitTo(id === SMN_ALL ? MEXICO_BOUNDS : unionBounds(groupMembers(id)), 5.5);
   else {
     const s = intlSource(id);
-    if (s?.site) fitTo(s.bounds, 8);
-    else flyIfFar(s?.bounds);
+    // 0.8.4: picking a RainViewer radar leaves the map alone, like a NEXRAD site
+    if (!id.startsWith("rv_")) {
+      if (s?.site) fitTo(s.bounds, 8);
+      else flyIfFar(s?.bounds);
+    }
   }
   update((s) => (s.weather = { kind: "intl", id, ...(p === "snow" ? { precip: p } : {}) }));
 }
