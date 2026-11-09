@@ -1,3 +1,10 @@
+/* 0.8.4: RainViewer ids run longer than a NEXRAD id */
+.site-row .sid {
+  width: auto;
+  min-width: 42px;
+  flex: none;
+}
+
 /* 0.8.4: agency pictures that can't be laid over the map */
 .rv-panel {
   position: fixed;
