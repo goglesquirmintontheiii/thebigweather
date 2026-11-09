@@ -50,6 +50,7 @@ import { StormTable } from "./LayerExtras";
 // intl & forecast tools
 import { SoundingCenter } from "./SoundingCenter";
 import { IntlLegend } from "./IntlLegend";
+import { RvPanel } from "./RvPanel"; // 0.8.4
 import "../intl/sites";
 // workflow
 import "../theme";
@@ -157,6 +158,7 @@ function MainApp() {
       <LinesControl /> {/* data 0.6 */}
       <P8LayerDock /> {/* data 0.8 */}
       <IntlLegend /> {/* intl & forecast tools */}
+      <RvPanel /> {/* 0.8.4 */}
       <View3D /> {/* 3D */}
       <div class="bottom-dock">
         <MinTray /> {/* 0.8.2: minimized windows */}

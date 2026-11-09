@@ -835,9 +835,9 @@ async fn intl_list(State(st): St, Query(q): Query<IntlQ>) -> Result<Json<Value>,
     Ok(Json(st.intl.list(q.id.as_deref().filter(|s| !s.is_empty())).await?))
 }
 
-/// 0.8.3: RainViewer single-site radars outside the US (positions, whether the index lists them).
+/// 0.8.3: RainViewer single-site radars (the bundled site list).
 async fn rainviewer_radars(State(st): St) -> Json<Value> {
-    Json(st.intl.rv.radars().await)
+    Json(st.intl.rv.radars())
 }
 
 #[derive(Deserialize)]

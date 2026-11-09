@@ -4,12 +4,14 @@
 import { computed, effect } from "@preact/signals";
 import { settings, update } from "../store";
 import { sites, currentSite, type Site } from "../radar/controller";
+import { rvRadars, rvRegion } from "./rvcore";
 
 /** Fields the server adds for non-NEXRAD sites. */
 export type AnySite = Site & { country?: string; region?: string; kind?: string };
 
-export type SiteRegion = "US" | "CA" | "EU" | "OT";
-export const REGION_NAMES: Record<SiteRegion, string> = { US: "US", CA: "Canada", EU: "Europe", OT: "Other" };
+export type SiteRegion = "US" | "CA" | "EU" | "AS" | "OC" | "SA" | "CB" | "AF" | "OT";
+export const REGION_NAMES: Record<SiteRegion, string> = { US: "US", CA: "Canada", EU: "Europe", AS: "Asia", OC: "Oceania", SA: "S. America", CB: "C. America", AF: "Africa", OT: "Other" };
+const REGION_ORDER: SiteRegion[] = ["US", "CA", "EU", "AS", "OC", "SA", "CB", "AF", "OT"];
 
 export function siteRegion(s: AnySite | undefined): SiteRegion {
   if (!s) return "US";
@@ -29,7 +31,8 @@ export function noLevel3(s: AnySite | undefined): boolean {
 export const siteRegions = computed<SiteRegion[]>(() => {
   const set = new Set<SiteRegion>();
   for (const s of sites.value as AnySite[]) set.add(siteRegion(s));
-  return (["US", "CA", "EU", "OT"] as SiteRegion[]).filter((r) => set.has(r));
+  for (const r of rvRadars.value) set.add(rvRegion(r.country) as SiteRegion); // 0.8.4
+  return REGION_ORDER.filter((r) => set.has(r));
 });
 
 /** Hidden regions, stored with the base "sites" layer options. */

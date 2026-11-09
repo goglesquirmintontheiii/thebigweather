@@ -637,6 +637,7 @@ impl IntlRadar {
         let ct = sniff(&b).map(String::from).or_else(|| ct.starts_with("image/").then(|| ct.split(';').next().unwrap_or("").trim().to_string()));
         // WMS servers answer errors with XML and status 200
         let ct = ct.ok_or_else(|| anyhow!("upstream returned no image (not found)"))?;
+        let b = crate::rainviewer::clean_image(url, &b).map(Bytes::from).unwrap_or(b); // 0.8.4: BoM banners
         {
             let mut c = self.imgs.lock();
             if let Some((_, (_, old, _))) = c.0.push(url.to_string(), (Instant::now(), b.clone(), ct.clone())) {

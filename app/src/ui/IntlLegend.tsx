@@ -9,6 +9,7 @@ export function IntlLegend() {
   const all = isGroupAll(w.id);
   const l = intlLegend(all ? idPrefix(w.id) : w.id, curPrecip());
   const s = all ? groupMembers(w.id)[0] : intlSource(w.id);
+  if (s?.display === "panel") return null; // 0.8.4: the picture carries its own legend
   return (
     <div class="legend glass cat intl-legend" title={s ? `${s.attribution}${s.license_note ? ` · ${s.license_note}` : ""}` : undefined}>
       <span class="il-title">
