@@ -430,6 +430,8 @@ export interface PluginCfg {
   on: boolean;
   /** 0.8.2: installed from a marketplace registry (plugins/market.ts) */
   market?: { pid: string; reg: string; version: string; base: string };
+  /** 0.8.4: hide this plugin's sidebar button(s) (right-click its card in the Plugins tab) */
+  railHidden?: boolean;
 }
 export interface Wf6Settings {
   themeMode: "dark" | "light" | "auto";

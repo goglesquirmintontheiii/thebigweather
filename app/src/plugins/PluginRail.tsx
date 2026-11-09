@@ -6,6 +6,8 @@ import { useState } from "preact/hooks";
 import { Puzzle } from "lucide-preact";
 import { pluginRail, isPanelOpen, type PluginRailButton } from "./host";
 import { installedMeta } from "./market";
+import { visibleRail } from "./marketcore";
+import { settings } from "../store";
 import { winAware } from "../ui/winframe";
 import { isMin, isPopped } from "../ui/winframe";
 import { openPanel } from "../store";
@@ -17,7 +19,7 @@ function Img({ src }: { src?: string }) {
 }
 
 export function PluginRailButtons() {
-  const list = pluginRail.value;
+  const list = visibleRail(pluginRail.value, settings.value.wf6.plugins);
   if (!list.length) return null;
   const meta = installedMeta.value;
   return (

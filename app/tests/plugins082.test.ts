@@ -1,7 +1,19 @@
 // 0.8.2: plugin marketplace — registry / manifest helpers, safe markdown, and the repo's registry.json.
 import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { parseRegistry, entryBase, assetUrl, validateManifest, cmpVersion, verifyHash, sha256hex, matches, descIsFile, DEFAULT_REGISTRY } from "../src/plugins/marketcore";
+import { parseRegistry, entryBase, assetUrl, validateManifest, cmpVersion, verifyHash, sha256hex, matches, descIsFile, DEFAULT_REGISTRY, visibleRail, openTargets } from "../src/plugins/marketcore";
+
+// 0.8.4 (SIQ-485): Show / Hide in panel, Open
+export function testRailHiddenAndOpen() {
+  const rail = [{ pid: "a", id: "1", panel: "pa" }, { pid: "b", id: "2" }, { pid: "c", id: "3", panel: "pc" }];
+  if (visibleRail(rail, []).length !== 3) throw new Error("every button shows by default");
+  const v = visibleRail(rail, [{ id: "a", railHidden: true }, { id: "b" }]);
+  if (v.map((b) => b.pid).join() !== "b,c") throw new Error("only the hidden plugin's button goes");
+  const panels = [{ pid: "a", id: "pa" }, { pid: "a", id: "pa2" }, { pid: "c", id: "pc" }];
+  if (openTargets("a", panels, rail)?.panels.map((p) => p.id).join() !== "pa,pa2") throw new Error("Open: all the plugin's panels");
+  if (openTargets("b", panels, rail)?.button?.id !== "2") throw new Error("Open: a plain rail button");
+  if (openTargets("x", panels, rail) !== null) throw new Error("Open: nothing to open");
+}
 import { parseMarkdown, parseInline, firstText } from "../src/plugins/mdparse";
 
 const assert = (c: any, m = "assertion failed") => {
