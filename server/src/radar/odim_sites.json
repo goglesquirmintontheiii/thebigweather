@@ -224,6 +224,7 @@
 {"id": "fop1", "name": "FOP1 (Norman test)", "country": "US", "lat": 35.2383, "lon": -97.46, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USFOP1"},
 {"id": "nop4", "name": "NOP4 (Norman test)", "country": "US", "lat": 35.2383, "lon": -97.46, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USNOP4"},
 {"id": "tdjt", "name": "TDJT (TDWR West Palm test)", "country": "US", "lat": 26.688, "lon": -80.273, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USTDJT"},
-{"id": "tok2", "name": "TOK2 (TDWR Oklahoma test)", "country": "US", "lat": 35.276, "lon": -97.51, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USTOK2"}
+{"id": "tok2", "name": "TOK2 (TDWR Oklahoma test)", "country": "US", "lat": 35.276, "lon": -97.51, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USTOK2"},
+{"id": "mzzu", "name": "MZZU (University of Missouri)", "country": "US", "lat": 38.9071, "lon": -92.2677, "elev_m": 273.0, "status": 1, "band": "X", "pol": "D", "rv": "MZZU", "host": "mzzu"}
 ]
 }

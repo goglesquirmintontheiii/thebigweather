@@ -18,7 +18,7 @@ export function siteRegion(s: AnySite | undefined): SiteRegion {
   if (!s) return "US";
   const c = (s.country ?? "").toUpperCase();
   // 0.8.4: radars that come from RainViewer are filed by country, wherever they are
-  if ((s as any).source === "rainviewer") return rvRegion(c) as SiteRegion;
+  if ((s as any).source === "rainviewer" || (s as any).source === "mzzu") return rvRegion(c) as SiteRegion;
   if (s.region === "EU" || s.kind === "odim") return c === "CA" ? "CA" : "EU";
   if (c === "CA") return "CA";
   if (!c || c === "US" || s.type === "NEXRAD" || s.type === "TDWR") return "US";
