@@ -11564,6 +11564,13 @@ html[data-theme="light"] .same-foot .same-hide.on {
 .lk8-icons .lk8.on {
   background: var(--accent-soft, rgba(63, 183, 255, 0.15));
 }
+/* 0.8.4: the radar link when a pane isn't showing a single-site radar */
+.lk8-icons .lk8:disabled,
+.lk8-chips .lk8:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: none;
+}
 .lk8-chips .lk8 {
   padding: 2px 6px;
   border: 1px solid var(--line-2);

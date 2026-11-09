@@ -126,6 +126,8 @@ export interface PaneLink {
   pos: boolean;
   time: boolean;
   layers: boolean;
+  /** 0.8.4: selected radar follows the main pane's. Unset: follows while the other links are all on. */
+  radar?: boolean;
 }
 export interface A11ySettings {
   /** colour-vision-safe palettes (radar tables, alerts, overlays, legends, accents) */

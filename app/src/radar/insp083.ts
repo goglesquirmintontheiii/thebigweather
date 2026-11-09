@@ -103,7 +103,17 @@ export function dedupeRows(list: InspRow[], max = 4): InspRow[] {
 
 /** R35: does a radar-site click in this pane switch only the pane? Yes when any of its links
  * (position / time / layers) is off; a fully linked pane follows the main radar. */
-export function siteClickTarget(link: { pos: boolean; time: boolean; layers: boolean }, radar: boolean): "pane" | "main" {
+export function siteClickTarget(link: { pos: boolean; time: boolean; layers: boolean; radar?: boolean }, radar: boolean): "pane" | "main" {
   if (!radar) return "main";
-  return link.pos && link.time && link.layers ? "main" : "pane";
+  return radarLinked(link) ? "main" : "pane";
+}
+
+/** 0.8.4: does this pane's selected radar follow the main pane's? */
+export function radarLinked(link: { pos: boolean; time: boolean; layers: boolean; radar?: boolean }): boolean {
+  return link.radar ?? (link.pos && link.time && link.layers);
+}
+
+/** 0.8.4: is the radar site linked for this kind of window? A pane window has its own radar link; a full map window keeps following its position link. */
+export function siteLinkOn(kind: string, link: { pos: boolean; time: boolean; layers: boolean; radar?: boolean }): boolean {
+  return kind === "pane" ? radarLinked(link) : link.pos;
 }

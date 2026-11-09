@@ -11,10 +11,14 @@ import { gridLayers, selectWeather, activeLabel, GIBS } from "../weather";
 import { SwipeDivider, swipeGeom, type SwipeMode } from "./CompareSwipe"; // data 0.6
 import { noLevel3 } from "../intl/sites";
 import { fmtTime } from "../util";
-import { ArrowDownLeft /* 0.8.3 */, AppWindow, Move, Clock, Layers, ExternalLink, SquarePlus, Pencil, Link2, Link2Off, ScanEye, RefreshCw } from "lucide-preact";
+import { ArrowDownLeft /* 0.8.3 */, Radar as RadarIcon /* 0.8.4 */, AppWindow, Move, Clock, Layers, ExternalLink, SquarePlus, Pencil, Link2, Link2Off, ScanEye, RefreshCw } from "lucide-preact";
 import { popout, popoutSpec } from "../popout";
 import { mapRef } from "../map/mapview";
-import { myKind, myLink, peerList, setMyLink, setPeerLink, linkMap } from "../linkwin";
+import { myKind, myLink, peerList, setMyLink, setPeerLink, linkMap, mainIsRadar } from "../linkwin";
+import { radarLinked } from "../radar/insp083"; // 0.8.4
+import { ShortcutsDialog } from "./Shortcuts"; // 0.8.4
+import { CommandPalette } from "./CommandPalette"; // 0.8.4
+import { DockGrip } from "./winframe"; // 0.8.4
 import { startAlerts } from "../alerts";
 import { jumpToSetting } from "../a11y/jump";
 // 0.8.1
@@ -86,7 +90,7 @@ const LINK_KINDS: [keyof PaneLink, any, string][] = [
 ];
 
 /** Three small toggles: position / time / layers. 0.8.2: right-click the layers one for the pane's own layers. */
-export function LinkToggles({ lk, set, what, chips, onLayers, own }: { lk: PaneLink; set: (l: PaneLink) => void; what: string; chips?: boolean; onLayers?: (x: number, y: number) => void; own?: boolean }) {
+export function LinkToggles({ lk, set, what, chips, onLayers, own, radar }: { lk: PaneLink; set: (l: PaneLink) => void; what: string; chips?: boolean; onLayers?: (x: number, y: number) => void; own?: boolean; radar?: RadarToggle }) {
   return (
     <span class={chips ? "lk8-chips" : "lk8-icons"} role="group" aria-label={`${what} links`}>
       {LINK_KINDS.map(([k, I, name]) => (
@@ -122,8 +126,45 @@ export function LinkToggles({ lk, set, what, chips, onLayers, own }: { lk: PaneL
           {chips && <span>{name === "position" ? "Pos" : name === "time" ? "Time" : "Layers"}</span>}
         </button>
       ))}
+      {radar && (
+        <button
+          class={`lk8 ${radar.on ? "on" : ""}`}
+          disabled={!radar.can}
+          aria-pressed={radar.on}
+          title={!radar.can ? `${what}: radar link needs single-site radar here and in the main pane` : `${what}: radar ${radar.on ? "follows the main pane (click to unlink)" : "is chosen here (click to follow the main pane)"}`}
+          aria-label={`Link radar for ${what}`}
+          onClick={(e) => (e.stopPropagation(), radar.set(!radar.on))}
+        >
+          <RadarIcon size={chips ? 12 : 11} />
+        </button>
+      )}
     </span>
   );
+}
+
+/** 0.8.4: the header's radar link: follows the main pane, or keeps its own radar */
+interface RadarToggle {
+  on: boolean;
+  can: boolean;
+  set: (on: boolean) => void;
+}
+function setRadarLink(idx: number, standalone: boolean, on: boolean) {
+  const s0 = settings.peek();
+  const cfg = s0.panes.list[idx - 1] ?? defaultCfg(idx);
+  const next: PaneCfg = { ...cfg, site: on ? undefined : cfg.site ?? s0.radar.site }; // unlinking keeps the radar now on screen
+  update((s) => {
+    while (s.panes.list.length < idx) s.panes.list.push(defaultCfg(s.panes.list.length + 1));
+    s.panes.list[idx - 1] = next;
+  });
+  if (standalone) setMyLink({ ...myLink.peek(), radar: on });
+  else setPaneLink(idx, { ...paneLink(idx), radar: on });
+  paneConfigured(idx, next);
+}
+/** the toggle for pane idx (or a pane window) */
+function radarToggle(idx: number, cfg: PaneCfg, standalone: boolean): RadarToggle {
+  const lk = standalone ? myLink.value : paneLink(idx);
+  const mainRadar = standalone ? mainIsRadar.value : settings.value.weather.kind === "radar";
+  return { on: radarLinked(lk) && !cfg.site, can: mainRadar && cfg.weather.kind === "radar", set: (on) => setRadarLink(idx, standalone, on) };
 }
 
 function setPaneLink(idx: number, lk: PaneLink) {
@@ -306,9 +347,9 @@ function PaneBearing({ idx }: { idx: number }) {
 }
 
 /** Second map window / pane window: what this window follows. */
-function LinkControls({ onLayers }: { onLayers?: (x: number, y: number) => void }) {
+function LinkControls({ onLayers, radar }: { onLayers?: (x: number, y: number) => void; radar?: RadarToggle }) {
   if (myKind === "main") return null;
-  return <LinkToggles lk={myLink.value} set={setMyLink} what="This window" onLayers={myKind === "pane" ? onLayers : undefined} own={myKind === "pane" && paneHasOverrides(1)} />;
+  return <LinkToggles lk={myLink.value} set={setMyLink} what="This window" radar={radar} onLayers={myKind === "pane" ? onLayers : undefined} own={myKind === "pane" && paneHasOverrides(1)} />;
 }
 
 /** Publish the header's bottom edge as --hdr-b so the pane dropdowns and the scan bar sit just
@@ -512,7 +553,7 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
         <span class="pane-time" title={st.error ?? ""}>{st.loading ? "Loading…" : st.error ? st.error : st.time ? fmtTime(st.time, true) : ""}</span>
         {standalone ? (
           <>
-            <LinkControls onLayers={(x, y) => setMenu({ x, y })} />
+            <LinkControls onLayers={(x, y) => setMenu({ x, y })} radar={radarToggle(idx, cfg, true)} />
             <span class="lk8-icons">
               <Pane3DBtn idx={idx} /* 0.8.3 3d */ />
               <MlToggle idx={idx} what="This window" />
@@ -520,11 +561,12 @@ function PaneBox({ idx, area, headStyle, standalone }: { idx: number; area?: str
               <button class="lk8 pane-out" title="Dock back (or drag this window onto the main window)" aria-label="Dock back" onClick={() => window.dispatchEvent(new Event("tbw-dock-pane")) /* WinDrop.tsx */}>
                 <ArrowDownLeft size={11} />
               </button>
+              <DockGrip cls="lk8" /* 0.8.4 */ />
             </span>
           </>
         ) : (
           <span class="ph-tools">
-            {!swipe && <LinkToggles lk={lk} set={(l) => setPaneLink(idx, l)} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
+            {!swipe && <LinkToggles lk={lk} set={(l) => setPaneLink(idx, l)} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} radar={radarToggle(idx, cfg, false)} />}
             {swipe && <LinkToggles lk={{ ...lk, pos: true }} set={(l) => setPaneLink(idx, { ...l, pos: true })} what={`Pane ${idx + 1}`} onLayers={(x, y) => setMenu({ x, y })} own={paneHasOverrides(idx)} />}
             <Pane3DBtn idx={idx} /* 0.8.3 3d */ />
             <MlToggle idx={idx} what={`Pane ${idx + 1}`} />
@@ -555,6 +597,9 @@ export function PaneWindowApp() {
       <div class="panes layout-1">
         <PaneBox idx={1} standalone />
       </div>
+      {/* 0.8.4: the shortcut menus open in the window they were pressed in */}
+      <ShortcutsDialog />
+      <CommandPalette />
     </div>
   );
 }

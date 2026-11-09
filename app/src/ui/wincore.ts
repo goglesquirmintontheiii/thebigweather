@@ -57,11 +57,25 @@ export const RAIL_WIN: Record<string, string> = {
   dash: "c:dash",
   timeline: "c:atl",
 };
+/** 0.8.4: how much the popped-out stats window shows at this size: 0 base, 1 details, 2 details + per-core / processes */
+export function statsTier(w: number, h: number): 0 | 1 | 2 {
+  if (w >= 720 && h >= 520) return 2;
+  return w >= 420 && h >= 300 ? 1 : 0;
+}
+/** natural width of each tier (fitScale's base: the content is laid out for this width) */
+export const STATS_NAT_W = [280, 460, 720];
+
 /** 0.8.3: scale that makes content of natural size natW × natH fit availW × availH (clamped; 2 decimals). */
 export function fitScale(availW: number, availH: number, natW: number, natH: number, min = 0.75, max = 3): number {
   if (!(availW > 0) || !(availH > 0) || !(natW > 0) || !(natH > 0)) return 1;
   const f = Math.min(availW / natW, availH / natH);
   return Math.round(Math.max(min, Math.min(max, f)) * 100) / 100;
+}
+
+/** 0.8.4: a key that opens a menu in a pane window itself (not the main window): "palette" | "keys" | null */
+export function paneWinMenuKey(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }): "palette" | "keys" | null {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") return "palette";
+  return e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey ? "keys" : null;
 }
 
 /* 0.8.3: keys pressed in a pop-out, passed to the main window (winkeys.ts) */

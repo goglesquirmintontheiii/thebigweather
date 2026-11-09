@@ -502,3 +502,34 @@ html.wf-oswin .stats.wf-osframe.wf-measure > .stats-zoom > :not(.stats-head) {
   width: min(600px, 94vw);
   height: min(84vh, 820px);
 }
+
+/* ---------- 0.8.4: drag-to-dock grip (Linux), stats window details ---------- */
+.wd-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  color: var(--muted, #9aa4b2);
+  -webkit-app-region: no-drag;
+}
+.wd-grip:hover {
+  color: var(--text, #e8eef5);
+}
+.wd-grip.wf-dockgrip {
+  width: 16px;
+  height: 14px;
+  margin-left: 4px;
+}
+.sd-grid .stats-more {
+  grid-column: 1 / -1;
+}
+.stats-more {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sm-cores {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 2px 12px;
+}

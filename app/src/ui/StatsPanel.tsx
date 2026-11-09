@@ -13,6 +13,11 @@ import { Cpu, GripVertical, MonitorCog, Server, Minimize2, Maximize2 } from "luc
 import { mergedLayout } from "./uiorder"; // 0.8.1
 import "./hotfix081.css"; // 0.8.1
 import { WinButtons, IN_OS_WIN, isMin, isMax, isPopped, minimize, toggleMax, canPop, popWindow, onBarDbl } from "./winframe"; // 0.8.2
+import { statsTier } from "./wincore"; // 0.8.4
+
+/** 0.8.4: the popped-out window shows more as it gets more space */
+const osTier = signal(typeof window !== "undefined" && IN_OS_WIN ? statsTier(window.innerWidth, window.innerHeight) : 0);
+if (typeof window !== "undefined" && IN_OS_WIN) window.addEventListener("resize", () => (osTier.value = statsTier(window.innerWidth, window.innerHeight)));
 
 const stats = signal<any>(null);
 const history = signal<number[]>([]);
@@ -484,6 +489,47 @@ function MiniSpark({ h }: { h: number[] }) {
   );
 }
 
+/** 0.8.4: popped out and large: every core and every app process */
+function StatsMore({ s, c }: { s: any; c: ClientStats | null }) {
+  const cores: number[] = s?.per_core ?? [];
+  const procs = c && hasIpc() ? Object.entries(c.procs) : [];
+  const name = (k: string) => (k === "main" ? "Main" : k === "renderer" ? "Window" : k === "gpu" ? "GPU" : "Other");
+  const ncores = Math.max(1, s?.cores ?? c?.cores ?? 1);
+  return (
+    <div class="stats-more">
+      {cores.length > 0 && (
+        <Sec title="Cores">
+          <div class="sm-cores">
+            {cores.map((v, i) => (
+              <div class="srow" key={i}>
+                <span>{i}</span>
+                <Bar v={v} />
+                <b>{Math.round(v)}%</b>
+              </div>
+            ))}
+          </div>
+        </Sec>
+      )}
+      {procs.length > 0 && (
+        <Sec title="App processes">
+          {procs.map(([k, v]) => (
+            <div class="srow" key={k}>
+              <span>
+                {name(k)}
+                {v.n > 1 ? ` ×${v.n}` : ""}
+              </span>
+              <Bar v={v.cpu / ncores} />
+              <b>
+                {(v.cpu / ncores).toFixed(1)}% · {fmtBytes(v.mem)}
+              </b>
+            </div>
+          ))}
+        </Sec>
+      )}
+    </div>
+  );
+}
+
 function Merged({ s, c }: { s: any; c: ClientStats | null }) {
   const mini = statsMini.value;
   const ipc = hasIpc();
@@ -575,7 +621,9 @@ function Merged({ s, c }: { s: any; c: ClientStats | null }) {
   /* 0.8.1: the layout follows the panel's height (drag the bottom edge): one line → dense grid →
    * the original full view; the button switches mini / dense and clears the height */
   const SK = "stats.merged";
-  const layout = mergedLayout(sizes.value[SK]?.h, mini);
+  const raw = mergedLayout(sizes.value[SK]?.h, mini);
+  const tier = osTier.value; // 0.8.4
+  const layout = raw === "mini" && tier >= 1 ? "compact" : raw;
   const toggle = (
     <button
       class="icon-btn"
@@ -641,6 +689,7 @@ function Merged({ s, c }: { s: any; c: ClientStats | null }) {
           ) : (
             !s && <div class="muted small">…</div>
           )}
+          {tier >= 2 && <StatsMore s={s} c={c} />}
         </div>
       </Floater>
     );
@@ -657,9 +706,10 @@ function Merged({ s, c }: { s: any; c: ClientStats | null }) {
             {r.spark && <MiniSpark h={r.spark} />}
             <span class="sd-l">{r.label}</span>
             {r.cells}
-            {detail.value === r.k && r.det && <pre class="sd-det">{r.det}</pre>}
+            {(detail.value === r.k || tier >= 1) && r.det && <pre class="sd-det">{r.det}</pre>}
           </div>
         ))}
+        {tier >= 2 && <StatsMore s={s} c={c} />}
       </div>
     </Floater>
   );

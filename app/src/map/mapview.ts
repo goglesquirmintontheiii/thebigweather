@@ -7,6 +7,7 @@ import { settings, update, tool, crosshair, toast, uid, details, type DetailItem
 import { buildStyle, googleSession, isDarkBasemap } from "./basemaps";
 import { attachOverlays, pickOverlay, popup } from "../overlays/manager";
 import { attachDraw } from "./draw";
+import { fixHighPitchPicking } from "./pitchpick"; // 0.8.4
 import { RadarLayer } from "../radar/RadarLayer";
 import { attachLayer, sites, currentSite, displaySweep, selectSite, activeTable, liveSweep, frames, liveState, extraFrames, extraLive } from "../radar/controller";
 import { GridLayer } from "../grid/GridLayer";
@@ -349,6 +350,7 @@ export function createMap(container: HTMLElement): MLMap {
     transformRequest: offlineTransform, // workflow 0.6
   } as any);
   map.touchZoomRotate.disableRotation();
+  fixHighPitchPicking(map); // 0.8.4: clicks at steep 3D camera angles
   /* 0.8.1 perf: render resolution / frame-rate cap; a lost WebGL context that doesn't come back
    * (driver reset, too many contexts) offers a reload instead of a frozen map */
   applyPerfToMap(map);
