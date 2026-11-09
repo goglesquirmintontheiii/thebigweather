@@ -6,6 +6,9 @@
 //!   downloaded once and kept on disk for a week (the FAA updates them every 56 days); requests
 //!   are answered from memory for the map box, generalised for the zoom (Douglas–Peucker, ~1 px)
 //!   with small airspaces dropped at low zoom, so a response stays small.
+//!   0.8.4: the national download takes the FAA service 30 s or more, so it runs in the background;
+//!   until it is done a request gets just its map box straight from the FAA (a few seconds), marked
+//!   `pending` so the app asks again.
 //! * `airadv` — airspace advisories not shown elsewhere: TFRs (tfr.faa.gov: GeoServer WFS shapes +
 //!   the TFR list + each NOTAM's XML for times / altitudes / text, cached per NOTAM revision) and
 //!   Center Weather Advisories (aviationweather.gov). SIGMETs (US + international) and G-AIRMETs
@@ -19,6 +22,7 @@ use once_cell::sync::Lazy;
 use parking_lot::{Mutex, RwLock};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,6 +35,21 @@ const SUA_FIELDS: &str = "NAME,TYPE_CODE,UPPER_DESC,UPPER_VAL,UPPER_UOM,UPPER_CO
 const DISK_AGE: Duration = Duration::from_secs(7 * 86400);
 /// most features in one response
 const MAX_FEATURES: usize = 2500;
+/// the in-memory copy is re-read after this long (a partial one sooner)
+const MEM_AGE: Duration = Duration::from_secs(86400);
+const PARTIAL_AGE: Duration = Duration::from_secs(300);
+/// after a failed national load, wait this long before trying again
+const RETRY_AFTER: Duration = Duration::from_secs(60);
+/// national download: features per page and pages at once
+const PAGE: usize = 500;
+const WORKERS: usize = 4;
+/// map-box answers while the national copy loads
+const PREVIEW_MAX: usize = 800;
+const PREVIEW_TIMEOUT: Duration = Duration::from_secs(10);
+const PREVIEW_AGE: Duration = Duration::from_secs(120);
+const PREVIEW_KEEP: usize = 8;
+/// wait this long for a copy already on disk before answering with a map box
+const DISK_WAIT: Duration = Duration::from_secs(3);
 
 type Ring = Vec<[f64; 2]>;
 
@@ -48,8 +67,17 @@ pub struct Store {
     pub shapes: Vec<Shape>,
 }
 
-static STORE: Lazy<RwLock<Option<(Instant, Arc<Store>)>>> = Lazy::new(Default::default);
-static LOADING: Lazy<tokio::sync::Mutex<()>> = Lazy::new(Default::default);
+struct Loaded {
+    at: Instant,
+    /// false: one of the two layers is missing
+    full: bool,
+    store: Arc<Store>,
+}
+
+static STORE: Lazy<RwLock<Option<Loaded>>> = Lazy::new(Default::default);
+static LOADING: AtomicBool = AtomicBool::new(false);
+static LAST_FAIL: Lazy<Mutex<Option<Instant>>> = Lazy::new(Default::default);
+static PREVIEWS: Lazy<Mutex<HashMap<String, (Instant, Value)>>> = Lazy::new(Default::default);
 
 // ---------- geometry ----------
 
@@ -265,64 +293,149 @@ pub fn shape_of(f: &Value, sua: bool) -> Option<Shape> {
 
 // ---------- national store ----------
 
-/// Features of one layer: disk copy if younger than a week, else the FAA service (paged), with the
-/// stale copy as a fallback.
-async fn layer(o: &Overlays, file: &str, layer: &str, where_: &str, fields: &str) -> Result<Vec<Value>> {
-    let p = o.data_dir.join(file);
+struct LayerSrc {
+    file: &'static str,
+    url: &'static str,
+    where_: &'static str,
+    fields: &'static str,
+}
+
+const CLASS_SRC: LayerSrc = LayerSrc { file: "airspace_class.json", url: CLASS_LAYER, where_: CLASS_WHERE, fields: CLASS_FIELDS };
+const SUA_SRC: LayerSrc = LayerSrc { file: "airspace_sua.json", url: SUA_LAYER, where_: "1=1", fields: SUA_FIELDS };
+
+/// The disk copy of a layer, and whether it is younger than a week.
+async fn read_disk(o: &Overlays, src: &LayerSrc) -> Option<(Vec<Value>, bool)> {
+    let p = o.data_dir.join(src.file);
     let fresh = std::fs::metadata(&p).and_then(|m| m.modified()).ok().map(|t| t.elapsed().unwrap_or_default() < DISK_AGE).unwrap_or(false);
-    let read = || async { tokio::fs::read(&p).await.ok().and_then(|b| serde_json::from_slice::<Vec<Value>>(&b).ok()).filter(|v| !v.is_empty()) };
-    if fresh {
-        if let Some(v) = read().await {
-            return Ok(v);
-        }
-    }
+    let v = tokio::fs::read(&p).await.ok().and_then(|b| serde_json::from_slice::<Vec<Value>>(&b).ok()).filter(|v| !v.is_empty())?;
+    Some((v, fresh))
+}
+
+/// Download a layer and save it; the disk copy we already have if that fails.
+async fn download(o: &Overlays, src: &LayerSrc, have: Option<Vec<Value>>) -> Option<Vec<Value>> {
     // ~10 m generalisation at the source keeps the national download a few MB
-    let q = Query { layer, where_, fields, max: 20_000, page: 2000, simplify: 0.0001, ..Default::default() };
-    match agsquery::features(o, &q).await {
+    let q = Query { layer: src.url, where_: src.where_, fields: src.fields, max: 20_000, page: PAGE, simplify: 0.0001, order_by: "OBJECTID", ..Default::default() };
+    match agsquery::features_paged(o, &q, WORKERS).await {
         Ok(v) if !v.is_empty() => {
             if let Ok(b) = serde_json::to_vec(&v) {
-                tokio::fs::write(&p, b).await.ok();
+                tokio::fs::write(o.data_dir.join(src.file), b).await.ok();
             }
-            Ok(v)
+            Some(v)
         }
         r => {
-            if let Some(v) = read().await {
-                tracing::warn!("{file}: {}; using the cached copy", r.err().map(|e| format!("{e:#}")).unwrap_or_else(|| "empty".into()));
-                return Ok(v);
-            }
-            match r {
-                Err(e) => Err(e),
-                Ok(_) => bail!("FAA airspace service returned nothing"),
-            }
+            tracing::warn!("{}: {}", src.file, r.err().map(|e| format!("{e:#}")).unwrap_or_else(|| "empty".into()));
+            have
         }
     }
 }
 
-async fn store(o: &Overlays) -> Result<Arc<Store>> {
-    let cur = |max: Duration| STORE.read().as_ref().filter(|(t, _)| t.elapsed() < max).map(|(_, s)| s.clone());
-    if let Some(s) = cur(Duration::from_secs(86400)) {
-        return Ok(s);
-    }
-    let _g = LOADING.lock().await;
-    if let Some(s) = cur(Duration::from_secs(86400)) {
-        return Ok(s);
-    }
-    let (a, b) = tokio::join!(layer(o, "airspace_class.json", CLASS_LAYER, CLASS_WHERE, CLASS_FIELDS), layer(o, "airspace_sua.json", SUA_LAYER, "1=1", SUA_FIELDS));
-    if let (Err(e), Err(_)) = (&a, &b) {
-        // keep serving an older copy if there is one
-        if let Some(s) = cur(Duration::MAX) {
-            return Ok(s);
-        }
-        bail!("{e:#}");
-    }
-    let mut shapes: Vec<Shape> = vec![];
-    shapes.extend(a.unwrap_or_default().iter().filter_map(|f| shape_of(f, false)));
-    shapes.extend(b.unwrap_or_default().iter().filter_map(|f| shape_of(f, true)));
+fn build_store(class: &[Value], sua: &[Value]) -> Store {
+    let mut shapes: Vec<Shape> = class.iter().filter_map(|f| shape_of(f, false)).collect();
+    shapes.extend(sua.iter().filter_map(|f| shape_of(f, true)));
     // draw order: big first, so smaller airspace (and its label) sits on top
     shapes.sort_by(|x, y| area(&y.bbox).total_cmp(&area(&x.bbox)));
-    let s = Arc::new(Store { shapes });
-    *STORE.write() = Some((Instant::now(), s.clone()));
-    Ok(s)
+    Store { shapes }
+}
+
+fn publish(class: &Option<Vec<Value>>, sua: &Option<Vec<Value>>) {
+    let full = class.is_some() && sua.is_some();
+    // never replace a complete copy with a partial one
+    if !full && STORE.read().as_ref().is_some_and(|l| l.full) {
+        return;
+    }
+    let store = Arc::new(build_store(class.as_deref().unwrap_or(&[]), sua.as_deref().unwrap_or(&[])));
+    *STORE.write() = Some(Loaded { at: Instant::now(), full, store });
+    PREVIEWS.lock().clear();
+}
+
+/// Disk copies first (even old ones, so the map has something at once), then whatever needs downloading.
+async fn load(o: &Overlays) -> bool {
+    let (a, b) = tokio::join!(read_disk(o, &CLASS_SRC), read_disk(o, &SUA_SRC));
+    let fresh = |x: &Option<(Vec<Value>, bool)>| x.as_ref().is_some_and(|(_, f)| *f);
+    let (fa, fb) = (fresh(&a), fresh(&b));
+    let (a, b) = (a.map(|x| x.0), b.map(|x| x.0));
+    if a.is_some() && b.is_some() {
+        publish(&a, &b);
+    }
+    if fa && fb {
+        return true;
+    }
+    let (a, b) = tokio::join!(
+        async { if fa { a } else { download(o, &CLASS_SRC, a).await } },
+        async { if fb { b } else { download(o, &SUA_SRC, b).await } },
+    );
+    if a.is_none() && b.is_none() {
+        return false;
+    }
+    publish(&a, &b);
+    true
+}
+
+/// Start the national load in the background unless it is running or just failed.
+fn kick(o: &Arc<Overlays>) {
+    if LAST_FAIL.lock().is_some_and(|t| t.elapsed() < RETRY_AFTER) || LOADING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let o = o.clone();
+    tokio::spawn(async move {
+        struct Done;
+        impl Drop for Done {
+            fn drop(&mut self) {
+                LOADING.store(false, Ordering::SeqCst);
+            }
+        }
+        let _done = Done;
+        *LAST_FAIL.lock() = if load(&o).await { None } else { Some(Instant::now()) };
+    });
+}
+
+fn needs_reload(age: Duration, full: bool) -> bool {
+    age >= if full { MEM_AGE } else { PARTIAL_AGE }
+}
+
+fn current() -> Option<(Arc<Store>, Duration, bool)> {
+    STORE.read().as_ref().map(|l| (l.store.clone(), l.at.elapsed(), l.full))
+}
+
+/// Class airspace worth asking the FAA for at this zoom (same limits as `min_zoom`).
+fn preview_where(z: f64) -> String {
+    let kinds = if z < 5.0 {
+        "'CLASS_B'"
+    } else if z < 7.0 {
+        "'CLASS_B','CLASS_C'"
+    } else {
+        return CLASS_WHERE.to_string();
+    };
+    format!("TYPE_CODE='CLASS' AND LOCAL_TYPE IN ({kinds})")
+}
+
+/// Just this map box, straight from the FAA. None when a layer could not be fetched.
+async fn preview(o: &Overlays, bb: [f64; 4], z: f64, cls: bool, sua: bool) -> Option<Value> {
+    let key = format!("{bb:?}|{z}|{cls}|{sua}");
+    {
+        if let Some((_, v)) = PREVIEWS.lock().get(&key).filter(|(t, _)| t.elapsed() < PREVIEW_AGE) {
+            return Some(v.clone());
+        }
+    }
+    let tol = 360.0 / (256.0 * 2f64.powf(z.clamp(0.0, 16.0).floor())) * 0.8;
+    let class_where = preview_where(z);
+    let get = |src: &'static LayerSrc, where_: String, on: bool| async move {
+        if !on {
+            return Some(vec![]);
+        }
+        let q = Query { layer: src.url, where_: &where_, fields: src.fields, bbox: Some(bb), max: PREVIEW_MAX, page: PREVIEW_MAX, simplify: tol, ..Default::default() };
+        agsquery::features(o, &q).await.map_err(|e| tracing::debug!("{}: {e:#}", src.file)).ok()
+    };
+    let r = tokio::time::timeout(PREVIEW_TIMEOUT, async { tokio::join!(get(&CLASS_SRC, class_where, cls), get(&SUA_SRC, "1=1".to_string(), sua)) }).await.ok()?;
+    let (a, b) = (r.0?, r.1?);
+    let v = query(&build_store(&a, &b), bb, z, cls, sua);
+    let mut c = PREVIEWS.lock();
+    c.retain(|_, (t, _)| t.elapsed() < PREVIEW_AGE);
+    if c.len() >= PREVIEW_KEEP {
+        c.clear();
+    }
+    c.insert(key, (Instant::now(), v.clone()));
+    Some(v)
 }
 
 fn area(b: &[f64; 4]) -> f64 {
@@ -389,11 +502,38 @@ pub fn query(st: &Store, bb: [f64; 4], z: f64, cls: bool, sua: bool) -> Value {
     v
 }
 
-pub async fn airspace(o: &Overlays, bbox: &str, z: &str, cls: &str, sua: &str) -> Result<Value> {
+pub async fn airspace(o: &Arc<Overlays>, bbox: &str, z: &str, cls: &str, sua: &str) -> Result<Value> {
     let bb = parse_bbox(bbox)?.unwrap_or([-180.0, -85.0, 180.0, 85.0]);
     let z: f64 = z.parse().unwrap_or(6.0);
-    let st = store(o).await?;
-    Ok(query(&st, bb, z, cls != "off", sua != "off"))
+    let (want_cls, want_sua) = (cls != "off", sua != "off");
+    if let Some((st, age, full)) = current() {
+        if needs_reload(age, full) {
+            kick(o);
+        }
+        return Ok(query(&st, bb, z, want_cls, want_sua));
+    }
+    kick(o);
+    // a copy on disk only takes a moment to read
+    if o.data_dir.join(CLASS_SRC.file).exists() && o.data_dir.join(SUA_SRC.file).exists() {
+        let t0 = Instant::now();
+        while t0.elapsed() < DISK_WAIT {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if let Some((st, _, _)) = current() {
+                return Ok(query(&st, bb, z, want_cls, want_sua));
+            }
+        }
+    }
+    let box_only = preview(o, bb, z, want_cls, want_sua).await;
+    let loading = LOADING.load(Ordering::SeqCst);
+    let mut v = match box_only {
+        Some(v) => v,
+        None if loading => fc(vec![]),
+        None => bail!("FAA airspace service unavailable"),
+    };
+    if loading {
+        v["pending"] = json!(true);
+    }
+    Ok(v)
 }
 
 // ---------- advisories: TFRs + CWAs ----------
@@ -646,6 +786,22 @@ mod tests {
         // not a wanted class
         let e5 = json!({"type": "Feature", "geometry": sq(0.0, 0.0, 1.0), "properties": {"LOCAL_TYPE": "CLASS_E5"}});
         assert!(shape_of(&e5, false).is_none());
+    }
+
+    #[test]
+    fn preview_follows_the_zoom_limits() {
+        assert_eq!(preview_where(4.0), "TYPE_CODE='CLASS' AND LOCAL_TYPE IN ('CLASS_B')");
+        assert_eq!(preview_where(6.0), "TYPE_CODE='CLASS' AND LOCAL_TYPE IN ('CLASS_B','CLASS_C')");
+        assert_eq!(preview_where(8.0), CLASS_WHERE);
+    }
+
+    #[test]
+    fn reload_timing() {
+        assert!(!needs_reload(Duration::from_secs(3600), true));
+        assert!(needs_reload(MEM_AGE, true));
+        // a partial copy (one layer failed) is retried soon, not after a day
+        assert!(needs_reload(PARTIAL_AGE, false));
+        assert!(!needs_reload(Duration::from_secs(10), false));
     }
 
     #[test]

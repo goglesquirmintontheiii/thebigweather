@@ -538,25 +538,6 @@ const ALIAS: Record<string, string> = {
   Environment: "Environment & health",
   Traffic: "Traffic & roads",
 };
-const GROUP_ORDER = [
-  "Alerts & warnings",
-  "Severe",
-  "Tropical",
-  "Precipitation & winter",
-  "Outlooks",
-  "Observations",
-  "Aviation",
-  "Marine",
-  "Hazards",
-  "Environment & health",
-  "Traffic & roads",
-  "Cameras",
-  "Space",
-  "Chasers & reports",
-  "Reference",
-  "My files",
-  "Fun",
-];
 
 const menuGroup = (d: OverlayDef) => MENU_GROUP[d.id] ?? ALIAS[d.group] ?? d.group;
 
@@ -672,74 +653,55 @@ function loadOpen(): Record<string, boolean> {
     return {};
   }
 }
-
-export function OverlayGroups({ filter = "" }: { filter?: string }) {
-  const [open, setOpen] = useState<Record<string, boolean>>(loadOpen);
-  const toggle = (g: string, def: boolean) =>
-    setOpen((o) => {
-      const n = { ...o, [g]: !(o[g] ?? def) };
-      try {
-        localStorage.setItem(OPEN_KEY, JSON.stringify(n));
-      } catch {
-        /* private mode */
-      }
-      return n;
-    });
-  const q = filter.trim().toLowerCase();
-  const all = items();
-  const words = q.split(/\s+/).filter(Boolean);
-  const match = (it: Item) => words.every((w) => `${it.name} ${it.desc} ${it.group}`.toLowerCase().includes(w));
-  const groups = [...new Set([...GROUP_ORDER, ...all.map((i) => i.group)])];
-  // unknown groups go before Reference
-  groups.sort((a, b) => {
-    const ia = GROUP_ORDER.indexOf(a),
-      ib = GROUP_ORDER.indexOf(b);
-    return (ia < 0 ? GROUP_ORDER.indexOf("Reference") - 0.5 : ia) - (ib < 0 ? GROUP_ORDER.indexOf("Reference") - 0.5 : ib);
-  });
-
-  if (q) {
-    const hits = all.filter(match);
-    return (
-      <section class="ovl-group">
-        <div class="ovl-ghead static">
-          <span>
-            {hits.length} match{hits.length === 1 ? "" : "es"}
-          </span>
-        </div>
-        {hits.map((it) => (
-          <ItemRow key={it.key} it={it} sub />
-        ))}
-        {!hits.length && <div class="muted small">No layer matches “{filter}”.</div>}
-      </section>
-    );
+/** 0.8.4: which layer groups are open (shared by the Layers tab's categories) */
+const groupOpen = signal<Record<string, boolean>>(loadOpen());
+function toggleGroup(g: string, def: boolean) {
+  const o = groupOpen.peek();
+  const n = { ...o, [g]: !(o[g] ?? def) };
+  groupOpen.value = n;
+  try {
+    localStorage.setItem(OPEN_KEY, JSON.stringify(n));
+  } catch {
+    /* private mode */
   }
+}
 
+/** 0.8.4: every row of the Layers tab */
+export const layerItems = items;
+export type LayerItem = Item;
+
+/** 0.8.4: search results (flat list) */
+export function LayerHits({ hits, filter }: { hits: Item[]; filter: string }) {
+  return (
+    <section class="ovl-group">
+      <div class="ovl-ghead static">
+        <span>
+          {hits.length} match{hits.length === 1 ? "" : "es"}
+        </span>
+      </div>
+      {hits.map((it) => (
+        <ItemRow key={it.key} it={it} sub />
+      ))}
+      {!hits.length && <div class="muted small">No layer matches “{filter}”.</div>}
+    </section>
+  );
+}
+
+/** 0.8.4: the "My layers" category: Active, then Favourites */
+export function LayerMine() {
+  const open = groupOpen.value;
+  const all = items();
   const active = all.filter((i) => i.on);
   const favs = all.filter((i) => settings.value.ovl[i.key]?.fav);
   const allOff = () =>
     update((s) => {
       for (const k of Object.keys(s.ovl)) if (s.ovl[k]?.on) s.ovl[k] = { ...s.ovl[k], on: false };
     });
-  const head = (g: string, isOpen: boolean, n: number, on: number, extra?: any) => (
-    <div class="ovl-ghead2">
-      <button class="ovl-gtoggle" onClick={() => toggle(g, false)} aria-expanded={isOpen}>
-        <ChevronRight size={13} class={isOpen ? "rot" : ""} />
-        <span>{g}</span>
-        <span class="ovl-gcount">{n}</span>
-        {on > 0 && (
-          <span class="ovl-badge" title={`${on} on`}>
-            {on} on
-          </span>
-        )}
-      </button>
-      {extra}
-    </div>
-  );
   return (
     <>
       <section class="ovl-group pinned">
         <div class="ovl-ghead2">
-          <button class="ovl-gtoggle" onClick={() => toggle("Active", true)}>
+          <button class="ovl-gtoggle" onClick={() => toggleGroup("Active", true)}>
             <ChevronRight size={13} class={(open.Active ?? true) ? "rot" : ""} />
             <span>Active</span>
             <span class="ovl-badge">{active.length}</span>
@@ -754,7 +716,7 @@ export function OverlayGroups({ filter = "" }: { filter?: string }) {
       </section>
       <section class="ovl-group pinned">
         <div class="ovl-ghead2">
-          <button class="ovl-gtoggle" onClick={() => toggle("Favourites", true)}>
+          <button class="ovl-gtoggle" onClick={() => toggleGroup("Favourites", true)}>
             <ChevronRight size={13} class={(open.Favourites ?? true) ? "rot" : ""} />
             <Star size={12} class="fav-ico" />
             <span>Favourites</span>
@@ -763,14 +725,36 @@ export function OverlayGroups({ filter = "" }: { filter?: string }) {
         </div>
         {(open.Favourites ?? true) && (favs.length ? favs.map((it) => <ItemRow key={it.key} it={it} />) : <div class="muted small ovl-empty">Star a layer to keep it here.</div>)}
       </section>
+    </>
+  );
+}
+
+/** 0.8.4: one category's layer groups (each still folds on its own; open by default) */
+export function LayerGroupList({ groups }: { groups: string[] }) {
+  const open = groupOpen.value;
+  const all = items();
+  return (
+    <>
       {groups.map((g) => {
-        if (g === "My files") return <MyFiles key={g} collapsible open={open[g] ?? false} onToggle={() => toggle(g, false)} />;
+        if (g === "My files") return <MyFiles key={g} collapsible open={open[g] ?? true} onToggle={() => toggleGroup(g, true)} />;
         const list = all.filter((i) => i.group === g);
         if (!list.length) return null;
-        const isOpen = open[g] ?? false;
+        const isOpen = open[g] ?? true;
+        const on = list.filter((i) => i.on).length;
         return (
           <section key={g} class="ovl-group">
-            {head(g, isOpen, list.length, list.filter((i) => i.on).length)}
+            <div class="ovl-ghead2">
+              <button class="ovl-gtoggle" onClick={() => toggleGroup(g, true)} aria-expanded={isOpen}>
+                <ChevronRight size={13} class={isOpen ? "rot" : ""} />
+                <span>{g}</span>
+                <span class="ovl-gcount">{list.length}</span>
+                {on > 0 && (
+                  <span class="ovl-badge" title={`${on} on`}>
+                    {on} on
+                  </span>
+                )}
+              </button>
+            </div>
             {isOpen && list.map((it) => <ItemRow key={it.key} it={it} />)}
           </section>
         );

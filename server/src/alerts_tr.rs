@@ -192,7 +192,7 @@ impl Translator {
                 Err(e) => error = Some(format!("{e:#}").chars().take(160).collect()),
             }
         }
-        let g = glossary(&text);
+        let g = if from == "es" { glossary_es(&text) } else { glossary(&text) };
         if engine == Engine::Glossary {
             self.store(key, g.clone());
         }
@@ -400,9 +400,78 @@ pub fn glossary(text: &str) -> String {
     out
 }
 
+// ---------- 0.8.4: Spanish glossary ----------
+
+const ES_WORDS: &[(&str, &str)] = &[
+    ("lluvia", "rain"), ("lluvias", "rain"), ("llovizna", "drizzle"), ("tormenta", "thunderstorm"), ("tormentas", "thunderstorms"), ("viento", "wind"), ("vientos", "winds"),
+    ("rachas", "gusts"), ("racha", "gust"), ("granizo", "hail"), ("nieve", "snow"), ("nevada", "snowfall"), ("nevadas", "snowfall"), ("helada", "frost"), ("heladas", "frost"),
+    ("niebla", "fog"), ("oleaje", "waves"), ("marejada", "swell"), ("inundacion", "flood"), ("inundaciones", "floods"), ("deslave", "landslide"), ("deslaves", "landslides"),
+    ("huracan", "hurricane"), ("ciclon", "cyclone"), ("tropical", "tropical"), ("tornado", "tornado"), ("calor", "heat"), ("frio", "cold"), ("polvo", "dust"), ("incendio", "fire"), ("incendios", "fires"),
+    ("descargas", "discharges"), ("electricas", "lightning"), ("aviso", "warning"), ("alerta", "alert"), ("advertencia", "advisory"), ("vigilancia", "watch"), ("peligro", "danger"), ("riesgo", "risk"),
+    ("fuerte", "strong"), ("fuertes", "strong"), ("muy", "very"), ("intensa", "intense"), ("intensas", "intense"), ("intenso", "intense"), ("intensos", "intense"), ("torrenciales", "torrential"),
+    ("moderada", "moderate"), ("moderadas", "moderate"), ("ligera", "light"), ("ligeras", "light"), ("probabilidad", "chance"), ("precipitacion", "precipitation"), ("precipitaciones", "precipitation"),
+    ("temperatura", "temperature"), ("temperaturas", "temperatures"), ("zona", "area"), ("zonas", "areas"), ("norte", "north"), ("sur", "south"), ("este", "east"), ("oeste", "west"), ("costa", "coast"), ("sierra", "mountains"),
+    ("hoy", "today"), ("manana", "tomorrow"), ("noche", "night"), ("tarde", "afternoon"), ("horas", "hours"), ("hasta", "until"), ("desde", "from"), ("durante", "during"), ("y", "and"), ("en", "in"), ("de", "of"), ("del", "of the"),
+    ("la", "the"), ("el", "the"), ("los", "the"), ("las", "the"), ("con", "with"), ("por", "by"), ("para", "for"), ("se", ""), ("mayor", "greater"), ("menor", "less"),
+];
+
+fn fold_es(c: char) -> char {
+    match c {
+        'á' => 'a',
+        'é' => 'e',
+        'í' => 'i',
+        'ó' => 'o',
+        'ú' | 'ü' => 'u',
+        'ñ' => 'n',
+        _ => c,
+    }
+}
+
+/// Built-in Spanish glossary: known warning terms in English, every other word kept as it is.
+pub fn glossary_es(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let cs: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < cs.len() {
+        if !cs[i].is_alphabetic() {
+            out.push(cs[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < cs.len() && cs[j].is_alphabetic() {
+            j += 1;
+        }
+        let w: String = cs[i..j].iter().collect();
+        let key: String = w.to_lowercase().chars().map(fold_es).collect();
+        match ES_WORDS.iter().find(|(k, _)| *k == key).map(|(_, v)| *v) {
+            Some("") => {
+                // a dropped word takes its following space with it
+                if j < cs.len() && cs[j] == ' ' {
+                    j += 1;
+                }
+            }
+            Some(v) if w.chars().count() > 1 && w.chars().all(|c| !c.is_lowercase()) => out.push_str(&v.to_uppercase()),
+            Some(v) if w.starts_with(char::is_uppercase) => out.push_str(&cap(v)),
+            Some(v) => out.push_str(v),
+            None => out.push_str(&w),
+        }
+        i = j;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spanish_glossary() {
+        assert_eq!(glossary_es("Lluvias muy fuertes y granizo en Yucatán"), "Rain very strong and hail in Yucatán");
+        assert_eq!(glossary_es("TORMENTA"), "THUNDERSTORM");
+        assert_eq!(glossary_es("Inundación, 50 mm"), "Flood, 50 mm");
+        assert_eq!(glossary_es("se espera"), "espera");
+    }
 
     #[test]
     fn detects_scripts() {

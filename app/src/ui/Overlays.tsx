@@ -22,7 +22,10 @@ import { AlertTypeMenu, alertTypeMenu } from "./panels/AlertsPanel";
 import { Plus, SlidersHorizontal } from "lucide-preact";
 import { paneMap } from "../map/panes"; // 0.8.2 integration: right-click in a map pane
 import { paneLink } from "../map/panes"; // 0.8.3 inspector
-import { nearestN, siteClickTarget } from "../radar/insp083"; // 0.8.3 inspector
+import { nearestN, siteClickTarget, inspLayers, layerOptionsAt } from "../radar/insp083"; // 0.8.3 inspector, 0.8.4
+import { overlayDef } from "../overlays/defs"; // 0.8.4
+import { fileOverlays } from "../overlays/files"; // 0.8.4
+import { configModal } from "./OverlayList"; // 0.8.4
 import { fmtDist } from "../util";
 import { ChevronDown } from "lucide-preact";
 
@@ -132,6 +135,29 @@ function alertTypesAt(x: number, y: number, pane?: number): string[] {
   return [...new Set(al.map((a: any) => String(a.properties.event)))].slice(0, 4);
 }
 
+/** 0.8.4: overlay layers with an object under the right-click ("Layer options for "X"...") */
+let ctxLayers: { m: unknown; list: { id: string; name: string }[] } | null = null;
+function layersAt(m: NonNullable<typeof contextMenu.value>): { id: string; name: string }[] {
+  if (ctxLayers?.m === m) return ctxLayers.list; // the menu re-renders with the cursor; ask the map once
+  const map = m.pane ? paneMap(m.pane) : mapRef.peek();
+  let list: { id: string; name: string }[] = [];
+  try {
+    if (map) {
+      const layers = inspLayers(map.getLayersOrder(), []);
+      if (layers.length) {
+        const [x, y] = m.pane ? [m.px ?? 0, m.py ?? 0] : [m.x, m.y];
+        const r = 3;
+        const feats = map.queryRenderedFeatures([[x - r, y - r], [x + r, y + r]], { layers });
+        list = layerOptionsAt(feats.map((f) => f.layer.id), (id) => (id.startsWith("file:") ? fileOverlays.value.find((f) => `file:${f.id}` === id)?.name : overlayDef(id)?.hidden ? null : overlayDef(id)?.name));
+      }
+    }
+  } catch {
+    /* map not ready */
+  }
+  ctxLayers = { m, list };
+  return list;
+}
+
 export function ContextMenu() {
   return (
     <>
@@ -180,6 +206,7 @@ function MapMenu() {
   const close = () => (contextMenu.value = null);
   const types = m.pane ? alertTypesAt(m.px ?? 0, m.py ?? 0, m.pane) : alertTypesAt(m.x, m.y);
   const nr = nearestRadar(m.lat, m.lon, m.pane);
+  const lyr = layersAt(m); // 0.8.4
   return (
     <div class="ctx glass" style={{ left: `${m.x + 8}px`, top: `${m.y + 8}px` }} onMouseLeave={close}>
       <div class="ctx-title">
@@ -198,7 +225,19 @@ function MapMenu() {
           <SlidersHorizontal size={13} /> Layer options for "{t}"...
         </button>
       ))}
-      {types.length > 0 && <div class="ctx-sep" />}
+      {lyr.map((l) => (
+        <button
+          key={l.id}
+          class="ctx-alert"
+          onClick={() => {
+            close();
+            configModal.value = l.id;
+          }}
+        >
+          <SlidersHorizontal size={13} /> Layer options for "{l.name}"...
+        </button>
+      ))}
+      {types.length + lyr.length > 0 && <div class="ctx-sep" />}
       <button
         onClick={() => {
           addPointAt(m.lat, m.lon);

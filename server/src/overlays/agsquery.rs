@@ -3,6 +3,7 @@
 use super::arcgis::enc;
 use super::Overlays;
 use anyhow::{anyhow, bail, Result};
+use futures::{StreamExt, TryStreamExt};
 use serde_json::Value;
 
 /// `bbox=w,s,e,n` (empty = None).
@@ -86,6 +87,41 @@ pub async fn features(o: &Overlays, q: &Query<'_>) -> Result<Vec<Value>> {
     Ok(out)
 }
 
+/// URL asking only how many features match.
+pub fn count_url(q: &Query) -> String {
+    format!("{}/query?where={}&returnCountOnly=true&f=json", q.layer, enc(q.where_))
+}
+
+/// 0.8.4: every feature of a big layer: the count first, then small pages a few at a time, each
+/// retried. (One large page can take the service over a minute and then fail with a 504.)
+/// `q.order_by` must be set so pages don't overlap.
+pub async fn features_paged(o: &Overlays, q: &Query<'_>, workers: usize) -> Result<Vec<Value>> {
+    let v = o.get_json(&count_url(q)).await?;
+    let n = v["count"].as_u64().ok_or_else(|| anyhow!("ArcGIS: no feature count"))? as usize;
+    let n = n.min(q.max);
+    let pages = futures::stream::iter((0..n).step_by(q.page.max(1)))
+        .map(|off| async move {
+            let mut last = anyhow!("no attempt");
+            for attempt in 0..3u64 {
+                if attempt > 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+                }
+                match o.get_json(&query_url(q, off)).await {
+                    Ok(v) if v.get("error").is_some() => last = anyhow!("ArcGIS: {}", v["error"]["message"].as_str().unwrap_or("error")),
+                    Ok(v) => return Ok::<Vec<Value>, anyhow::Error>(v["features"].as_array().cloned().unwrap_or_default()),
+                    Err(e) => last = e,
+                }
+            }
+            Err(last)
+        })
+        .buffered(workers.max(1))
+        .try_collect::<Vec<_>>()
+        .await?;
+    let mut out: Vec<Value> = pages.into_iter().flatten().collect();
+    out.truncate(q.max);
+    Ok(out)
+}
+
 /// String / number property helpers.
 pub fn s(p: &Value, k: &str) -> String {
     match &p[k] {
@@ -119,5 +155,6 @@ mod tests {
         assert!(u.contains("resultOffset=2000&resultRecordCount=500"));
         assert!(u.contains("geometry=-100,30,-90,40&geometryType=esriGeometryEnvelope"));
         assert_eq!(f(&serde_json::json!({"w": "110 mph"}), "w"), Some(110.0));
+        assert_eq!(count_url(&q), "https://x/FeatureServer/1/query?where=1%3D1&returnCountOnly=true&f=json");
     }
 }

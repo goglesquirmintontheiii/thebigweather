@@ -101,6 +101,40 @@ export function dedupeRows(list: InspRow[], max = 4): InspRow[] {
   return out;
 }
 
+/** 0.8.4: trailing throttle: `run` happens at most once per `ms`, a call starts the wait (the first
+ * call runs on the next tick). (The 0.8.3 Inspector's timer started at 0 instead of "none" and
+ * was never armed, so nothing under the cursor was ever looked up.) */
+export function trailingThrottle(run: () => void, ms: number, now: () => number = () => performance.now(), set: (fn: () => void, d: number) => unknown = (fn, d) => setTimeout(fn, d)): () => void {
+  let last = -Infinity;
+  let waiting = false;
+  return () => {
+    if (waiting) return;
+    waiting = true;
+    set(() => {
+      waiting = false;
+      last = now();
+      run();
+    }, Math.max(0, ms - (now() - last)));
+  };
+}
+
+/** 0.8.4: map layers under the right-click (rendered layer ids, topmost first) → the layers whose
+ * settings can be opened, each once, in that order. `nameOf` gives the layer's name, null to skip it. */
+export function layerOptionsAt(layerIds: string[], nameOf: (id: string) => string | null | undefined, max = 3): { id: string; name: string }[] {
+  const out: { id: string; name: string }[] = [];
+  const seen = new Set<string>();
+  for (const lid of layerIds) {
+    const id = overlayIdOf(lid);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const name = nameOf(id);
+    if (!name) continue;
+    out.push({ id, name });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 /** R35: does a radar-site click in this pane switch only the pane? Yes when any of its links
  * (position / time / layers) is off; a fully linked pane follows the main radar. */
 export function siteClickTarget(link: { pos: boolean; time: boolean; layers: boolean; radar?: boolean }, radar: boolean): "pane" | "main" {

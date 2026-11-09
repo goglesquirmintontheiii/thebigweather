@@ -345,12 +345,12 @@ export function AlertConfig() {
           <div class="row">
             <span>Translate button</span>
             <select value={settings.value.alertCfg.trShow ?? "ru"} onChange={(e) => setCfg((c) => (c.trShow = (e.target as HTMLSelectElement).value as any))}>
-              <option value="ru">Russian alerts</option>
+              <option value="ru">Russian & Spanish alerts</option>
               <option value="all">Every non-English alert</option>
               <option value="off">Off</option>
             </select>
           </div>
-          <div class="row" title="The server calls this free service (no key). If it fails, a built-in glossary of Russian warning terms is used. Translations are cached on the server.">
+          <div class="row" title="The server calls this free service (no key). If it fails, a built-in glossary of Russian and Spanish warning terms is used. Translations are cached on the server.">
             <span>Service</span>
             <select value={settings.value.alertCfg.trEngine ?? "mymemory"} onChange={(e) => setCfg((c) => (c.trEngine = (e.target as HTMLSelectElement).value as any))}>
               {TR_ENGINES.map(([k, l]) => (

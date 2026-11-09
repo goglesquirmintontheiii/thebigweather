@@ -492,6 +492,8 @@ class PaneView {
       if (this.own.get(id) !== e || this.dead) return;
       e.fc = fc ?? EMPTY_FC;
       this.pushOverlayData();
+      // 0.8.4: the server is still loading this layer (same as the main map)
+      if (fc?.pending) window.setTimeout(() => this.own.get(id) === e && this.fetchOwn(id), 3000);
     } catch {
       /* keep the last data */
     } finally {
