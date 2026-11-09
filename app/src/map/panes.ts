@@ -14,6 +14,7 @@ import { api, lastHello } from "../api";
 import { settings, update, type PaneCfg, type PaneLink } from "../store"; // 0.8.3 inspector: update
 import { buildStyle } from "./basemaps";
 import { fixHighPitchPicking } from "./pitchpick"; // 0.8.4
+import { dsOff } from "../datasrc"; // 0.8.4
 import { RadarLayer } from "../radar/RadarLayer";
 import { GridLayer } from "../grid/GridLayer";
 import { fetchSweep, tableById, tableKeyFor, sites, l3For, listL2Range } from "../radar/controller";
@@ -124,7 +125,7 @@ export const paneHover = signal<{ idx: number; x: number; y: number; v: string; 
 
 function gibsTiles(id: string, t: number): { tiles: string[]; maxzoom: number; key: string } | null {
   const g = GIBS.find((x) => x.id === id);
-  if (!g) return null;
+  if (!g || dsOff.value.has(g.wms ? "eumetview" : "gibs")) return null; // 0.8.4
   const step = g.step * 60_000;
   // newest image that is surely published: daily layers yesterday, others ~40 min back
   const lim = g.step >= 1440 ? Date.now() - 86400_000 : Date.now() - 40 * 60_000;
@@ -1284,7 +1285,7 @@ effect(() => {
 let lastBase = "";
 effect(() => {
   const s = settings.value;
-  const sig = `${s.basemap}|${s.overlays.labels}|${s.basemapProvider}`;
+  const sig = `${s.basemap}|${s.overlays.labels}|${s.basemapProvider}|${[...dsOff.value].join()}`; // 0.8.4: dsOff
   if (sig === lastBase) return;
   const first = !lastBase;
   lastBase = sig;

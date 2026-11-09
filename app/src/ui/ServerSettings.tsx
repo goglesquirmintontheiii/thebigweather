@@ -8,7 +8,8 @@ import type { ComponentChildren } from "preact";
 import { api } from "../api";
 import { settings, update, activeServer, toast } from "../store";
 import { fmtBytes } from "../util";
-import { sameHost, serverInfo, refreshInfo } from "../clientstats";
+import { refreshInfo } from "../clientstats";
+import { parseBytes, fmtBudget } from "../datasrcCore";
 import { CenterModal } from "./CenterModal";
 import { Toggle } from "./panels/RadarPanel";
 import { KeysEditor } from "./panels/SettingsPanel";
@@ -71,27 +72,6 @@ function Field({ label, path, err, restart, children, hint }: { label: string; p
       {hint && <div class="ssf-h muted small">{hint}</div>}
       {err && <div class="ssf-h err-text small">{err}</div>}
     </div>
-  );
-}
-
-export function ServerSettingsSection() {
-  useEffect(() => {
-    refreshInfo();
-  }, []);
-  if (!sameHost.value) return null;
-  const info = serverInfo.value;
-  return (
-    <section>
-      <label class="lbl">Server on this computer</label>
-      <div class="muted small">
-        {info?.name ?? activeServer.value?.name} · {info?.profile?.name ?? "?"} profile{info?.version ? ` · v${info.version}` : ""}
-      </div>
-      <button class="btn sm" onClick={() => (serverSettingsOpen.value = true)}>
-        <ServerCog size={13} /> Server settings…
-      </button>
-      <div class="muted small">Memory and CPU budgets, caches, credentials and logs.</div>
-      {/* 0.8.3: yt-dlp / Deno status + one-click download moved to Settings → Connection → Recording tools */}
-    </section>
   );
 }
 
@@ -408,14 +388,64 @@ function Other({ cfg }: { cfg: any }) {
   );
 }
 
+/* ---------- 0.8.4: cache budgets ---------- */
+/** a byte amount: slider while dragging, textbox for an exact value; commits on release / Enter */
+function BudgetEdit({ value, max, min, label, onCommit, emptyText }: { value: number; max: number; min: number; label: string; onCommit: (v: number) => void; emptyText?: string }) {
+  const [draft, setDraft] = useState<number | null>(null);
+  const [text, setText] = useState<string | null>(null);
+  const v = draft ?? value;
+  const top = Math.max(max, v, min);
+  const commit = (n: number) => {
+    setDraft(null);
+    if (n !== value) onCommit(n);
+  };
+  const shown = emptyText && v === 0 ? emptyText : fmtBudget(v);
+  return (
+    <span class="ss-budget">
+      <input type="range" aria-label={label} min={0} max={top} step={Math.max(1 << 20, Math.round(top / 1000))} value={v} onInput={(e) => setDraft(+(e.target as HTMLInputElement).value)} onChange={(e) => commit(+(e.target as HTMLInputElement).value)} />
+      <input
+        class="ss-bytes"
+        aria-label={`${label}, exact`}
+        value={text ?? shown}
+        onInput={(e) => setText((e.target as HTMLInputElement).value)}
+        onBlur={() => setText(null)}
+        onChange={(e) => {
+          const t = (e.target as HTMLInputElement).value.trim();
+          setText(null);
+          if (emptyText && (!t || t.toLowerCase() === emptyText.toLowerCase())) return commit(0);
+          const n = parseBytes(t);
+          if (n == null) toast("Use a size like 512 MB or 1.5 GB", "warn");
+          else commit(n);
+        }}
+      />
+    </span>
+  );
+}
+
 function Caches() {
   const [list, setList] = useState<any[] | null>(null);
+  const [sharedMax, setSharedMax] = useState(0);
+  const [minBudget, setMinBudget] = useState(1 << 20);
   const [err, setErr] = useState<string | null>(null);
+  const apply = (l: any) => {
+    setList(Array.isArray(l) ? l : l.caches ?? []);
+    setSharedMax(l.shared_max ?? 0);
+    if (l.min_budget) setMinBudget(l.min_budget);
+  };
   const load = () =>
     api
       .get("/api/admin/caches")
-      .then((l) => setList(Array.isArray(l) ? l : l.caches ?? []))
+      .then(apply)
       .catch((e) => setErr(e.message));
+  /** lowering a budget evicts on the server before this answers */
+  const saveBudget = async (body: any) => {
+    try {
+      apply(await api.send("PUT", "/api/admin/caches/budgets", body));
+    } catch (e: any) {
+      toast(e.message, "error");
+      load();
+    }
+  };
   useEffect(() => {
     load();
     const t = window.setInterval(load, 5000);
@@ -432,6 +462,9 @@ function Caches() {
     }
   };
   const total = (list ?? []).reduce((a, c) => a + (c.bytes ?? 0), 0);
+  const sumCaps = (list ?? []).reduce((a, c) => a + (c.budget ?? c.default_bytes ?? 0), 0);
+  const GB = 1 << 30;
+  const sharedTop = Math.max(sharedMax, sumCaps, total, 8 * GB);
   return (
     <div class="ss-sec">
       {err && <div class="err-text">{err}</div>}
@@ -446,10 +479,16 @@ function Caches() {
               <Trash2 size={13} /> Clear all
             </button>
           </div>
+          <div class="ss-shared">
+            <b>Shared max</b>
+            <BudgetEdit label="Shared max" value={sharedMax} max={sharedTop} min={0} emptyText="Off" onCommit={(v) => saveBudget({ shared_max: v })} />
+            <span class="muted small">{sharedMax ? `${fmtBytes(total)} of ${fmtBytes(sharedMax)} used` : "No limit across caches"}</span>
+          </div>
           <table class="ss-caches">
             <tbody>
               {list.map((c) => {
                 const pct = c.cap_bytes ? (c.bytes / c.cap_bytes) * 100 : 0;
+                const top = Math.max(c.default_bytes * 2, c.budget ?? 0, c.bytes, sharedMax, GB);
                 return (
                   <tr key={c.id}>
                     <td class="nm">
@@ -460,12 +499,29 @@ function Caches() {
                       <span class={`mbar ${pct > 90 ? "hi" : pct > 70 ? "mid" : ""}`}>
                         <i style={{ width: `${Math.min(100, pct)}%` }} />
                       </span>
+                      {c.evictable ? (
+                        <BudgetEdit
+                          label={`${c.name} budget`}
+                          value={c.budget ?? c.cap_bytes}
+                          max={top}
+                          min={minBudget}
+                          emptyText={c.default_bytes ? undefined : "No limit"}
+                          onCommit={(v) => saveBudget({ per: { [c.id]: v > 0 || c.default_bytes ? Math.max(v, minBudget) : null } })}
+                        />
+                      ) : (
+                        <small class="muted" title="Holds live data, so there is no oldest data to drop">No budget</small>
+                      )}
                     </td>
                     <td class="r">
                       {fmtBytes(c.bytes ?? 0)}
                       {c.cap_bytes ? <span class="muted"> / {fmtBytes(c.cap_bytes)}</span> : ""}
                     </td>
-                    <td>
+                    <td class="ss-cacheact">
+                      {c.budget != null && (
+                        <button class="icon-btn" title={c.default_bytes ? `Back to default (${fmtBytes(c.default_bytes)})` : "Back to default (no byte cap)"} onClick={() => saveBudget({ per: { [c.id]: null } })}>
+                          <RotateCw size={13} />
+                        </button>
+                      )}
                       <button class="btn sm ghost" onClick={() => clear(c.id, c.name)}>
                         Clear
                       </button>
@@ -475,7 +531,7 @@ function Caches() {
               })}
             </tbody>
           </table>
-          <p class="muted small">Cache caps follow the memory and disk budgets (Resources). Clearing only frees space; data is re-downloaded when needed.</p>
+          <p class="muted small">Sizes follow the memory and disk budgets (Resources) unless you set one. Lowering a budget drops the oldest data at once; it is re-downloaded when needed.</p>
         </>
       )}
     </div>

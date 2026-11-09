@@ -73,6 +73,7 @@ pub async fn list_at(
     max_keys: Option<u32>,
     max_pages: usize,
 ) -> Result<Listing> {
+    crate::datasources::check(base)?; // 0.8.4
     let bucket = base.trim_end_matches('/').rsplit('/').next().unwrap_or(base);
     let mut out = Listing::default();
     let mut token: Option<String> = None;
@@ -115,6 +116,7 @@ pub async fn list_at(
 /// List every key under `prefix` that sorts after `start_after` at any S3-compatible endpoint
 /// (`base` = bucket URL), following continuation tokens up to `max_pages` pages of 1000.
 pub async fn list_after(http: &reqwest::Client, base: &str, prefix: &str, start_after: Option<&str>, max_pages: usize) -> Result<Vec<Object>> {
+    crate::datasources::check(base)?; // 0.8.4
     let mut out = vec![];
     let mut token: Option<String> = None;
     for _ in 0..max_pages.max(1) {
@@ -145,6 +147,7 @@ pub async fn list_after(http: &reqwest::Client, base: &str, prefix: &str, start_
 }
 
 pub async fn get(http: &reqwest::Client, bucket: &str, key: &str) -> Result<Bytes> {
+    crate::datasources::check(&object_url(bucket, key))?; // 0.8.4
     let resp = http.get(object_url(bucket, key)).send().await?;
     if !resp.status().is_success() {
         bail!("S3 get {bucket}/{key}: HTTP {}", resp.status());

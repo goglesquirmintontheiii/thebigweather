@@ -123,6 +123,8 @@ pub fn datamart_frames(html: &str, site: &str) -> Vec<(i64, String, &'static str
 }
 
 pub struct IntlRadar {
+    /// 0.8.4: byte budget of the image cache (0 = the default `img_cap`)
+    img_limit: std::sync::atomic::AtomicUsize,
     http: reqwest::Client,
     health: Arc<Health>,
     lists: Mutex<HashMap<String, (Instant, Value)>>,
@@ -248,6 +250,7 @@ impl IntlRadar {
             http,
             health,
             lists: Mutex::new(HashMap::new()),
+            img_limit: Default::default(),
             inflight: Mutex::new(HashMap::new()),
             imgs: Mutex::new((lru::LruCache::unbounded(), 0)),
             img_cap: std::sync::atomic::AtomicUsize::new(48 << 20),
@@ -261,8 +264,21 @@ impl IntlRadar {
         self.trim_imgs();
     }
 
+    /// 0.8.4: run the image cache at a byte budget (`None`: its default).
+    pub fn set_cache_limit(&self, limit: Option<usize>) {
+        self.img_limit.store(limit.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+        self.trim_imgs();
+    }
+
+    fn img_max(&self) -> usize {
+        match self.img_limit.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => self.img_cap.load(std::sync::atomic::Ordering::Relaxed),
+            n => n,
+        }
+    }
+
     fn trim_imgs(&self) {
-        let cap = self.img_cap.load(std::sync::atomic::Ordering::Relaxed);
+        let cap = self.img_max();
         let mut c = self.imgs.lock();
         while c.1 > cap {
             match c.0.pop_lru() {
@@ -274,7 +290,7 @@ impl IntlRadar {
 
     pub fn cache_stats(&self) -> crate::caches::CacheInfo {
         let c = self.imgs.lock();
-        crate::caches::CacheInfo::mem("intl-images", "International radar images", c.1, c.0.len(), self.img_cap.load(std::sync::atomic::Ordering::Relaxed))
+        crate::caches::CacheInfo::mem("intl-images", "International radar images", c.1, c.0.len(), self.img_max()).default(self.img_cap.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     pub fn clear_cache(&self) {

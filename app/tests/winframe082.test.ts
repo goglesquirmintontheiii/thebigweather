@@ -80,6 +80,6 @@ export function testPopwinKeys() {
 export function testLabels() {
   // 0.8.2 user wording
   assert.match(src("share/DesktopSettings.tsx"), /label="X button minimizes"/);
-  assert.match(src("ui/panels/SettingsPanel.tsx"), /> Data sources\n/);
+  assert.match(src("ui/panels/SettingsPanel.tsx"), /name: "Data sources"/); // 0.8.4: a Settings category
   assert.doesNotMatch(src("ui/Sidebar.tsx"), /\{ id: "sources", icon/);
 }

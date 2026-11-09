@@ -49,6 +49,8 @@ pub struct Overlays {
     pub data_dir: PathBuf,
     pub grids: Arc<GridService>,
     cache: Mutex<HashMap<String, (Instant, Bytes)>>,
+    /// 0.8.4: byte budget of the response cache (0 = none)
+    cache_limit: std::sync::atomic::AtomicUsize,
     inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// when each polled feed was last requested (pollers stop when idle)
     last_use: Mutex<HashMap<&'static str, Instant>>,
@@ -210,6 +212,7 @@ impl Overlays {
             data_dir: dir,
             grids,
             cache: Mutex::new(HashMap::new()),
+            cache_limit: Default::default(),
             inflight: Mutex::new(HashMap::new()),
             last_use: Mutex::new(HashMap::new()),
             glm: obs::Glm::default(),
@@ -237,12 +240,17 @@ impl Overlays {
     }
 
     pub fn idle(&self, id: &str, secs: u64) -> bool {
+        // 0.8.4: pollers of a switched-off source wind down like idle ones
+        if crate::datasources::check_feed(id).is_err() {
+            return true;
+        }
         self.last_use.lock().get(id).map(|t| t.elapsed().as_secs() > secs).unwrap_or(true)
     }
 
     // ---------- fetch helpers ----------
 
     pub async fn get_bytes(&self, url: &str) -> Result<Bytes> {
+        crate::datasources::check(url)?; // 0.8.4
         let r = self.http.get(url).timeout(Duration::from_secs(45)).send().await?;
         if r.status().as_u16() == 204 {
             return Ok(Bytes::new());
@@ -258,6 +266,7 @@ impl Overlays {
     }
 
     pub async fn get_json(&self, url: &str) -> Result<Value> {
+        crate::datasources::check(url)?; // 0.8.4
         let b = self.get_bytes(url).await?;
         if b.is_empty() {
             return Ok(Value::Null);
@@ -297,6 +306,7 @@ impl Overlays {
     /// GeoJSON (or JSON for detail endpoints) for an overlay.
     pub async fn get(self: &Arc<Self>, id: &str, q: &Params, keys: &crate::config::Keys) -> Result<Bytes> {
         let ttl = ttl(id).ok_or_else(|| anyhow!("unknown overlay {id}"))?;
+        crate::datasources::check_feed(id)?; // 0.8.4
         let fixture = self.fixtures.read().as_ref().map(|d| d.join(format!("{id}.json")));
         if let Some(f) = fixture.filter(|f| f.exists()) {
             return Ok(Bytes::from(tokio::fs::read(f).await?));
@@ -332,6 +342,8 @@ impl Overlays {
                     c.retain(|k, (t, _)| t.elapsed().as_secs() < ttl_for_key(k));
                 }
                 c.insert(ck, (Instant::now(), b.clone()));
+                drop(c);
+                self.trim_cache();
                 Ok(b)
             }
             Err(e) => {

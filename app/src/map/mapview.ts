@@ -5,6 +5,7 @@ import type { Map as MLMap, GeoJSONSource } from "maplibre-gl";
 import { signal, effect } from "@preact/signals";
 import { settings, update, tool, crosshair, toast, uid, details, type DetailItem } from "../store";
 import { buildStyle, googleSession, isDarkBasemap } from "./basemaps";
+import { dsOff } from "../datasrc"; // 0.8.4
 import { attachOverlays, pickOverlay, popup } from "../overlays/manager";
 import { attachDraw } from "./draw";
 import { fixHighPitchPicking } from "./pitchpick"; // 0.8.4
@@ -456,10 +457,10 @@ export function createMap(container: HTMLElement): MLMap {
   });
 
   // reactive refreshes
-  let lastStyleSig = `${s.basemap}|${s.overlays.labels}|${s.basemapProvider}|${JSON.stringify(s.customBasemaps.find((c) => `custom:${c.id}` === s.basemap) ?? "")}`;
+  let lastStyleSig = `${s.basemap}|${s.overlays.labels}|${s.basemapProvider}|${JSON.stringify(s.customBasemaps.find((c) => `custom:${c.id}` === s.basemap) ?? "")}|${[...dsOff.peek()].join()}`;
   effect(() => {
     const st = settings.value;
-    const sig = `${st.basemap}|${st.overlays.labels}|${st.basemapProvider}|${JSON.stringify(st.customBasemaps.find((c) => `custom:${c.id}` === st.basemap) ?? "")}`;
+    const sig = `${st.basemap}|${st.overlays.labels}|${st.basemapProvider}|${JSON.stringify(st.customBasemaps.find((c) => `custom:${c.id}` === st.basemap) ?? "")}|${[...dsOff.value].join()}`; // 0.8.4: dsOff
     if (sig !== lastStyleSig) {
       lastStyleSig = sig;
       styleFor().then((style) => map.setStyle(style, { diff: false }));

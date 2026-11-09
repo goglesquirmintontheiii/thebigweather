@@ -21,7 +21,6 @@ import { mlOpen } from "../ml/client";
 import { Dashboard, dashOpen } from "./Dashboard";
 import { AlertTimeline, timelineOpen } from "./AlertTimeline";
 import { ServerSettings, serverSettingsOpen } from "./ServerSettings";
-import { SourcesWindow, sourcesOpen } from "./SourcesWindow";
 import { ConfigModal, configModal } from "./OverlayList";
 import { ChaserPanel } from "./ChaserPanel";
 import { chaseOpen } from "../chase/chase";
@@ -93,7 +92,6 @@ registerPopper(flag("c:mlcenter", "Detection models", mlOpen, () => <ModelsCente
 registerPopper(flag("c:dash", "My dashboard", dashOpen, () => <Dashboard />));
 registerPopper(flag("c:atl", "Alert timeline", timelineOpen, () => <AlertTimeline />));
 registerPopper(flag("c:ss", "Server settings", serverSettingsOpen, () => <ServerSettings />, 900, 720));
-registerPopper(flag("c:srcwin", "Data sources", sourcesOpen, () => <SourcesWindow />, 560, 760));
 
 /* layer settings windows */
 registerPopper({

@@ -7,6 +7,7 @@ import type { Map as MLMap } from "maplibre-gl";
 import { settings } from "../store";
 import { frameIndex, frameCount, playing, setFrameReady, framesToRequest, historyEnd, histRange } from "../anim";
 import { GIBS } from "../weather";
+import { dsOff } from "../datasrc"; // 0.8.4
 import { perfNow } from "../perf"; // 0.8.1 perf
 
 export const gibsTimes = signal<number[]>([]);
@@ -200,7 +201,7 @@ async function build() {
   const w = settings.value.weather;
   clear(m);
   shownSig = "";
-  if (w.kind !== "gibs") {
+  if (w.kind !== "gibs" || dsOff.value.has(GIBS.find((g) => g.id === w.id)?.wms ? "eumetview" : "gibs")) {
     gibsTimes.value = [];
     return;
   }
@@ -351,7 +352,7 @@ effect(() => {
   const w = settings.value.weather;
   const a = settings.value.anim;
   const h = histRange.value;
-  const sig = w.kind === "gibs" ? `${w.id}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}|${settings.value.saver}` : ""; // saver caps frames
+  const sig = w.kind === "gibs" ? `${[...dsOff.value].join()}|${w.id}|${settings.value.grid.frames}|${a.mode}|${a.minutes}|${h ? `${h.start}-${h.end}` : ""}|${settings.value.saver}` : ""; // saver caps frames
   if (sig === lastSig) return;
   lastSig = sig;
   playing.value = false;

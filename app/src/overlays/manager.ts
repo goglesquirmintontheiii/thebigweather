@@ -10,6 +10,7 @@ import { registerIcons } from "./icons";
 import { fileOverlays, fileLayers, fileClick, ensureFileData, fileSourceOpts } from "./files";
 import { refreshMul, pollPaused } from "../saver"; // workflow
 import { histRange, histTime, histAllowed, histFeedFor, histFeed } from "../history"; // history replay
+import { dsOff, feedSources, warnDisabled } from "../datasrc"; // 0.8.4
 
 export const ovlStatus = signal<Record<string, { loading?: boolean; error?: string; count?: number; note?: string }>>({});
 export const popup = signal<{ x: number; y: number; lng: number; lat: number; p: Popup; overlay: string; /* 0.8.1: opened from map pane n (it repositions it) */ pane?: number } | null>(null);
@@ -115,6 +116,7 @@ function viewParams(def: OverlayDef, m: MLMap): Record<string, string> | null {
 async function fetchOverlay(id: string) {
   const def = overlayDef(id);
   if (!def || def.feed === "client" || !map || !api.base) return;
+  if (sourceOff(id)) return; // 0.8.4
   if (histRange.value) return fetchHistOverlay(id, def); // history replay
   const vp = viewParams(def, map);
   if (vp === null) {
@@ -199,7 +201,16 @@ function activeIds(): string[] {
   const ids = OVERLAYS.filter((d) => isOn(d.id)).map((d) => d.id);
   for (const f of fileOverlays.value) if (isOn(`file:${f.id}`)) ids.push(`file:${f.id}`);
   // history mode: live-only overlays are hidden
-  return histRange.value ? ids.filter((id) => histAllowed(id)) : ids;
+  return (histRange.value ? ids.filter((id) => histAllowed(id)) : ids).filter((id) => !sourceOff(id));
+}
+
+/** 0.8.4: an overlay whose data source is off isn't drawn or fetched (it stays "on" for later) */
+function sourceOff(id: string): boolean {
+  const def = overlayDef(id);
+  const ds = def && def.feed !== "client" ? feedSources.value[def.feed ?? id] : undefined;
+  if (!ds || !dsOff.value.has(ds)) return false;
+  warnDisabled(ds, "layer");
+  return true;
 }
 
 function sync() {
@@ -491,6 +502,8 @@ effect(() => {
   void settings.value.ovl;
   void settings.value.units.temp;
   void fileOverlays.value;
+  void dsOff.value; // 0.8.4
+  void feedSources.value;
   sync();
 });
 api.on("connected", () => {

@@ -47,6 +47,14 @@ pub enum Src {
     Fmi,
 }
 
+/// 0.8.4: toggle of an ODIM archive.
+fn src_ds(s: Src) -> &'static str {
+    match s {
+        Src::Opera => "opera",
+        Src::Fmi => "fmi",
+    }
+}
+
 impl Src {
     pub fn id(self) -> &'static str {
         match self {
@@ -555,6 +563,9 @@ impl OdimService {
     }
 
     async fn fetch_one(&self, src: Src, key: &str) -> Result<Bytes> {
+        if !crate::datasources::enabled(src_ds(src)) {
+            return Err(crate::datasources::off_error(src_ds(src))); // 0.8.4
+        }
         let path = self.cache_dir.join(safe_name(&format!("{}_{key}", src.id())));
         if let Ok(b) = tokio::fs::read(&path).await {
             return Ok(Bytes::from(b));

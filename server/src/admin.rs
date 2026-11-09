@@ -125,6 +125,7 @@ pub fn router(_st: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/admin/token", post(token))
         .route("/admin/caches", get(caches))
         .route("/admin/caches/clear", post(caches_clear))
+        .route("/admin/caches/budgets", axum::routing::put(budgets_put))
         .route("/admin/logs", get(logs))
         .route("/admin/update", get(crate::update::get).post(crate::update::post))
         .route_layer(middleware::from_fn(local_only))
@@ -464,6 +465,10 @@ async fn config_put(State(st): St, Json(body): Json<Value>) -> Response {
         *st.cfg.write() = new.clone();
     }
     let mut applied = apply_live(&st, &new, &changed);
+    if st.budgets.active() {
+        // the new memory split changes the defaults that budgets scale from
+        apply_budgets(&st, true).await;
+    }
     if let Some(r) = new_rules.filter(|_| changed.iter().any(|f| f == "recorder")) {
         st.rec.save_rules(r);
         applied.push("recorder".into());
@@ -551,21 +556,177 @@ fn mem_caches(st: &AppState) -> Vec<crate::caches::CacheInfo> {
     v
 }
 
-async fn caches(State(st): St) -> Response {
-    let mut out = mem_caches(&st);
-    let dirs = disk_caches(&st);
+/// Disk folder sizes from the last walk: the 5-second budget tick reuses them.
+static DISK_SNAPSHOT: parking_lot::Mutex<Vec<crate::caches::CacheInfo>> = parking_lot::Mutex::new(Vec::new());
+
+async fn walk_disk_caches(st: &Arc<AppState>) -> Vec<crate::caches::CacheInfo> {
+    let dirs = disk_caches(st);
     let disk = tokio::task::spawn_blocking(move || {
         dirs.into_iter()
             .map(|(id, name, p, cap)| {
                 let (bytes, items) = crate::caches::dir_size(&p);
-                crate::caches::CacheInfo { id, name, kind: "disk", bytes, items, cap_bytes: cap }
+                crate::caches::CacheInfo { id, name, kind: "disk", bytes, items, cap_bytes: cap, default_bytes: cap, budget: None, evictable: true }
             })
             .collect::<Vec<_>>()
     })
     .await
     .unwrap_or_default();
+    *DISK_SNAPSHOT.lock() = disk.clone();
+    disk
+}
+
+/// Every cache with its size, default and budget. `walk`: measure the disk folders now.
+async fn all_caches_with(st: &Arc<AppState>, walk: bool) -> Vec<crate::caches::CacheInfo> {
+    let mut out = mem_caches(st);
+    let disk = if walk { walk_disk_caches(st).await } else { DISK_SNAPSHOT.lock().clone() };
     out.extend(disk);
-    Json(json!(out)).into_response()
+    let b = st.budgets.get();
+    for c in &mut out {
+        c.budget = b.per.get(&c.id).copied();
+        c.evictable = crate::caches::evictable(&c.id);
+    }
+    out
+}
+
+async fn all_caches(st: &Arc<AppState>) -> Vec<crate::caches::CacheInfo> {
+    all_caches_with(st, true).await
+}
+
+async fn caches(State(st): St) -> Response {
+    Json(caches_json(&st).await).into_response()
+}
+
+async fn caches_json(st: &Arc<AppState>) -> Value {
+    let mut caches = all_caches(st).await;
+    let b = st.budgets.get();
+    // disk folders report their limit from here (services hold the memory ones)
+    let limits = limits_for(&caches, b.shared_max);
+    for c in caches.iter_mut().filter(|c| c.kind == "disk") {
+        if let Some(Some(l)) = limits.get(&c.id) {
+            c.cap_bytes = *l;
+        }
+    }
+    json!({"caches": caches, "shared_max": b.shared_max, "min_budget": crate::caches::MIN_BUDGET, "min_shared": crate::caches::MIN_SHARED})
+}
+
+fn limits_for(caches: &[crate::caches::CacheInfo], shared_max: u64) -> std::collections::BTreeMap<String, Option<u64>> {
+    let items: Vec<crate::caches::BudgetItem> = caches
+        .iter()
+        .map(|c| crate::caches::BudgetItem { id: c.id.clone(), evictable: c.evictable, bytes: c.bytes, default: c.default_bytes, budget: c.budget })
+        .collect();
+    crate::caches::effective_limits(&items, shared_max)
+}
+
+/// One memory cache onto a byte limit (`None`: back to its default).
+fn set_mem_limit(st: &AppState, id: &str, limit: Option<usize>) {
+    match id {
+        "intl-images" => st.intl.set_cache_limit(limit),
+        "overlays" => st.overlays.set_cache_limit(limit),
+        "placefiles" => st.overlays.placefiles.set_limit(limit),
+        x => {
+            let _ = st.radar.set_cache_limit(x, limit) || st.grids.set_cache_limit(x, limit) || st.ml.set_cache_limit(x, limit);
+        }
+    }
+}
+
+/// Push budgets (scaled to the shared maximum) into every cache; disk caches only with `disk`.
+async fn apply_budgets(st: &Arc<AppState>, disk: bool) {
+    let caches = all_caches_with(st, disk).await;
+    let shared_max = st.budgets.get().shared_max;
+    let limits = limits_for(&caches, shared_max);
+    for c in caches.iter().filter(|c| c.kind == "memory" && c.evictable) {
+        set_mem_limit(st, &c.id, limits.get(&c.id).copied().flatten().map(|v| v as usize));
+    }
+    if !disk {
+        return;
+    }
+    let dirs = disk_caches(st);
+    let jobs: Vec<(std::path::PathBuf, u64)> = dirs.into_iter().filter_map(|(id, _, p, _)| limits.get(&id).copied().flatten().map(|l| (p, l))).collect();
+    let _ = tokio::task::spawn_blocking(move || {
+        for (p, l) in jobs {
+            let freed = crate::caches::evict_dir(&p, l);
+            if freed > 0 {
+                tracing::info!("cache budget: freed {} MB from {}", freed >> 20, p.display());
+            }
+        }
+    })
+    .await;
+}
+
+/// Keeps caches inside their budgets as they fill: memory every 5 s, disk folders every minute.
+pub fn spawn_budget_janitor(st: Arc<AppState>) {
+    tokio::spawn(async move {
+        let mut i = 0u32;
+        loop {
+            // the first pass is at startup, so saved budgets hold from the beginning
+            if st.budgets.active() {
+                apply_budgets(&st, i % 12 == 0).await;
+            }
+            i = i.wrapping_add(1);
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
+}
+
+#[derive(serde::Deserialize)]
+struct BudgetsPut {
+    /// bytes; 0 clears the shared maximum
+    shared_max: Option<u64>,
+    /// cache id -> bytes, or null to go back to the default
+    per: Option<HashMap<String, Option<u64>>>,
+}
+
+/// Check a budget change and merge it into what is saved. Field errors come back per id.
+fn merge_budgets(mut b: crate::caches::BudgetFile, q: &BudgetsPut, known: &[crate::caches::CacheInfo]) -> Result<crate::caches::BudgetFile, Map<String, Value>> {
+    let mut errors = Map::new();
+    if let Some(s) = q.shared_max {
+        if s != 0 && s < crate::caches::MIN_SHARED {
+            errors.insert("shared_max".into(), json!("0 (no limit) or at least 16 MB"));
+        } else {
+            b.shared_max = s;
+        }
+    }
+    for (id, v) in q.per.iter().flatten() {
+        match (known.iter().find(|c| &c.id == id), v) {
+            (None, _) => {
+                errors.insert(id.clone(), json!("unknown cache"));
+            }
+            (Some(c), Some(_)) if !c.evictable => {
+                errors.insert(id.clone(), json!("this cache can't evict, so a budget would do nothing"));
+            }
+            (Some(_), Some(v)) if *v < crate::caches::MIN_BUDGET => {
+                errors.insert(id.clone(), json!("at least 1 MB"));
+            }
+            (Some(_), Some(v)) => {
+                b.per.insert(id.clone(), *v);
+            }
+            (Some(_), None) => {
+                b.per.remove(id);
+            }
+        }
+    }
+    if errors.is_empty() {
+        Ok(b)
+    } else {
+        Err(errors)
+    }
+}
+
+async fn budgets_put(State(st): St, Json(q): Json<BudgetsPut>) -> Response {
+    let known = all_caches(&st).await;
+    let merged = match merge_budgets(st.budgets.get(), &q, &known) {
+        Ok(f) => f,
+        Err(errors) => return (StatusCode::BAD_REQUEST, Json(json!({"ok": false, "errors": errors}))).into_response(),
+    };
+    let budgets = st.budgets.clone();
+    match tokio::task::spawn_blocking(move || budgets.set(merged)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+    // eviction happens here, before the reply: lowering a budget takes effect at once
+    apply_budgets(&st, true).await;
+    Json(caches_json(&st).await).into_response()
 }
 
 async fn caches_clear(State(st): St, Query(q): Query<HashMap<String, String>>) -> Response {
@@ -652,6 +813,28 @@ mod tests {
         // no-op patch changes nothing
         let (_, changed, _) = apply_patch(&old, &rules, &json!({"server": {"name": "Home"}}), 32_000).unwrap();
         assert!(changed.is_empty(), "{changed:?}");
+    }
+
+    #[test]
+    fn budget_changes_are_checked_per_cache() {
+        use crate::caches::{BudgetFile, CacheInfo};
+        let mut live = CacheInfo::mem("radar-volumes", "Volumes", 0, 0, 1 << 30);
+        live.evictable = true;
+        let known = vec![live, CacheInfo::mem("tornado-db", "Tornadoes", 0, 0, 0)];
+        let mut f = BudgetFile::default();
+        f.per.insert("radar-volumes".into(), 5 << 20);
+        let q = BudgetsPut { shared_max: Some(1 << 30), per: Some(HashMap::from([("radar-volumes".to_string(), Some(9 << 20))])) };
+        let m = merge_budgets(f.clone(), &q, &known).unwrap();
+        assert_eq!(m.shared_max, 1 << 30);
+        assert_eq!(m.per["radar-volumes"], 9 << 20);
+        // null goes back to the default
+        let q = BudgetsPut { shared_max: None, per: Some(HashMap::from([("radar-volumes".to_string(), None)])) };
+        assert!(merge_budgets(f.clone(), &q, &known).unwrap().per.is_empty());
+        let q = BudgetsPut { shared_max: Some(1), per: Some(HashMap::from([("nope".to_string(), Some(9 << 20)), ("tornado-db".to_string(), Some(9 << 20)), ("radar-volumes".to_string(), Some(5))])) };
+        let e = merge_budgets(f, &q, &known).unwrap_err();
+        for k in ["shared_max", "nope", "tornado-db", "radar-volumes"] {
+            assert!(e.contains_key(k), "{k}");
+        }
     }
 
     #[test]

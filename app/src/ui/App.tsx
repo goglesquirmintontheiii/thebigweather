@@ -4,7 +4,7 @@ import { settings } from "../store";
 import { startAlerts } from "../alerts";
 import { Rail, SidePanel } from "./Sidebar";
 import { MinTray } from "./winframe"; // 0.8.2
-import { SourcesWindow } from "./SourcesWindow"; // 0.8.2
+import { DataSourceWarning } from "./DataSourceWarning"; // 0.8.4
 import "./winreg"; // 0.8.2: pop-out windows + settings sync
 import { TopBar } from "./Header";
 import { Toolbar } from "./Toolbar";
@@ -192,7 +192,7 @@ function MainApp() {
       <NotifyPanel /> {/* data 0.8 */}
       <ShakeMenu /> {/* shake/stats/server 0.6 */}
       <ServerSettings /> {/* shake/stats/server 0.6 */}
-      <SourcesWindow /> {/* 0.8.2 */}
+      <DataSourceWarning /> {/* 0.8.4 */}
       <RadioPlayers />
       {openPanel.value !== "radio" && <NowPlaying compact />}
       <AddCameraDialog />
