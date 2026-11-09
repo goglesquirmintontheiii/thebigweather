@@ -219,6 +219,11 @@
 {"id": "espdg", "name": "Zaragoza", "country": "ES", "lat": 41.7340, "lon": -0.5459, "elev_m": 835.0, "status": 1, "band": "C", "pol": "S"},
 {"id": "essft", "name": "Cáceres", "country": "ES", "lat": 39.4288, "lon": -6.2853, "elev_m": 667.0, "status": 1, "band": "C", "pol": "S"},
 {"id": "estjv", "name": "Madrid", "country": "ES", "lat": 40.1759, "lon": -3.7137, "elev_m": 717.0, "status": 1, "band": "C", "pol": "S"},
-{"id": "isx02", "name": "Iceland X-band", "country": "IS", "lat": 63.8696, "lon": -20.2024, "elev_m": 47.1, "status": 1, "band": "X", "pol": "S", "rv": "ISX2"}
+{"id": "isx02", "name": "Iceland X-band", "country": "IS", "lat": 63.8696, "lon": -20.2024, "elev_m": 47.1, "status": 1, "band": "X", "pol": "S", "rv": "ISX2"},
+{"id": "dop1", "name": "DOP1 (Norman test)", "country": "US", "lat": 35.2383, "lon": -97.46, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USDOP1"},
+{"id": "fop1", "name": "FOP1 (Norman test)", "country": "US", "lat": 35.2383, "lon": -97.46, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USFOP1"},
+{"id": "nop4", "name": "NOP4 (Norman test)", "country": "US", "lat": 35.2383, "lon": -97.46, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USNOP4"},
+{"id": "tdjt", "name": "TDJT (TDWR West Palm test)", "country": "US", "lat": 26.688, "lon": -80.273, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USTDJT"},
+{"id": "tok2", "name": "TOK2 (TDWR Oklahoma test)", "country": "US", "lat": 35.276, "lon": -97.51, "elev_m": 0.0, "status": 1, "band": "S", "pol": "D", "rv": "USTOK2"}
 ]
 }

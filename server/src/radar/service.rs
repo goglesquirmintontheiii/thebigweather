@@ -631,6 +631,10 @@ impl RadarService {
                 if raws.first().map(|b| super::rv_image::is_png(b)).unwrap_or(false) {
                     return super::rv_image::decode(&site, &raws[0], time_ms, pos.0, pos.1).with_context(|| format!("decode {k}"));
                 }
+                // 0.8.4: US test radars RainViewer carries as Level II archives
+                if raws.first().map(|b| !super::odim::is_hdf5(b)).unwrap_or(false) {
+                    return decode_any(&raws[0], &site).with_context(|| format!("decode {k}"));
+                }
                 super::odim::decode_volume(&site, &raws).with_context(|| format!("decode {k}"))
             })
             .await??;

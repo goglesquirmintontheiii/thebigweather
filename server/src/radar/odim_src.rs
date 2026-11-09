@@ -153,7 +153,7 @@ pub fn parse_opera(key: &str, size: u64) -> Option<FileRef> {
 /// 0.8.4: `{DIR}/{DIR}_{YYYYMMDD}_{HHMMSS}_0_source.h5` (one file per volume)
 pub fn parse_rv(key: &str, size: u64) -> Option<FileRef> {
     let name = key.rsplit('/').next()?;
-    if !name.ends_with("_0_source.h5") && !name.ends_with("_0_source.png") {
+    if !["_0_source.h5", "_0_source.png", "_0_source.n2a"].iter().any(|e| name.ends_with(e)) {
         return None;
     }
     Some(FileRef { key: key.to_string(), size, time_ms: crate::rainviewer::name_time(name)?, elevs: String::new(), qtys: vec!["PVOL".into()] })
@@ -689,7 +689,8 @@ mod tests {
         assert_eq!((src, site.as_str()), (Src::Rv, "seoer"));
         let t: Table = serde_json::from_str(include_str!("odim_sites.json")).unwrap();
         let rv: Vec<&str> = t.sites.iter().filter_map(|r| r.rv.as_deref()).collect();
-        assert_eq!(rv, vec!["SEORN", "ISX2"]);
+        assert_eq!(rv, vec!["SEORN", "ISX2", "USDOP1", "USFOP1", "USNOP4", "USTDJT", "USTOK2"]);
+        assert!(parse_rv("USTOK2/USTOK2_20261108_232000_0_source.n2a", 1).is_some());
     }
 
     #[test]
@@ -699,7 +700,7 @@ mod tests {
         let d = t.sites.iter().find(|r| r.id == "deess").unwrap();
         assert_eq!(d.country, "DE");
         assert!((d.lat - 51.4).abs() < 0.1 && d.elev_m > 0.0 && d.status == 1 && !d.name.is_empty());
-        assert!(t.sites.iter().all(|r| r.id.len() == 5));
+        assert!(t.sites.iter().all(|r| r.id.len() == 5 || r.rv.is_some()));
         assert!(t.sites.iter().any(|r| r.id == "esgld" && r.status == 1), "renamed Spanish radars are in the table");
     }
 
