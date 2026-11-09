@@ -1,0 +1,54 @@
+{
+  "version": "0.8.4",
+  "date": "2026-11-09T03:09:06Z",
+  "commit": "598b8bf39af84119ee40a9d3a44268df226e0498",
+  "files": {
+    "Stormiq-0.8.4-portable.exe": { "size": 129845219, "sha256": "3d3055c7483a1d35c96649df85289fb10c23daee8ce6fcb0420c306a7ddf5c71", "parts": [
+      { "path": "parts/Stormiq-0.8.4-portable.exe.part00", "size": 47185920, "sha256": "6eb123152b53032ee9f9451e8b31bf8c89edf6e26fc14042d4c74cb7af81faac" },
+      { "path": "parts/Stormiq-0.8.4-portable.exe.part01", "size": 47185920, "sha256": "d399d908c9e93e7a314de5ce90f2e2f7ac15d24eea57dbe81d423ba41777906a" },
+      { "path": "parts/Stormiq-0.8.4-portable.exe.part02", "size": 35473379, "sha256": "212ec25c5060bb361749df9d9edc963cd158777f10941d0248a7f6a840894b76" }
+    ] },
+    "TheBigWeather-0.8.4-portable.exe": { "size": 129845219, "sha256": "3d3055c7483a1d35c96649df85289fb10c23daee8ce6fcb0420c306a7ddf5c71", "parts": [
+      { "path": "parts/Stormiq-0.8.4-portable.exe.part00", "size": 47185920, "sha256": "6eb123152b53032ee9f9451e8b31bf8c89edf6e26fc14042d4c74cb7af81faac" },
+      { "path": "parts/Stormiq-0.8.4-portable.exe.part01", "size": 47185920, "sha256": "d399d908c9e93e7a314de5ce90f2e2f7ac15d24eea57dbe81d423ba41777906a" },
+      { "path": "parts/Stormiq-0.8.4-portable.exe.part02", "size": 35473379, "sha256": "212ec25c5060bb361749df9d9edc963cd158777f10941d0248a7f6a840894b76" }
+    ] },
+    "Stormiq-0.8.4-setup.exe": { "size": 130076655, "sha256": "e72869ac1a701412ea472d473509def4153d7dcd32df03741e1697c7ef266c85", "parts": [
+      { "path": "parts/Stormiq-0.8.4-setup.exe.part00", "size": 47185920, "sha256": "aae22c62e865ba46092d229b4d779a2014def67c08b0007b38c777268fd599d3" },
+      { "path": "parts/Stormiq-0.8.4-setup.exe.part01", "size": 47185920, "sha256": "a5107c48c2760a3975362b9bc862a1635b8d16aa45be371995c0cc201ebbda17" },
+      { "path": "parts/Stormiq-0.8.4-setup.exe.part02", "size": 35704815, "sha256": "0779becccb4c1c1f3ebdcbdf8e758fd8d2f26812b3404d21ae3ddc4ab5d995e2" }
+    ] },
+    "TheBigWeather-0.8.4-setup.exe": { "size": 130076655, "sha256": "e72869ac1a701412ea472d473509def4153d7dcd32df03741e1697c7ef266c85", "parts": [
+      { "path": "parts/Stormiq-0.8.4-setup.exe.part00", "size": 47185920, "sha256": "aae22c62e865ba46092d229b4d779a2014def67c08b0007b38c777268fd599d3" },
+      { "path": "parts/Stormiq-0.8.4-setup.exe.part01", "size": 47185920, "sha256": "a5107c48c2760a3975362b9bc862a1635b8d16aa45be371995c0cc201ebbda17" },
+      { "path": "parts/Stormiq-0.8.4-setup.exe.part02", "size": 35704815, "sha256": "0779becccb4c1c1f3ebdcbdf8e758fd8d2f26812b3404d21ae3ddc4ab5d995e2" }
+    ] },
+    "Stormiq-0.8.4-x86_64.AppImage": { "size": 151978240, "sha256": "8a771d824619c2edfffe859d666a369e44bd8e287e24b056be826a344df5d953", "parts": [
+      { "path": "parts/Stormiq-0.8.4-x86_64.AppImage.part00", "size": 47185920, "sha256": "44be6b67ccfe7192b607c35a5a481fd9e033686586ff46a362b9b2793699f4a8" },
+      { "path": "parts/Stormiq-0.8.4-x86_64.AppImage.part01", "size": 47185920, "sha256": "a75e0017980afbbd76910d539cb85d45294b39968dfae111ce88483c8c26ad89" },
+      { "path": "parts/Stormiq-0.8.4-x86_64.AppImage.part02", "size": 47185920, "sha256": "c76915c60db03b8fe005230387c58461e1ddc94c4a6a710fbb6f6f2af81073a6" },
+      { "path": "parts/Stormiq-0.8.4-x86_64.AppImage.part03", "size": 10420480, "sha256": "d4dca0664e4ce1e4346e1682f0ed6967c5d38cbb1afc2ba9e8187f3450f2a671" }
+    ] },
+    "TheBigWeather-0.8.4-x86_64.AppImage": { "size": 151978240, "sha256": "8a771d824619c2edfffe859d666a369e44bd8e287e24b056be826a344df5d953", "parts": [
+      { "path": "parts/Stormiq-0.8.4-x86_64.AppImage.part00", "size": 47185920, "sha256": "44be6b67ccfe7192b607c35a5a481fd9e033686586ff46a362b9b2793699f4a8" },
+      { "path": "parts/Stormiq-0.8.4-x86_64.AppImage.part01", "size": 47185920, "sha256": "a75e0017980afbbd76910d539cb85d45294b39968dfae111ce88483c8c26ad89" },
+      { "path": "parts/Stormiq-0.8.4-x86_64.AppImage.part02", "size": 47185920, "sha256": "c76915c60db03b8fe005230387c58461e1ddc94c4a6a710fbb6f6f2af81073a6" },
+      { "path": "parts/Stormiq-0.8.4-x86_64.AppImage.part03", "size": 10420480, "sha256": "d4dca0664e4ce1e4346e1682f0ed6967c5d38cbb1afc2ba9e8187f3450f2a671" }
+    ] },
+    "tbw-server-0.8.4-linux-x86_64": { "size": 39260504, "sha256": "a4dc4c11af785d85adb00d0c46f3702cd827befd56111eb697ec0fd9ad0141aa", "parts": [
+      { "path": "parts/tbw-server-0.8.4-linux-x86_64.part00", "size": 39260504, "sha256": "a4dc4c11af785d85adb00d0c46f3702cd827befd56111eb697ec0fd9ad0141aa" }
+    ] },
+    "tbw-server-0.8.4-linux-x86_64.tar.gz": { "size": 26330802, "sha256": "6381eb8dd1e3caa2aa1d4dd721ea7faa84e07755b109aeeb6f768eb173e49986", "parts": [
+      { "path": "parts/tbw-server-0.8.4-linux-x86_64.tar.gz.part00", "size": 26330802, "sha256": "6381eb8dd1e3caa2aa1d4dd721ea7faa84e07755b109aeeb6f768eb173e49986" }
+    ] },
+    "tbw-server-0.8.4-windows-x86_64.exe": { "size": 43003392, "sha256": "54d2cf0be2cc0db144e373ebcbbd4a9241cd79c7dffb8352289fa5dc727be653", "parts": [
+      { "path": "parts/tbw-server-0.8.4-windows-x86_64.exe.part00", "size": 43003392, "sha256": "54d2cf0be2cc0db144e373ebcbbd4a9241cd79c7dffb8352289fa5dc727be653" }
+    ] },
+    "tbw-server-0.8.4-windows-x86_64.zip": { "size": 28313962, "sha256": "8a4dc89352aeb1178e117ffa497a71675957fc4ac165ed7fe142dac0445dc770", "parts": [
+      { "path": "parts/tbw-server-0.8.4-windows-x86_64.zip.part00", "size": 28313962, "sha256": "8a4dc89352aeb1178e117ffa497a71675957fc4ac165ed7fe142dac0445dc770" }
+    ] },
+    "tbw-web-0.8.4.zip": { "size": 10402068, "sha256": "1202114c16402a44aba777cfd4097a5d2b262a33d4789815bbab4333a3ab1bfa", "parts": [
+      { "path": "parts/tbw-web-0.8.4.zip.part00", "size": 10402068, "sha256": "1202114c16402a44aba777cfd4097a5d2b262a33d4789815bbab4333a3ab1bfa" }
+    ] }
+  }
+}
