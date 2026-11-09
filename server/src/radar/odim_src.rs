@@ -153,7 +153,7 @@ pub fn parse_opera(key: &str, size: u64) -> Option<FileRef> {
 /// 0.8.4: `{DIR}/{DIR}_{YYYYMMDD}_{HHMMSS}_0_source.h5` (one file per volume)
 pub fn parse_rv(key: &str, size: u64) -> Option<FileRef> {
     let name = key.rsplit('/').next()?;
-    if !name.ends_with("_0_source.h5") {
+    if !name.ends_with("_0_source.h5") && !name.ends_with("_0_source.png") {
         return None;
     }
     Some(FileRef { key: key.to_string(), size, time_ms: crate::rainviewer::name_time(name)?, elevs: String::new(), qtys: vec!["PVOL".into()] })
@@ -266,7 +266,9 @@ fn safe_name(key: &str) -> String {
 
 impl OdimService {
     pub fn new(http: reqwest::Client, health: Arc<Health>, cache_dir: PathBuf) -> Arc<Self> {
-        let table: Vec<Row> = serde_json::from_str::<Table>(include_str!("odim_sites.json")).map(|t| t.sites).unwrap_or_default();
+        let mut table: Vec<Row> = serde_json::from_str::<Table>(include_str!("odim_sites.json")).map(|t| t.sites).unwrap_or_default();
+        // 0.8.4: RainViewer pictures read back into reflectivity are radars like any other
+        table.extend(crate::rainviewer::seed().into_iter().filter(|r| r.display == "data").map(|r| Row { id: r.id.to_ascii_lowercase(), name: if r.name.is_empty() { r.id.clone() } else { r.name.clone() }, country: r.country.clone(), lat: r.lat, lon: r.lon, elev_m: 0.0, status: 1, rv: Some(r.id) }));
         for s in [Src::Opera, Src::Fmi, Src::Rv] {
             let (id, name) = s.health();
             health.register(id, name, s.base());
@@ -298,7 +300,7 @@ impl OdimService {
                     elev_m: r.elev_m,
                     kind: "ODIM".into(),
                     country: Some(r.country.clone()),
-                    region: Some("EU".into()),
+                    region: r.rv.is_none().then(|| "EU".into()),
                     format: Some("odim".into()),
                     source: Some(src.into()),
                 }
@@ -317,7 +319,7 @@ impl OdimService {
     /// Canonical (lowercase) id if `id` names a European ODIM site.
     pub fn canonical(&self, id: &str) -> Option<String> {
         let id = id.to_ascii_lowercase();
-        (id.len() == 5 && self.table.iter().any(|r| r.id == id)).then_some(id)
+        ((4..=8).contains(&id.len()) && self.table.iter().any(|r| r.id == id)).then_some(id)
     }
 
     fn row(&self, id: &str) -> Option<&Row> {
@@ -450,6 +452,11 @@ impl OdimService {
             Src::Fmi => parse_fmi(key, size),
             Src::Rv => parse_rv(key, size),
         }
+    }
+
+    /// 0.8.4: where a site is (pictures carry no position of their own).
+    pub fn position(&self, site: &str) -> Option<(f64, f64)> {
+        self.row(site).map(|r| (r.lat, r.lon))
     }
 
     /// 0.8.4: every volume in a RainViewer directory (read on demand, cached 3 min).
@@ -652,7 +659,7 @@ pub fn parse_key(key: &str) -> Option<(Src, String, i64)> {
     let src = Src::parse(p.next()?)?;
     let site = p.next()?.to_ascii_lowercase();
     let slot = parse_slot(p.next()?)?;
-    if site.len() != 5 || !site.chars().all(|c| c.is_ascii_alphanumeric()) || p.next().is_some() {
+    if !(4..=8).contains(&site.len()) || !site.chars().all(|c| c.is_ascii_alphanumeric()) || p.next().is_some() {
         return None;
     }
     Some((src, site, slot))

@@ -24,6 +24,12 @@ function Ranges({ s }: { s: IntlSource }) {
   );
 }
 
+/** the picture on RainViewer's own server, from the proxied frame URL */
+export function originalUrl(proxied: string): string | null {
+  const m = /[?&]u=([^&]+)/.exec(proxied);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 export function RvPanel() {
   const w = settings.value.weather;
   if (w.kind !== "intl") return null;
@@ -32,6 +38,7 @@ export function RvPanel() {
   const urls = intlPanelFrames();
   const cur = Math.max(0, Math.min(frameIndex.value, urls.length - 1));
   const t = intlTimes.value[cur];
+  const orig = s.frames[Math.min(cur, s.frames.length - 1)] && originalUrl(s.frames[Math.max(0, s.frames.length - urls.length + cur)].url);
   return (
     <div class="rv-panel glass">
       <div class="rv-panel-head">
@@ -48,7 +55,17 @@ export function RvPanel() {
         ))}
         {!urls.length && <div class="muted">No images right now</div>}
       </div>
-      <small class="muted">{s.attribution} · agency image, not aligned to the map</small>
+      <small class="muted">
+        {s.attribution} · agency image, not aligned to the map
+        {orig && (
+          <>
+            {" · "}
+            <a href={orig} target="_blank" rel="noreferrer">
+              Open original
+            </a>
+          </>
+        )}
+      </small>
     </div>
   );
 }

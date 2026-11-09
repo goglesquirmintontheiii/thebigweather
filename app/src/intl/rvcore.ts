@@ -43,6 +43,9 @@ export function rvStale(newestMs: number, now: number, limitH = 3): string | nul
   return h < 48 ? `${Math.round(h)} h old` : `${Math.round(h / 24)} days old`;
 }
 
+/** filter key: radars shown only as a picture, because they can't be placed on the map */
+export const RV_UNALIGNED = "PN";
+
 const EU = new Set("AT BE BG BY CH CY CZ DE DK EE ES FI FR GB GR HR HU IE IS IT LT LU LV MT NL NO PL PT RO RS SE SI SK UA".split(" "));
 const OC = new Set("AU NZ FJ TO MH PG NC VU WS".split(" "));
 const SA = new Set("BR AR CO CL PE VE UY BO EC PY".split(" "));
@@ -82,7 +85,7 @@ export function rvVisible(
   native: { lat: number; lon: number }[],
   hidden: Set<string>,
   selected = "",
-  max = 160,
+  max = Infinity,
   dupKm = 30,
 ): RvRadar[] {
   const padX = (view.e - view.w) * 0.1;
@@ -97,7 +100,7 @@ export function rvVisible(
   const cy = (view.s + view.n) / 2, cx = (view.w + view.e) / 2;
   const out = list.filter((r) => {
     if (r.source === selected) return true;
-    if (hidden.has(rvRegion(r.country))) return false;
+    if (hidden.has(rvRegion(r.country)) || (hidden.has(RV_UNALIGNED) && r.display === "panel")) return false;
     if (r.lat < s || r.lat > n || !lonIn(r.lon)) return false;
     return !native.some((x) => Math.abs(x.lat - r.lat) < 1 && km(x.lat, x.lon, r.lat, r.lon) < dupKm);
   });

@@ -62,6 +62,13 @@ export function testRangesAndStaleness() {
   assert.equal(rvStale(1000 * h, 1096 * h), "4 days old");
 }
 
+export function testNoMarkersDroppedWhenZoomedOut() {
+  // a world view holds every radar: none may be culled to make room
+  const many = Array.from({ length: 600 }, (_, i) => R(`Y${i}`, -60 + i * 0.2, -170 + i * 0.5, "AU"));
+  assert.equal(rvVisible(many, { w: -180, s: -85, e: 180, n: 85 }, [], new Set()).length, 600);
+  assert.equal(rvVisible(many, { w: -200, s: -85, e: 200, n: 85 }, [], new Set()).length, 600, "wider than the world");
+}
+
 export function testCapNearestFirst() {
   const many = Array.from({ length: 50 }, (_, i) => R(`X${i}`, -30 + i * 0.1, 140 + i * 0.1, "AU"));
   const v = rvVisible(many, { w: 130, s: -40, e: 160, n: -20 }, [], new Set(), "", 10);

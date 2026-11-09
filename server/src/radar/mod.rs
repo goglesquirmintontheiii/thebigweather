@@ -8,6 +8,7 @@ pub mod level3;
 pub mod live;
 pub mod odim;
 pub mod odim_src;
+pub mod rv_image; // 0.8.4
 pub mod qc;
 pub mod rotation;
 pub mod service;

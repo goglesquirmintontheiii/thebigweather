@@ -312,7 +312,7 @@ impl RainViewer {
         let out: Vec<Value> = self
             .seed
             .iter()
-            .filter(|r| on && r.of.is_empty())
+            .filter(|r| on && r.of.is_empty() && r.display != "data")
             .map(|r| {
                 let mut v = serde_json::to_value(r).unwrap_or(Value::Null);
                 v["source"] = json!(format!("{PREFIX}{}", r.id));
@@ -364,7 +364,8 @@ mod tests {
         assert_eq!(id.display, "map");
         assert!(id.bounds.unwrap()[0] < id.lon && id.lon < id.bounds.unwrap()[2], "bbox is [w, s, e, n]");
         // pictures with their own basemap stay off the map
-        assert_eq!(s.iter().find(|r| r.id == "CN9002B").unwrap().display, "panel");
+        assert_eq!(s.iter().find(|r| r.id == "CN9002B").unwrap().display, "data");
+        assert_eq!(s.iter().find(|r| r.id == "CN9023B").unwrap().display, "panel", "no measured position yet");
         // Canada has Stormiq's own ECCC radars; dead directories of the old database are gone
         assert!(!s.iter().any(|r| r.country == "CA" || r.id == "AU02"));
         // a variant always points at a main entry that exists and is at the same place
@@ -372,7 +373,8 @@ mod tests {
             let m = s.iter().find(|r| r.id == v.of).unwrap_or_else(|| panic!("{} -> {}", v.id, v.of));
             assert!(m.of.is_empty() && km(m.lat, m.lon, v.lat, v.lon) < 26.0, "{}", v.id);
         }
-        assert!(s.iter().all(|r| r.display == "map" || r.display == "panel"));
+        assert!(s.iter().all(|r| ["map", "panel", "data"].contains(&r.display.as_str())));
+        assert!(!s.iter().any(|r| r.id == "GRCOMP3"), "Greece's entry is a composite: not listed");
         assert_eq!(s.iter().map(|r| &r.id).collect::<std::collections::HashSet<_>>().len(), s.len());
     }
 
@@ -469,8 +471,8 @@ mod tests {
         assert!(v["frames"][0]["url"].as_str().unwrap().starts_with("/api/intlradar/img?u=https%3A%2F%2Fdata.rainviewer.com%2Fimages%2FAU022%2F"));
         assert!(HOSTS.iter().all(|h| crate::intlradar::allowed(&format!("https://{h}/x"))));
         // a radar without a name still gets one
-        let cn = seed().into_iter().find(|r| r.id == "CN9002B").unwrap();
-        assert_eq!(source_json(&cn, &[], &[])["name"], "China radar CN9002B (CN9002B)");
+        let cn = seed().into_iter().find(|r| r.id == "CN9023B").unwrap();
+        assert_eq!(source_json(&cn, &[], &[])["name"], "China radar Arxan (CN9023B)");
         let maps: Value = serde_json::from_str(MAPS).unwrap();
         let c = composite_sources(&maps).unwrap();
         assert_eq!(c.len(), 2);
